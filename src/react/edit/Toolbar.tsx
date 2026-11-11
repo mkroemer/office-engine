@@ -41,6 +41,7 @@ const P: Record<string, ReactNode> = {
   view: <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12m10 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6" />,
   close: <path d="M6 6l12 12M18 6 6 18" />,
   image: <path d="M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M15.5 9.5h.01" />,
+  chart: <path d="M4 20h16M7 20v-8M12 20V5M17 20v-5" />,
   table: <path d="M4 5h16v14H4zM4 10h16M4 15h16M10 5v14M15 5v14" />,
   link: <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />,
   headerFooter: <path d="M6 3h12v18H6zM8 6h8M8 18h8M12 16.5v3" strokeDasharray="0" />,

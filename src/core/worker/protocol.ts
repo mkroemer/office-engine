@@ -7,6 +7,7 @@ import type { POp } from '../../collab/pptx-ops'
 import type { PptxCollabResult } from '../../collab/pptx-worker'
 import type { CanonStyle, DocxMeta, Block, EditOp, EditResult, HFSet, HFSetResult, PageSet, PageSetResult, ParaSpec, StyleInfo, StyleLook, StyleSetResult, TableOp } from '../docx/types'
 import type { BlockOut, BookOp, CellDetail, CellInput, FindMatch, FindOptions, FmtPatch, Range, SheetOp, SheetProgress, WorkbookMeta, XlsxEditResult } from '../xlsx/types'
+import type { SheetDrawing } from '../xlsx/drawings'
 import type { PParaSpec, PresentationMeta, ShapeOp, SlideModel, SlideOp } from '../pptx/types'
 
 export interface OpenParams {
@@ -69,6 +70,8 @@ export interface Methods {
   'xlsx.load'(sheet: number): void
   'xlsx.block'(sheet: number, r0: number, r1: number): BlockOut
   'xlsx.cell'(sheet: number, r: number, c: number): CellDetail | undefined
+  /** the sheet's pictures and charts, where they are anchored */
+  'xlsx.drawings'(sheet: number): SheetDrawing[]
   /** cells whose shown value (or formula) contains the text */
   'xlsx.find'(sheet: number, query: string, opts?: FindOptions): FindMatch[]
   /** the sheet as delimited text (the values as shown): `sep` a comma (with a byte order mark) or a tab */

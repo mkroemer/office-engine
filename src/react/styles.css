@@ -397,6 +397,15 @@
   position: absolute;
   overflow: hidden;
 }
+/* XLSX: pictures and charts over the cells; clicks go through to the cell below */
+.de-xl-pic { position: absolute; z-index: 2; object-fit: fill; pointer-events: none; user-select: none; }
+.de-xl-drawing {
+  position: absolute; z-index: 2; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; padding: 6px; overflow: hidden; border: 1px dashed var(--de-border); border-radius: 4px; background: color-mix(in srgb, var(--de-chrome) 94%, transparent);
+  color: var(--de-muted); font: 12px/1.3 system-ui, sans-serif; text-align: center; pointer-events: none;
+}
+.de-xl-drawing svg { color: var(--de-accent); }
+.de-xl-drawing strong { color: var(--de-text); font-weight: 600; }
 .de-gl-h,
 .de-gl-v {
   position: absolute;

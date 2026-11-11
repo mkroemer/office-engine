@@ -7,6 +7,7 @@ import { BlobSource, openSource, type DocSource } from '../source'
 import { decodeText, extOf, HAS_SOURCE, mayBePlain, plainFormat, plainToOffice, ungzipped } from '../plain'
 import { XlsxWorkbook } from '../xlsx/workbook'
 import { XlsxEditor } from '../xlsx/editor'
+import { readSheetDrawings } from '../xlsx/drawings'
 import { loadDelimited } from '../xlsx/import'
 import type { BookOp, CellInput, FindOptions, FmtPatch, Range, SheetOp } from '../xlsx/types'
 import type { PParaSpec, ShapeOp, SlideOp } from '../pptx/types'
@@ -207,6 +208,11 @@ export class Engine {
         return this.need(this.xlsx).block(args[0] as number, args[1] as number, args[2] as number)
       case 'xlsx.cell':
         return this.need(this.xlsx).cell(args[0] as number, args[1] as number, args[2] as number)
+      case 'xlsx.drawings': {
+        const wb = this.need(this.xlsx)
+        const s = wb.sheets[args[0] as number]
+        return s ? readSheetDrawings(wb.pkg, s.path) : []
+      }
       case 'xlsx.find':
         return this.need(this.xlsx).find(args[0] as number, args[1] as string, args[2] as FindOptions)
       case 'xlsx.text':
