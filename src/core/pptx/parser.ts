@@ -157,6 +157,12 @@ function phOf(el: XEl): { type: string; idx?: string } | undefined {
   return { type: ph.a.type ?? 'body', idx: ph.a.idx }
 }
 
+// A slide title as plain text: symbol-font characters (Wingdings arrows, check marks) have no glyph
+// outside their font, so the usual ones become their Unicode look-alikes and the rest are dropped.
+const TITLE_SYMBOLS: Record<string, string> = {
+  '\uF0E0': '➔', '\uF0E8': '➔', '\uF0F0': '⇨', '\uF0D8': '➢', '\uF0FC': '✓', '\uF0FB': '✗', '\uF0B7': '•', '\uF0A7': '▪', '\uF06C': '●',
+}
+
 const masterType = (t: string) => (t === 'ctrTitle' ? 'title' : t === 'subTitle' || t === 'obj' ? 'body' : t)
 
 function indexPlaceholders(spTree: XEl | undefined) {
@@ -310,6 +316,7 @@ export class PptxPresentation {
       bg: r.background(),
       els,
       hidden: slide.root.a.show === '0',
+      title: r.title,
     }
   }
 
@@ -456,6 +463,8 @@ function readXfrm(x: XEl | undefined): Box | undefined {
 }
 
 class SlideRenderer {
+  /** the text of the slide's title placeholder, once walked */
+  title: string | undefined
   constructor(
     private pres: PptxPresentation,
     private slide: Part,
@@ -871,6 +880,11 @@ class SlideRenderer {
     const idAttr = path(el, 'nvSpPr', 'cNvPr')?.a.id
     const sid = part === this.slide && el.n === 'sp' && idAttr ? Number(idAttr) : undefined
     const text = el.n === 'sp' ? this.textBody(kid(el, 'txBody'), chain, ph, kid(style, 'fontRef'), part, sid) : undefined
+    // the slide's own title placeholder names the slide (outline, slide list)
+    if (text && part === this.slide && this.title === undefined && (ph?.type === 'title' || ph?.type === 'ctrTitle')) {
+      const t = text.paras.map((p) => p.runs.map((r) => r.text).join('')).join(' ').replace(/[\uF000-\uF0FF]/g, (c) => TITLE_SYMBOLS[c] ?? '').replace(/\s+/g, ' ').trim()
+      if (t) this.title = t
+    }
     if ((!fill || fill.t === 'none') && !stroke && !text) return
     out.push({ t: 'shape', box, geom, adj, fill, stroke, text, path: pathD, sid })
   }

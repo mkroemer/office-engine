@@ -81,8 +81,62 @@ CSS is auto-injected, no import needed (or import `@p10node/office-engine/styles
 | `onDirtyChange`    | `(dirty) => void`                              | –         | Whether there are unsaved changes                                                                                        |
 | `collab`           | `CollabOptions`                                | –         | Real-time collaboration, see [collaboration](collaboration.md)                                                           |
 | `comments`         | `CommentOptions \| false`                      | `{}`      | Comments (see below); `false` hides them                                                                                 |
-| `onLoad`           | `(client) => void`                             | –         |                                                                                                                          |
+| `onLoad`           | `(client) => void`                             | –         | Once per opened document                                                                                                 |
 | `onError`          | `(error) => void`                              | –         |                                                                                                                          |
+| `controller`       | `ViewerController`                             | its own   | The viewer's state and commands for the host, see [headless mode](#headless-mode)                                        |
+| `headless`         | `boolean`                                      | `false`   | The document alone: no top bar, zoom control, outline panel, sheet tabs or slide list                                    |
+| `icons`            | `Partial<Record<string, ReactNode>>`           | –         | The host's icons by name (`ICON_NAMES`), sized by font-size (1em), instead of the built-in ones                          |
+
+### Headless mode
+
+For a host that draws its own controls around the document: `headless` leaves the viewer with the document alone, and a
+`controller` (`createViewerController()`) carries its state and the commands that drive it. While editing, the formatting
+toolbar keeps its row above the document; dialogs, the find bar and the comments panel are the viewer's own. `toolbar`
+set explicitly brings back the top bar (File menu, comments, Save) and leaves the rest headless.
+
+```tsx
+import { createViewerController, DocViewer } from '@p10node/office-engine'
+import { useMemo, useSyncExternalStore } from 'react'
+
+function Viewer({ file }: { file: File }) {
+  const ctl = useMemo(() => createViewerController(), [])
+  const s = useSyncExternalStore(ctl.subscribe, ctl.snapshot)
+  return (
+    <>
+      <nav>
+        {s.outline?.items.map((i) => (
+          <button key={i.id} aria-current={i.current} style={{ paddingLeft: i.level * 12 }} onClick={() => ctl.goto(i.id)}>
+            {i.title}
+          </button>
+        ))}
+      </nav>
+      {s.zoom && <button onClick={() => ctl.zoomIn()}>{s.zoom.value === 'fit' ? 'Fit' : `${Math.round(s.zoom.effective * 100)}%`}</button>}
+      {s.canEdit && <button onClick={() => ctl.setEditing(!s.editing)}>{s.editing ? 'View' : 'Edit'}</button>}
+      {s.dirty && <button onClick={() => ctl.save()}>Save</button>}
+      <DocViewer src={file} controller={ctl} headless style={{ height: 600 }} />
+    </>
+  )
+}
+```
+
+| `ViewerState` | Meaning |
+|---------------|---------|
+| `rev` | counts the changes (the state object is replaced on each) |
+| `kind` | `'docx'`, `'xlsx'`, `'pptx'`, or `null` before a document is open |
+| `loading` | loading or downloading |
+| `editing`, `canEdit` | in edit mode; whether editing is possible (allowed, not view only) |
+| `dirty`, `saving` | unsaved changes; a save running |
+| `canUndo`, `canRedo` | whether undo / redo can run (spreadsheets count the edits made here; presentations offer redo whenever editing) |
+| `zoom` | `{ value: 'fit' \| number, effective }`, `null` for spreadsheets |
+| `page` | `{ current, count }` from 1: the page (documents; `count` 0 while laid out) or slide in view; `null` for spreadsheets |
+| `outline` | `{ kind, items: [{ id, title, level, current }] }`: a document's headings, a workbook's visible sheets, a presentation's slides (titled by their title placeholder, else "Slide n") |
+| `status` | the status line ("Page 2 of 7 · 1,204 words", "Slide 3 of 12", "200 rows × 8 cols") |
+
+Commands: `setEditing(on)`, `save()`, `undo()`, `redo()`, `zoomIn()`, `zoomOut()`, `setZoom('fit' | number)`,
+`goto(outlineId)`, `gotoPage(n)`, `present()` (a slideshow from the slide in view), `print()`, `fileAction(id)` (a File menu
+action: `pdf`, `html`, `text:md`, `details`, `rename`…), `toggleComments(open?)`. A command the open document has no use
+for does nothing. `subscribe(fn)` returns its unsubscribe; `snapshot()` the current state. Without `react`, `mount()`
+returns the controller (`mounted.controller`), and `<office-viewer headless>` has it as `element.controller`.
 
 ### Comments
 
@@ -243,7 +297,7 @@ import { IconsProvider, XlsxView } from '@p10node/office-engine'
 </script>
 ```
 
-`<office-viewer>`: attributes `src`, `name`, `editable`, `toolbar="false"`, `thumbnails="false"`, `save="false"`, `download="false"`, `file-menu="false"`, `open="false"`, `capture-select-all="false"`, `theme="dark"` (or `"auto"`), `locale="de"`, `collab` / `room` / `user` / `base` (real-time collaboration; `user` also writes the comments), `comments="false"`; properties `.file = File`, `.icons` (map or resolver, as `icons` above), `.strings = { … }` (see [UI texts](#ui-texts)); events `load`, `error`, `comment` (`detail`: a `CommentEvent`).
+`<office-viewer>`: attributes `src`, `name`, `editable`, `toolbar="false"`, `thumbnails="false"`, `save="false"`, `download="false"`, `file-menu="false"`, `open="false"`, `capture-select-all="false"`, `theme="dark"` (or `"auto"`), `locale="de"`, `collab` / `room` / `user` / `base` (real-time collaboration; `user` also writes the comments), `comments="false"`, `headless`; properties `.file = File`, `.icons` (map or resolver, as `icons` above), `.strings = { … }` (see [UI texts](#ui-texts)), `.controller` (see [headless mode](#headless-mode)); events `load`, `error`, `comment` (`detail`: a `CommentEvent`).
 
 ## Core API (no React)
 

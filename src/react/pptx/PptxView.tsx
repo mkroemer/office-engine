@@ -6,6 +6,7 @@ import { useFileOps, useViewer, useSelectAll } from '../common/Slots'
 import { slidesToText } from '../file/text'
 import { Status } from '../common/Status'
 import { ZoomControl, type Zoom } from '../common/ZoomControl'
+import { useViewCommands } from '../controller'
 import { getSel } from '../edit/input'
 import { PptxEditor } from './PptxEditor'
 import { PptxToolbar, type AlignTo, type Arrange, type Rotate, type SlideCmd } from './PptxToolbar'
@@ -207,7 +208,7 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
   const thumbRef = useRef<HTMLDivElement>(null)
   const thumbScroll = useScroll(thumbRef)
   const [zoom, setZoom] = useState<Zoom>(initialZoom)
-  const showThumbs = thumbnails && rootSize.w >= 720 && meta.count > 1
+  const showThumbs = thumbnails && !viewer.headless && rootSize.w >= 720 && meta.count > 1
   const [, bump] = useForceUpdate()
   const editor = useMemo(() => new PptxEditor(client), [client])
   const caretAt = useRef<{ x: number; y: number } | null>(null)
@@ -592,6 +593,47 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
     if (el) el.scrollTop = PAD + Math.max(0, Math.min(meta.count - 1, i)) * pitch - Math.max(0, (size.h - slideH) / 2)
   }
 
+  // ---- controller: zoom, slide, the slides as the outline, undo, slideshow ----
+  const { ctl, headless } = viewer
+  // slide titles for the outline: read one slide at a time after the first ones are shown, so the slides in view come first
+  const [titles, setTitles] = useState<(string | undefined)[]>([])
+  useEffect(() => {
+    if (!ctl) return
+    let live = true
+    const timer = setTimeout(async () => {
+      const out: (string | undefined)[] = []
+      for (let i = 0; i < meta.count && live; i++) {
+        out.push((await client.call('pptx.slide', i).catch(() => undefined))?.title)
+        if (i % 20 === 19 || i === meta.count - 1) live && setTitles([...out])
+      }
+    }, 800)
+    return () => {
+      live = false
+      clearTimeout(timer)
+    }
+  }, [ctl, client, meta.count, slidesVer])
+  useEffect(() => {
+    ctl?.update({ zoom: { value: zoom, effective: scale } })
+  }, [ctl, zoom, scale])
+  useEffect(() => {
+    ctl?.update({
+      page: { current: current + 1, count: meta.count },
+      outline: { kind: 'slides', items: Array.from({ length: meta.count }, (_, i) => ({ id: String(i), title: titles[i] || `${str.pptx.slide} ${i + 1}`, level: 0, current: i === current })) },
+    })
+  }, [ctl, current, meta.count, titles, str])
+  // as the toolbar's buttons: undo while there is a shape edit or text is being edited; redo whenever editing (no redo depth is kept)
+  useEffect(() => {
+    ctl?.update({ canUndo: viewer.editable && (undoDepth > 0 || editor.active), canRedo: viewer.editable })
+  })
+  useViewCommands(ctl, {
+    setZoom,
+    goto: (id) => go(Number(id)),
+    gotoPage: (n) => go(n - 1),
+    undo: () => (editor.active ? editor.undo() : void undoShapes(false)),
+    redo: () => (editor.active ? editor.redo() : void undoShapes(true)),
+    present: () => setPresenting(current),
+  })
+
   // ---- comments: a thread points at a point of a slide ----
   const cm = useCommentsCtl()
   const cmState = useCommentsState(cm)
@@ -787,8 +829,8 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
             {slots}
           </div>
         </div>
-        <ZoomControl zoom={zoom} effective={scale} onChange={setZoom} />
-        {!viewer.editable && (
+        {!headless && <ZoomControl zoom={zoom} effective={scale} onChange={setZoom} />}
+        {!viewer.editable && !headless && (
           <button type="button" className="de-mode de-present-btn" title={str.pptx.presentTitle} onClick={() => setPresenting(current)}>
             <Icon name="present" size={14} />
             {str.pptx.present}
