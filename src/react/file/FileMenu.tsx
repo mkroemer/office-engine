@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 import type { DocKind } from '../../core/opc'
 import { MOD } from '../common/ContextMenu'
 import type { FileOps } from '../common/Slots'
-import { download, Dropdown, pickFiles, type DropOption } from '../edit/Toolbar'
+import { download, Dropdown, pickFiles, type DropOption, type IconName } from '../edit/Toolbar'
 import { OPEN_ACCEPT } from './importFile'
 import { exportHtml, printDocument } from './print'
 
@@ -29,7 +29,7 @@ const TEXT_FORMATS: Record<DocKind, { id: string; label: string; ext: string; mi
 export interface FileMenuItem {
   label: string
   /** built-in icon name */
-  icon?: string
+  icon?: IconName
   /** shortcut / note on the right */
   hint?: string
   disabled?: boolean
@@ -104,8 +104,8 @@ export function useFileActions(o: FileActionsOptions): FileActions {
       { value: 'original', label: KIND_LABEL[kind], icon: 'save', hint: EXT[kind], head: 'Download as' },
       { value: 'pdf', label: 'PDF document', icon: 'pdf', hint: '.pdf' },
       ...(o.picture
-        ? [{ value: 'picture', label: o.picture.label, icon: 'image', hint: o.picture.ext }]
-        : [{ value: 'html', label: 'Web page', icon: 'html', hint: '.html' }, ...TEXT_FORMATS[kind].map((f) => ({ value: 'text:' + f.id, label: f.label, icon: 'doc', hint: f.ext }))]),
+        ? [{ value: 'picture', label: o.picture.label, icon: 'image', hint: o.picture.ext } as const]
+        : [{ value: 'html', label: 'Web page', icon: 'html', hint: '.html' } as const, ...TEXT_FORMATS[kind].map((f) => ({ value: 'text:' + f.id, label: f.label, icon: 'doc', hint: f.ext }) as const)]),
     ])
   }
   const tail: DropOption<string>[] = []

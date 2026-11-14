@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { ShapeKind } from '../../core/pptx/types'
 import { MOD } from '../common/ContextMenu'
 import { EditorBar } from '../common/Slots'
-import { Btn, ColorBtn, Dropdown, fontName, fontOptions, Menu, Select, Sep, SizeBox, type DropOption } from '../edit/Toolbar'
+import { Btn, ColorBtn, Dropdown, fontName, fontOptions, Menu, Select, Sep, SizeBox, type DropOption, type IconName } from '../edit/Toolbar'
 import type { PptxEditor, PptxFormat } from './PptxEditor'
 
 const HIGHLIGHTS = ['#ffff00', '#00ff00', '#00ffff', '#ff00ff', '#ff0000', '#0000ff', '#ffc000', '#92d050', '#c0c0c0', '#000000']
@@ -98,7 +98,7 @@ export function PptxToolbar(props: {
       <Btn icon="undo" title={`Undo (${MOD}Z)`} disabled={!text && !props.canUndo} onClick={() => (text ? editor.undo() : props.onUndo(false))} />
       <Btn icon="redo" title={`Redo (${MOD}Y)`} onClick={() => (text ? editor.redo() : props.onUndo(true))} />
       <Sep />
-      <Menu title="Insert" label="Insert" icon="plus" items={SHAPES as { value: string; label: string; icon?: string; sep?: boolean }[]} onPick={(v) => props.onInsert(v)} />
+      <Menu title="Insert" label="Insert" icon="plus" items={SHAPES as { value: string; label: string; icon?: IconName; sep?: boolean }[]} onPick={(v) => props.onInsert(v)} />
       <Menu
         title="Slide"
         label="Slide"

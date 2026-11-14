@@ -2,14 +2,14 @@ import { useEffect, useState, type CSSProperties } from 'react'
 import type { CanonStyle, StyleInfo } from '../../core/docx/types'
 import { MOD } from '../common/ContextMenu'
 import { EditorBar } from '../common/Slots'
-import { Btn, ColorBtn, Dropdown, fontName, fontOptions, GridPicker, Icon, Menu, pickFiles, Pop, Select, Sep, SizeBox, type DropOption } from '../edit/Toolbar'
+import { Btn, ColorBtn, Dropdown, fontName, fontOptions, GridPicker, Icon, Menu, pickFiles, Pop, Select, Sep, SizeBox, type DropOption, type IconName } from '../edit/Toolbar'
 import type { BorderPreset } from './tables'
 import type { DocxEditor, FormatState } from './DocxEditor'
 import { en, formatNumber, useStrings, type Strings } from '../strings'
 
 const HIGHLIGHTS = ['#ffff00', '#00ff00', '#00ffff', '#ff00ff', '#0000ff', '#ff0000', '#000080', '#008080', '#008000', '#800080', '#800000', '#808000', '#808080', '#c0c0c0', '#000000']
 
-const CELL_BORDERS: { k: BorderPreset; icon: string }[] = [
+const CELL_BORDERS: { k: BorderPreset; icon: IconName }[] = [
   { k: 'all', icon: 'bAll' },
   { k: 'inner', icon: 'bInner' },
   { k: 'outer', icon: 'bOuter' },

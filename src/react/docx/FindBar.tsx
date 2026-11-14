@@ -51,7 +51,7 @@ export function FindBar(props: {
         <span className="de-find-count">{props.query ? (props.count ? `${Math.min(props.index + 1, props.count)} / ${props.count}` : '0 / 0') : ''}</span>
         <Btn icon="up" title={t.find.prev} onClick={() => props.onNav(-1)} disabled={!props.count} />
         <Btn icon="down" title={t.find.next} onClick={() => props.onNav(1)} disabled={!props.count} />
-        {props.editable && <Btn label="⇄" title={t.find.replace} active={showRep} onClick={() => setShowRep((v) => !v)} />}
+        {props.editable && <Btn icon="replace" title={t.find.replace} active={showRep} onClick={() => setShowRep((v) => !v)} />}
         <Btn icon="close" title={t.find.close} onClick={props.onClose} />
       </div>
       {props.options && <div className="de-find-row de-find-opts">{props.options}</div>}
