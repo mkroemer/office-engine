@@ -327,7 +327,7 @@ function Thread({ ctl, t, active, now, onMenu }: { ctl: CommentsCtl; t: PlacedTh
       {replies.slice(active ? 0 : hidden).map((r) => (
         <Item key={r.id} ctl={ctl} c={r} now={now} onMenu={onMenu} />
       ))}
-      {active && ctl.canComment && <Composer ctl={ctl} placeholder={root.done ? str.comments.replyReopen : str.comments.replyPlaceholder} submit={str.comments.reply}onSubmit={(text, m) => ctl.reply(root.id, text, m)} />}
+      {active && ctl.canComment && <Composer ctl={ctl} placeholder={root.done ? str.comments.replyReopen : str.comments.replyPlaceholder} submit={str.comments.reply} onSubmit={(text, m) => ctl.reply(root.id, text, m)} />}
     </div>
   )
 }
@@ -372,7 +372,7 @@ export function CommentsPanel({ ctl }: { ctl: CommentsCtl }) {
             {st.showResolved ? str.comments.hideResolved : str.comments.showResolved(resolved)}
           </button>
         )}
-        <button type="button" className="de-tb" title={str.comments.close} aria-label={str.comments.close}onClick={() => ctl.toggle(false)}>
+        <button type="button" className="de-tb" title={str.comments.close} aria-label={str.comments.close} onClick={() => ctl.toggle(false)}>
           <Icon name="close" size={16} />
         </button>
       </div>
@@ -387,7 +387,7 @@ export function CommentsPanel({ ctl }: { ctl: CommentsCtl }) {
         {st.notice && (
           <div className="de-cm-notice" role="status">
             <span>{st.notice}</span>
-            <button type="button" className="de-tb" aria-label={str.comments.dismiss}onClick={() => ctl.dismiss()}>
+            <button type="button" className="de-tb" aria-label={str.comments.dismiss} onClick={() => ctl.dismiss()}>
               <Icon name="close" size={14} />
             </button>
           </div>

@@ -181,5 +181,5 @@ export function useFileActions(o: FileActionsOptions): FileActions {
 export function FileMenu({ actions }: { actions: FileActions }) {
   const t = useStrings()
   if (!actions.options.length) return null
-  return <Dropdown title={t.file.menu} label={t.file.menu}className="de-file" options={actions.options} onChange={actions.run} menuWidth={280} disabled={actions.busy} />
+  return <Dropdown title={t.file.menu} label={t.file.menu} className="de-file" options={actions.options} onChange={actions.run} menuWidth={280} disabled={actions.busy} />
 }
