@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { BorderKind, FmtPatch } from '../../core/xlsx/types'
 import { MOD } from '../common/ContextMenu'
 import { EditorBar } from '../common/Slots'
-import { Btn, ColorBtn, Dropdown, fontName, fontOptions, Icon, Menu, Pop, Select, Sep, SizeBox } from '../edit/Toolbar'
+import { Btn, ColorBtn, Dropdown, fontName, fontOptions, Icon, Menu, Pop, Select, Sep, SizeBox, type IconName } from '../edit/Toolbar'
 import { useStrings, type Strings } from '../strings'
 
 type FormatName = keyof Strings['xlsx']['formats']
@@ -31,7 +31,7 @@ const FORMATS: { value: string; k: FormatName; hint: string; sep?: boolean }[] =
   { value: '[h]:mm:ss', k: 'duration', hint: '24:01:00' },
 ]
 const SIZES = [6, 7, 8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36, 48]
-const BORDERS: { k: BorderKind; icon: string }[] = [
+const BORDERS: { k: BorderKind; icon: IconName }[] = [
   { k: 'all', icon: 'bAll' },
   { k: 'inner', icon: 'bInner' },
   { k: 'outer', icon: 'bOuter' },

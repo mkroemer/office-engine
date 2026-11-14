@@ -1,3 +1,4 @@
+import { Icon } from '../edit/Toolbar'
 import { formatNumber, useStrings } from '../strings'
 
 export type Zoom = number | 'fit'
@@ -14,13 +15,13 @@ export function ZoomControl({ zoom, effective, onChange }: { zoom: Zoom; effecti
   return (
     <div className="de-zoom" role="group" aria-label={t.zoom.group}>
       <button type="button" aria-label={t.zoom.out} onClick={() => step(-1)}>
-        −
+        <Icon name="zoomOut" size={16} />
       </button>
       <span title={zoom === 'fit' ? t.zoom.fitTitle : t.zoom.toFit} onClick={() => onChange(zoom === 'fit' ? 1 : 'fit')}>
         {zoom === 'fit' ? t.zoom.fit : formatNumber(t, effective, { style: 'percent' })}
       </span>
       <button type="button" aria-label={t.zoom.in} onClick={() => step(1)}>
-        +
+        <Icon name="zoomIn" size={16} />
       </button>
     </div>
   )
