@@ -74,6 +74,7 @@ CSS is auto-injected, no import needed (or import `@p10node/office-engine/styles
 | `captureSelectAll` | `boolean`                                      | `true`    | Ctrl/⌘+A from anywhere on the page selects the document; `false`: from the viewer only                                   |
 | `fileMenuItems`    | `FileMenuItem[]`                               | –         | Extra File menu entries (`label`, `onClick`, `icon`, `hint`)                                                             |
 | `icons`            | `Icons`                                        | built-in  | Your own icons: a map by `IconName` or a resolver `(name, { size }) => node`; see [Icons](#icons)                        |
+| `components`       | `Partial<UIComponents>`                        | built-in  | Your own `Button`, `Select`, `Separator`, `Dialog`, `Toast` in the toolbars and dialogs; see [Theming](theming.md#your-own-components) |
 | `onRename`         | `(name) => void`                               | –         | File → Rename result (extension included)                                                                                |
 | `onClose`          | `() => void`                                   | –         | Adds File → Close                                                                                                        |
 | `onSave`           | `(blob, name) => void`                         | download  | Receives saved file (downloads by default): the Office file, or a Markdown / HTML / SVG file as itself                   |

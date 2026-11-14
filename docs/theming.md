@@ -69,8 +69,52 @@ gives the class name and style their root needs:
 
 ```tsx
 const root = useThemeRoot(theme)
-return <div className={root.className} style={root.style}><XlsxView client={client} /></div>
+return (
+  <OfficeUIProvider icons={icons} components={components} locale="de">
+    <div className={root.className} style={root.style}><XlsxView client={client} /></div>
+  </OfficeUIProvider>
+)
 ```
+
+`OfficeUIProvider` carries what `DocViewer` takes as `icons`, `components`, `locale` and `strings` to views mounted on
+their own.
+
+## Your own components
+
+Where tokens are not enough, the toolbars and dialogs render the host's own components: a design system's buttons,
+selects and dialogs instead of the built-in ones. Each one left out keeps the built-in one.
+
+```tsx
+<DocViewer
+  src={file}
+  editable
+  components={{
+    Button: ({ title, icon, label, children, active, expanded, disabled, onClick, onMouseDown }) => (
+      <MyIconButton tooltip={title} aria-label={title} pressed={active} aria-expanded={expanded}
+        disabled={disabled} onClick={onClick} onMouseDown={onMouseDown}>
+        {icon}{label}{children}
+      </MyIconButton>
+    ),
+    Separator: () => <MyDivider vertical />,
+  }}
+/>
+```
+
+| Component | Used for | Props |
+|---|---|---|
+| `Button` | every toolbar button, the toggles that open color, table and border pickers, the overflow button | `ButtonProps`: `title`, `icon` (resolved through `icons`), `iconName`, `label`, `children`, `active`, `expanded`, `disabled`, `wide`, `onClick`, `onMouseDown`, `className` (the built-in classes) |
+| `Select` | font, size list, style, format and menu dropdowns | `SelectProps`: `title`, `options` (`DropOption`: `value`, `label`, `hint`, `icon`, `disabled`, `sep`, `head`, `style`), `value` (undefined for a command menu), `onChange`, `label`, `placeholder`, `width`, `menuWidth`, `disabled`, `alignRight` |
+| `Separator` | between toolbar groups | none |
+| `Dialog` | prompts (link, rename, …) and confirmations | `DialogProps`: `title`, `kind` (`'alert'` for a question), `children` (the body), `actions` (`label`, `onClick`, `primary`, `submit`, `autoFocus`), `onSubmit` (the body is a form), `onClose` (Escape, backdrop) |
+| `Toast` | short messages at the bottom | `text` (the viewer removes it after a few seconds) |
+
+The document must keep the focus while a toolbar control is used, or the command loses its selection:
+
+- `Button`: pass `onMouseDown` to the element. It prevents the default, which keeps the focus.
+- `Select`: open on mouse down with the default prevented, and handle its keys without moving the focus into the list.
+  The built-in one captures the keys at the window while open.
+
+The overflow menu measures each toolbar item from a wrapper of its own, so a host component needs no ref.
 
 ## Tokens
 
