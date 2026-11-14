@@ -14,6 +14,7 @@ import { ContextMenu, MOD, type MenuItem } from '../common/ContextMenu'
 import { Toast } from '../common/Dialog'
 import { FindBar } from '../docx/FindBar'
 import { XlsxToolbar, type MergeMode } from './XlsxToolbar'
+import { Icon } from '../edit/Toolbar'
 import { Axis } from './axis'
 import { fitNumber, fontPx } from './fit'
 import { sheetPrintable } from './print'
@@ -374,7 +375,7 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
       <div className="de-tabs" role="tablist">
         {viewer.editable && (
           <button type="button" className="de-tab de-tab-add" title="Add sheet" onClick={() => void bookOp({ op: 'add', after: cur }, cur + 1)}>
-            +
+            <Icon name="sheetAdd" size={16} />
           </button>
         )}
         {meta.sheets.filter((s) => !s.hidden).map((s) =>

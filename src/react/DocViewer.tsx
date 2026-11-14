@@ -6,7 +6,7 @@ import { DocxView } from './docx/DocxView'
 import { ViewerContext, type FileOps, type ViewerApi } from './common/Slots'
 import { StatusContext } from './common/Status'
 import { ConfirmDialog, PromptDialog, Toast } from './common/Dialog'
-import { download, Icon } from './edit/Toolbar'
+import { download, Icon, IconsProvider, type Icons } from './edit/Toolbar'
 import { DetailsDialog } from './file/DetailsDialog'
 import { FileMenu, KIND_LABEL, useFileActions, type FileMenuItem } from './file/FileMenu'
 import { importFile, type Imported } from './file/importFile'
@@ -98,6 +98,12 @@ export interface DocViewerProps {
    * host hears about. Shown by default, written while editing; `false` hides them.
    */
   comments?: CommentOptions | false
+  /**
+   * The host's icons, shown instead of the built-in ones: a map by name (see `ICON_NAMES`) or a resolver
+   * `(name, { size }) => node`; a missing entry, or `undefined` / `null` from the resolver, keeps the built-in icon.
+   * Each is rendered in `span.de-icon`, sized by font-size (1em).
+   */
+  icons?: Icons
 }
 
 const EXT: Record<string, string> = { docx: '.docx', xlsx: '.xlsx', pptx: '.pptx' }
@@ -531,6 +537,7 @@ export function DocViewer(props: DocViewerProps) {
   else body = <PptxView client={client} initialZoom={zoom} thumbnails={thumbnails} />
 
   return (
+    <IconsProvider icons={props.icons}>
     <div ref={rootRef} className={'de-root' + (dark ? ' de-dark' : '') + (className ? ` ${className}` : '')} style={style} onKeyDown={onKeyDown}>
       {toolbar && (
         <div className="de-bar">
@@ -686,5 +693,6 @@ export function DocViewer(props: DocViewerProps) {
         />
       )}
     </div>
+    </IconsProvider>
   )
 }

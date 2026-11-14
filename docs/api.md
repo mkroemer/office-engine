@@ -69,6 +69,7 @@ CSS is auto-injected, no import needed. Container must have a height.
 | `allowOpen`        | `boolean`                                      | `true`    | File → New / Open (off during collaboration)                                                                             |
 | `captureSelectAll` | `boolean`                                      | `true`    | Ctrl/⌘+A from anywhere on the page selects the document; `false`: from the viewer only                                   |
 | `fileMenuItems`    | `FileMenuItem[]`                               | –         | Extra File menu entries (`label`, `onClick`, `icon`, `hint`)                                                             |
+| `icons`            | `Icons`                                        | built-in  | Your own icons: a map by `IconName` or a resolver `(name, { size }) => node`; see [Icons](#icons)                        |
 | `onRename`         | `(name) => void`                               | –         | File → Rename result (extension included)                                                                                |
 | `onClose`          | `() => void`                                   | –         | Adds File → Close                                                                                                        |
 | `onSave`           | `(blob, name) => void`                         | download  | Receives saved file (downloads by default): the Office file, or a Markdown / HTML / SVG file as itself                   |
@@ -128,6 +129,60 @@ if (client?.kind === 'xlsx') return <div className="de-root"><XlsxView client={c
 
 The views style themselves from CSS variables on `.de-root` (`--de-bg`, `--de-chrome`, `--de-accent`…): override them to match your app. Add `de-dark` to the root element for the dark theme.
 
+### Icons
+
+Every icon the viewer draws, toolbars, menus, zoom, outline, Present and the add-sheet tab included, has a name (`IconName`, all of them in `ICON_NAMES`). `icons` replaces any of them, either as a map or as a resolver that is called for every icon:
+
+```tsx
+import { DocViewer, type IconName } from '@p10node/office-engine'
+
+<DocViewer src={file} icons={{ undo: <MyUndo />, redo: <MyRedo /> }} />
+```
+
+A name the map leaves out, or a resolver returning `undefined` / `null`, keeps the built-in icon, so a set can cover just part of the names. Your icon is rendered inside `<span class="de-icon">` whose font-size is the icon's size in pixels: draw it at `1em` (a bare `<svg>` child is sized to `1em` for you) and with `currentColor`, so it follows the theme. The resolver also gets `{ size }` in pixels.
+
+With [Lucide](https://lucide.dev) (`lucide-react`):
+
+```tsx
+import { Bold, Italic, ListTree, Plus, Presentation, Redo2, Replace, Search, Undo2, X, ZoomIn, ZoomOut, type LucideIcon } from 'lucide-react'
+
+const LUCIDE: Partial<Record<IconName, LucideIcon>> = {
+  undo: Undo2, redo: Redo2, bold: Bold, italic: Italic, search: Search, replace: Replace,
+  zoomIn: ZoomIn, zoomOut: ZoomOut, outline: ListTree, close: X, present: Presentation, sheetAdd: Plus,
+}
+const lucide = (name: IconName) => {
+  const C = LUCIDE[name]
+  return C && <C size="1em" strokeWidth={1.8} />
+}
+
+<DocViewer src={file} icons={lucide} />
+```
+
+With [Phosphor](https://phosphoricons.com) (`@phosphor-icons/react`):
+
+```tsx
+import { ArrowArcLeft, ArrowArcRight, ArrowsLeftRight, ListBullets, MagnifyingGlass, MagnifyingGlassMinus, MagnifyingGlassPlus, Plus, PresentationChart, TextB, TextItalic, X, type Icon } from '@phosphor-icons/react'
+
+const PHOSPHOR: Partial<Record<IconName, Icon>> = {
+  undo: ArrowArcLeft, redo: ArrowArcRight, bold: TextB, italic: TextItalic, search: MagnifyingGlass, replace: ArrowsLeftRight,
+  zoomIn: MagnifyingGlassPlus, zoomOut: MagnifyingGlassMinus, outline: ListBullets, close: X, present: PresentationChart, sheetAdd: Plus,
+}
+const phosphor = (name: IconName) => {
+  const C = PHOSPHOR[name]
+  return C && <C size="1em" />
+}
+```
+
+The standalone views get the same icons from `IconsProvider`, which `DocViewer` uses internally; a nested provider falls back to the enclosing one for names it leaves out:
+
+```tsx
+import { IconsProvider, XlsxView } from '@p10node/office-engine'
+
+<IconsProvider icons={lucide}>
+  <div className="de-root"><XlsxView client={client} /></div>
+</IconsProvider>
+```
+
 ## Without a React build
 
 ```html
@@ -143,7 +198,7 @@ The views style themselves from CSS variables on `.de-root` (`--de-bg`, `--de-ch
 </script>
 ```
 
-`<office-viewer>`: attributes `src`, `name`, `editable`, `toolbar="false"`, `thumbnails="false"`, `save="false"`, `download="false"`, `file-menu="false"`, `open="false"`, `capture-select-all="false"`, `theme="dark"` (or `"auto"`), `collab` / `room` / `user` / `base` (real-time collaboration; `user` also writes the comments), `comments="false"`; property `.file = File`; events `load`, `error`, `comment` (`detail`: a `CommentEvent`).
+`<office-viewer>`: attributes `src`, `name`, `editable`, `toolbar="false"`, `thumbnails="false"`, `save="false"`, `download="false"`, `file-menu="false"`, `open="false"`, `capture-select-all="false"`, `theme="dark"` (or `"auto"`), `collab` / `room` / `user` / `base` (real-time collaboration; `user` also writes the comments), `comments="false"`; properties `.file = File` and `.icons` (map or resolver, as `icons` above); events `load`, `error`, `comment` (`detail`: a `CommentEvent`).
 
 ## Core API (no React)
 

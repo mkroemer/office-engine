@@ -1,9 +1,12 @@
 import {
   Children,
+  createContext,
   Fragment,
   isValidElement,
+  useContext,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -16,7 +19,7 @@ import { cssColor } from '../../core/color'
 
 const BORDER_GRID = <path d="M4 4h16v16H4zM12 4v16M4 12h16" strokeDasharray="1.2 2.6" opacity={0.5} strokeWidth={1.4} />
 
-const P: Record<string, ReactNode> = {
+const P = {
   undo: <path d="M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />,
   redo: <path d="m15 14 5-5-5-5M20 9H9.5a5.5 5.5 0 0 0 0 11H13" />,
   bold: <path d="M7 5h6a3.5 3.5 0 0 1 0 7H7zM7 12h7a3.5 3.5 0 0 1 0 7H7z" strokeWidth={2.4} />,
@@ -145,9 +148,54 @@ const P: Record<string, ReactNode> = {
   info: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5M12 8h.01" />,
   comment: <path d="M5 5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-8l-4 3.5V16H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z" />,
   commentAdd: <path d="M5 5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-8l-4 3.5V16H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM12 8v5M9.5 10.5h5" />,
+  zoomIn: <path d="M12 5v14M5 12h14" />,
+  zoomOut: <path d="M5 12h14" />,
+  present: <path d="M7 4l13 8-13 8z" />,
+  sheetAdd: <path d="M12 5v14M5 12h14" />,
+  replace: <path d="M4 8h15l-3.5-3.5M20 16H5l3.5 3.5" />,
+} satisfies Record<string, ReactNode>
+
+/** the name of one of the viewer's icons */
+export type IconName = keyof typeof P
+
+/** the names of the viewer's icons, for a host's own set (`<DocViewer icons>`) */
+export const ICON_NAMES = Object.keys(P) as IconName[]
+
+/**
+ * A host's icons: a map by name, or a resolver called for every icon. A missing entry, or a resolver
+ * returning `undefined` / `null`, keeps the built-in icon. Host icons are sized by font-size (1em).
+ */
+export type Icons = Partial<Record<IconName, ReactNode>> | ((name: IconName, props: { size: number }) => ReactNode | undefined | null)
+
+type Resolve = (name: IconName, size: number) => ReactNode | undefined
+
+const IconsContext = createContext<Resolve | null>(null)
+
+/** the host's icon for `name`, or `undefined` for the built-in one */
+export function hostIcon(icons: Icons | undefined, name: IconName, size: number): ReactNode | undefined {
+  if (!icons) return undefined
+  const own = typeof icons === 'function' ? icons(name, { size }) : icons[name]
+  return own === null || own === false ? undefined : own
 }
 
-export function Icon({ name, size = 18 }: { name: string; size?: number }) {
+/**
+ * Gives the views inside it the host's icons; DocViewer applies its `icons` prop through one.
+ * Nested providers fall back to the enclosing one for names they leave out.
+ */
+export function IconsProvider({ icons, children }: { icons?: Icons; children?: ReactNode }) {
+  const outer = useContext(IconsContext)
+  const resolve = useMemo<Resolve | null>(() => (icons ? (name, size) => hostIcon(icons, name, size) ?? outer?.(name, size) : outer), [icons, outer])
+  return <IconsContext.Provider value={resolve}>{children}</IconsContext.Provider>
+}
+
+export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
+  const own = useContext(IconsContext)?.(name, size)
+  if (own !== undefined)
+    return (
+      <span className="de-icon" style={{ fontSize: size, width: size, height: size }} aria-hidden>
+        {own}
+      </span>
+    )
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
       {P[name]}
@@ -191,7 +239,7 @@ export function useDismiss(ref: RefObject<HTMLElement | null>, open: boolean, cl
   }, [open, ref])
 }
 
-export function Btn(props: { icon?: string; label?: ReactNode; title: string; active?: boolean; disabled?: boolean; onClick: () => void; wide?: boolean }) {
+export function Btn(props: { icon?: IconName; label?: ReactNode; title: string; active?: boolean; disabled?: boolean; onClick: () => void; wide?: boolean }) {
   return (
     <button
       type="button"
@@ -216,7 +264,7 @@ export interface DropOption<T> {
   label: string
   /** secondary text on the right (example, shortcut) */
   hint?: string
-  icon?: string
+  icon?: IconName
   /** label style (font / style previews) */
   style?: CSSProperties
   disabled?: boolean
@@ -239,7 +287,7 @@ export function Dropdown<T extends string | number>(props: {
   placeholder?: string
   /** fixed trigger content (menus); null = icon only */
   label?: ReactNode
-  icon?: string
+  icon?: IconName
   width?: number
   menuWidth?: number
   disabled?: boolean
@@ -628,7 +676,7 @@ const subscribeCustom = (f: () => void) => {
   }
 }
 
-export function ColorBtn(props: { icon: string; title: string; value?: string; onPick: (c: string | null) => void; palette?: string[]; noneLabel?: string }) {
+export function ColorBtn(props: { icon: IconName; title: string; value?: string; onPick: (c: string | null) => void; palette?: string[]; noneLabel?: string }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLSpanElement>(null)
   const pickerRef = useRef<HTMLInputElement>(null)
@@ -721,12 +769,12 @@ export function download(blob: Blob, name: string) {
 }
 
 /** Command menu: fixed label, items with optional icons. */
-export function Menu(props: { title: string; label: string; icon?: string; items: { value: string; label: string; icon?: string; disabled?: boolean; sep?: boolean; hint?: string }[]; onPick: (v: string) => void; width?: number }) {
+export function Menu(props: { title: string; label: string; icon?: IconName; items: { value: string; label: string; icon?: IconName; disabled?: boolean; sep?: boolean; hint?: string }[]; onPick: (v: string) => void; width?: number }) {
   return <Dropdown title={props.title} label={props.label.replace(/\s*▾$/, '')} icon={props.icon} options={props.items} onChange={props.onPick} />
 }
 
 /** Small popover anchored under a toolbar button. */
-export function Pop(props: { icon: string; title: string; children: (close: () => void) => ReactNode; active?: boolean; disabled?: boolean; chevron?: boolean }) {
+export function Pop(props: { icon: IconName; title: string; children: (close: () => void) => ReactNode; active?: boolean; disabled?: boolean; chevron?: boolean }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLSpanElement>(null)
   useDismiss(ref, open, () => setOpen(false))
