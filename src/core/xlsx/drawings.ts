@@ -1,0 +1,186 @@
+/**
+ * The pictures and charts on a sheet, read from its drawing part (`xl/drawings/drawingN.xml`, linked from the sheet's
+ * rels), each with the place it is anchored to: two cell corners (`twoCellAnchor`), one corner and a size
+ * (`oneCellAnchor`), or a position on the sheet and a size (`absoluteAnchor`). A picture carries its media part, which
+ * the view shows where the browser can draw it (not EMF / WMF); a chart carries its model with the values read from the
+ * cells (chart.ts), or, of a kind not drawn, its kind and title for a placeholder the size of the chart. Shapes, text
+ * boxes and the like are left out, as are drawings in a group the anchor's own frame does not hold.
+ */
+import { isWebImage } from '../opc'
+import { desc, descAll, kid, num, textOf, type XEl } from '../xml'
+import { parseFormula, references } from './formula'
+import { readChart, type ChartModel, type RangeReader, type RangeValues } from './chart'
+import { T_BOOL, T_DATE, T_EMPTY, T_ERR, T_NUM, T_SST, type XlsxWorkbook } from './workbook'
+
+/** A cell corner: 0-based column and row, and the offset into that cell in CSS pixels */
+export interface DrawingCorner {
+  c: number
+  r: number
+  dx: number
+  dy: number
+}
+
+export interface SheetDrawing {
+  kind: 'picture' | 'chart'
+  from?: DrawingCorner
+  to?: DrawingCorner
+  /** position from the sheet's top left, px (absoluteAnchor) */
+  at?: { x: number; y: number }
+  /** px (oneCellAnchor, absoluteAnchor) */
+  size?: { w: number; h: number }
+  /** a picture's media part, where the browser can draw it */
+  target?: string
+  /** a chart's title, or a picture's description */
+  title: string
+  /** a chart's kind: 'column', 'bar', 'line', 'pie', … ('' where it is none the reader knows) */
+  chart?: string
+  /** a chart's model with its values, for drawing it (chart-svg.ts); absent where it is a kind not drawn (a placeholder) */
+  model?: ChartModel
+}
+
+/** DrawingML measures in EMU: 914400 to the inch, 96 CSS pixels to the inch */
+const EMU_PER_PX = 9525
+
+const CHART_KINDS: Record<string, string> = {
+  barChart: 'bar', bar3DChart: 'bar', lineChart: 'line', line3DChart: 'line', pieChart: 'pie', pie3DChart: 'pie', ofPieChart: 'pie',
+  doughnutChart: 'doughnut', areaChart: 'area', area3DChart: 'area', scatterChart: 'scatter', bubbleChart: 'bubble', radarChart: 'radar',
+  stockChart: 'stock', surfaceChart: 'surface', surface3DChart: 'surface',
+}
+
+/** an attribute whatever its namespace prefix: `r:id` is the usual, not the only one */
+const attr = (el: XEl | undefined, local: string) => {
+  if (!el) return undefined
+  for (const [k, v] of Object.entries(el.a)) if (k === local || k.endsWith(':' + local)) return v
+  return undefined
+}
+
+const corner = (el: XEl | undefined): DrawingCorner | undefined =>
+  el
+    ? {
+        c: num(textOf(kid(el, 'col')), 0)!,
+        r: num(textOf(kid(el, 'row')), 0)!,
+        dx: num(textOf(kid(el, 'colOff')), 0)! / EMU_PER_PX,
+        dy: num(textOf(kid(el, 'rowOff')), 0)! / EMU_PER_PX,
+      }
+    : undefined
+
+/** a chart's kind, title and model (null where it is a kind chart.ts does not draw), from its chart part */
+async function chartOf(wb: XlsxWorkbook, sheet: number, part: string): Promise<{ chart: string; title: string; model: ChartModel | null }> {
+  const root = await wb.pkg.xml(part)
+  const plot = desc(root, 'plotArea')
+  const type = plot?.c.find((e) => e.n.endsWith('Chart'))
+  let chart = type ? (CHART_KINDS[type.n] ?? '') : ''
+  // a bar chart is drawn with upright columns unless its direction says bars
+  if (type?.n.startsWith('bar') && attr(kid(type, 'barDir'), 'val') !== 'bar') chart = 'column'
+  const title = desc(kid(root, 'chart'), 'title')
+  const model = await readChart(root, { theme: wb.theme, date1904: wb.date1904, read: workbookReader(wb, sheet) }).catch((e: Error) => {
+    console.warn('[office-engine] chart not read:', e.message)
+    return null
+  })
+  return { chart, title: model?.title?.text ?? (title ? descAll(title, 't').map((t) => t.t).join('').trim() : ''), model }
+}
+
+/**
+ * Reads a chart's series references from the workbook's cells: `'Sheet 1'!$B$2:$B$9`, several areas, a sheet not shown
+ * yet (loaded for it). Null for a defined name, another workbook or an unknown sheet: the chart's saved values stand in.
+ */
+export function workbookReader(wb: XlsxWorkbook, self: number): RangeReader {
+  return async (ref) => {
+    let refs
+    try {
+      refs = references(parseFormula(ref))
+    } catch {
+      return null
+    }
+    if (!refs.length) return null
+    const out: RangeValues = { values: [], formats: [], hidden: [] }
+    for (const r of refs) {
+      if (r.sheet?.startsWith('[')) return null
+      const s = r.sheet === undefined ? self : wb.sheets.findIndex((x) => x.name.toLowerCase() === r.sheet!.toLowerCase())
+      if (s < 0) return null
+      if (!wb.sheetsData.get(s)?.done) await wb.loadSheet(s, () => {})
+      const d = wb.sheetsData.get(s)
+      if (!d || d.error) return null
+      const [r0, c0, r1, c1] = 'r' in r ? [r.r, r.c, r.r, r.c] : [r.r0, r.c0, Math.min(r.r1, Math.max(r.r0, d.maxRow)), Math.min(r.c1, Math.max(r.c0, d.maxCol))]
+      if ((r1 - r0 + 1) * (c1 - c0 + 1) > MAX_POINTS) return null
+      await wb.ensure(d, r0, r1)
+      const hiddenCols = new Set<number>()
+      for (const ci of d.colInfo) if (ci.w === 0) for (let c = Math.max(ci.min, c0); c <= Math.min(ci.max, c1); c++) hiddenCols.add(c)
+      for (let rr = r0; rr <= r1; rr++) {
+        const row = d.rows[rr]
+        const cells = new Map<number, [number, unknown, number]>()
+        if (row) for (let k = 0; k < row.length; k += 4) cells.set(row[k] as number, [row[k + 1] as number, row[k + 2], row[k + 3] as number])
+        const rowHidden = !!d.rowAttrs.get(rr)?.hidden
+        for (let c = c0; c <= c1; c++) {
+          const cell = cells.get(c)
+          out.values.push(cell ? cellValue(wb, cell[0], cell[1]) : null)
+          out.formats.push(cell ? wb.styles.xfs[cell[2]]?.numFmt : undefined)
+          out.hidden.push(rowHidden || hiddenCols.has(c))
+        }
+      }
+    }
+    return out
+  }
+}
+
+/** more cells than a chart reads from one reference (a whole column): its saved values are used instead */
+const MAX_POINTS = 50_000
+
+function cellValue(wb: XlsxWorkbook, t: number, v: unknown): number | string | null {
+  switch (t) {
+    case T_NUM:
+    case T_DATE:
+      return typeof v === 'number' ? v : Number(v)
+    case T_SST:
+      return wb.sst[v as number] ?? ''
+    case T_BOOL:
+      return v ? 1 : 0
+    case T_EMPTY:
+    case T_ERR:
+      return null
+    default:
+      return String(v)
+  }
+}
+
+/** The pictures and charts on the workbook's sheet `sheet`, in the order they are drawn */
+export async function readSheetDrawings(wb: XlsxWorkbook, sheet: number): Promise<SheetDrawing[]> {
+  const pkg = wb.pkg
+  const sheetPath = wb.sheets[sheet]?.path
+  if (!sheetPath) return []
+  const sheetRels = await pkg.rels(sheetPath)
+  const out: SheetDrawing[] = []
+  for (const rel of sheetRels.values()) {
+    if (rel.external || !rel.type.endsWith('/drawing') || !pkg.has(rel.target)) continue
+    const root = await pkg.xml(rel.target)
+    const rels = await pkg.rels(rel.target)
+    for (const anchor of root?.c ?? []) {
+      if (anchor.n !== 'twoCellAnchor' && anchor.n !== 'oneCellAnchor' && anchor.n !== 'absoluteAnchor') continue
+      const ext = kid(anchor, 'ext')
+      const pos = kid(anchor, 'pos')
+      const place = {
+        from: corner(kid(anchor, 'from')),
+        to: corner(kid(anchor, 'to')),
+        at: pos ? { x: num(pos.a.x, 0)! / EMU_PER_PX, y: num(pos.a.y, 0)! / EMU_PER_PX } : undefined,
+        size: ext ? { w: num(ext.a.cx, 0)! / EMU_PER_PX, h: num(ext.a.cy, 0)! / EMU_PER_PX } : undefined,
+      }
+      const chartRef = desc(anchor, 'chart')
+      const blip = desc(anchor, 'blip')
+      if (chartRef) {
+        const target = rels.get(attr(chartRef, 'id') ?? '')
+        const chart = target && !target.external && pkg.has(target.target) ? await chartOf(wb, sheet, target.target) : { chart: '', title: '', model: null }
+        out.push({ kind: 'chart', ...place, chart: chart.chart, title: chart.title, ...(chart.model ? { model: chart.model } : {}) })
+      } else if (blip) {
+        const target = rels.get(attr(blip, 'embed') ?? '')
+        const pr = desc(anchor, 'cNvPr')
+        out.push({
+          kind: 'picture',
+          ...place,
+          target: target && !target.external && isWebImage(target.target) ? target.target : undefined,
+          title: pr?.a.descr || pr?.a.title || '',
+        })
+      }
+    }
+  }
+  return out
+}
