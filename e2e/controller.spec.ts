@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { ViewerState } from '../src'
-import { docxParas, paraText, runsOf, useBrowser, viewer, type Viewer } from './harness'
+import { docxParas, fromB64, paraText, runsOf, useBrowser, viewer, type Viewer } from './harness'
 
 useBrowser()
 
@@ -64,7 +64,10 @@ describe('controller and headless mode', () => {
     await until(v, 's.format.bold')
     await page.evaluate(() => window.__ctl.format({ op: 'size', pt: 20 }))
     await until(v, 's.format.size === 20')
-    const p = (await docxParas((await v.save()).bytes)).find((x) => paraText(x).startsWith('This document'))!
+    // headless: no Save button, the host saves through the controller
+    await page.evaluate(() => window.__ctl.save())
+    const saved = await v.waitEvent('save')
+    const p = (await docxParas(fromB64(saved.b64 as string))).find((x) => paraText(x).startsWith('This document'))!
     const run = runsOf(p).find((r) => r.text.includes('document'))!
     expect(run.s.b).toBe(true)
     expect(run.s.sz).toBe(20)
