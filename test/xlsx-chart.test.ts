@@ -30,7 +30,7 @@ const ser = (i: number, name: string, val: string, extra = '') =>
 const AXES = '<c:catAx><c:axId val="1"/><c:axPos val="b"/><c:crossAx val="2"/></c:catAx><c:valAx><c:axId val="2"/><c:axPos val="l"/><c:majorGridlines/><c:crossAx val="1"/></c:valAx>'
 
 /** a workbook whose sheet "Data" holds ROWS and one chart (its `plotArea` body given); `hideRow` hides a row (1-based) */
-async function withChart(plot: string, opts: { hideRow?: number; title?: string } = {}): Promise<Blob> {
+async function withChart(plot: string, opts: { hideRow?: number; title?: string; titleXml?: string } = {}): Promise<Blob> {
   const base = await rowsToXlsx(ROWS, 'Data')
   const zip = await ZipArchive.open(new BlobSource(base))
   const files = new Map<string, string>()
@@ -44,7 +44,7 @@ async function withChart(plot: string, opts: { hideRow?: number; title?: string 
     'xl/drawings/drawing1.xml',
     `${HEAD}<xdr:wsDr ${NS}><xdr:twoCellAnchor><xdr:from><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>10</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>16</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rId1"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>`,
   )
-  const title = opts.title ? `<c:title><c:tx><c:rich><a:p><a:r><a:t>${opts.title}</a:t></a:r></a:p></c:rich></c:tx></c:title>` : ''
+  const title = opts.titleXml ?? (opts.title ? `<c:title><c:tx><c:rich><a:p><a:r><a:t>${opts.title}</a:t></a:r></a:p></c:rich></c:tx></c:title>` : '')
   files.set('xl/charts/chart1.xml', `${HEAD}<c:chartSpace ${NS}><c:chart>${title}<c:plotArea><c:layout/>${plot}</c:plotArea><c:legend><c:legendPos val="b"/></c:legend><c:plotVisOnly val="1"/></c:chart></c:chartSpace>`)
   const ct = (await zip.text('[Content_Types].xml')).replace(
     '</Types>',
@@ -137,7 +137,8 @@ describe('xlsx charts: drawing', () => {
     const { model } = await modelOf(await withChart(CLUSTERED, { title: 'Revenue' }))
     const svg = renderChart(model!, 480, 300)
     expect(svg.startsWith('<svg')).toBe(true)
-    expect(svg).not.toMatch(/<script|href=|url\(/i)
+    // nothing that runs or loads: the only url() is the plot area's own clip path
+    expect(svg).not.toMatch(/<script|href=|url\((?!#de-plot\))/i)
     const fills = new Set(model!.groups[0].series.map((s) => s.fill))
     const bars = [...svg.matchAll(/<rect [^>]*fill="([^"]+)"/g)].filter((m) => fills.has(m[1]))
     // 3 categories × 2 series, plus a legend swatch each
@@ -159,5 +160,52 @@ describe('xlsx charts: drawing', () => {
     expect(renderChart(lm!, 400, 260)).toContain('>20<')
     const { model: dm } = await modelOf(await withChart(doughnut))
     expect(renderChart(dm!, 400, 260)).toContain('>44%<')
+  })
+
+  test('a title from a cell: the cell text, not the automatic one', async () => {
+    const titleXml = `<c:title><c:tx>${strRef('Data!$C$1', ['cached title'])}</c:tx></c:title>`
+    const { model } = await modelOf(await withChart(CLUSTERED, { titleXml }))
+    expect(model!.title?.text).toBe('Cost')
+  })
+
+  test('pie: a negative value is a slice of its magnitude, its label keeps the sign', async () => {
+    const plot = `<c:pieChart><c:varyColors val="1"/>${ser(0, 'B', numRef('Data!$B$2:$B$4', [1, 1, 1]))}</c:pieChart>`
+    const { model } = await modelOf(await withChart(plot))
+    const s = model!.groups[0].series[0]
+    s.values = [-10, 20, 30]
+    s.labels = { value: true, percent: false, category: false, series: false }
+    const svg = renderChart(model!, 400, 260)
+    expect(svg.match(/<path d="M[^"]* A/g)?.length).toBe(3)
+    expect(svg).toContain('>-10<')
+  })
+
+  const SCATTER = `<c:scatterChart><c:scatterStyle val="lineMarker"/><c:ser><c:idx val="0"/><c:order val="0"/><c:xVal>${numRef('Data!$B$2:$B$4', [1, 2, 3])}</c:xVal><c:yVal>${numRef('Data!$C$2:$C$4', [1, 2, 3])}</c:yVal></c:ser><c:axId val="1"/><c:axId val="2"/></c:scatterChart><c:valAx><c:axId val="1"/><c:axPos val="b"/><c:crossAx val="2"/></c:valAx><c:valAx><c:axId val="2"/><c:axPos val="l"/><c:crossAx val="1"/></c:valAx>`
+  /** the x position of each value label in a rendered chart, by its text */
+  const labelX = (svg: string) => Object.fromEntries([...svg.matchAll(/<text x="([\d.]+)"[^>]*>(\d+)</g)].map((m) => [m[2], Number(m[1])]))
+
+  test('scatter: a point missing its X is not drawn; labels stay with their points', async () => {
+    const { model } = await modelOf(await withChart(SCATTER))
+    const s = model!.groups[0].series[0]
+    s.labels = { value: true, percent: false, category: false, series: false }
+    // values no axis shows as a tick label
+    s.xs = [1, null, 3]
+    s.values = [517, 733, 951]
+    let at = labelX(renderChart(model!, 400, 260))
+    expect('733' in at).toBe(false)
+    expect(at['517'] < at['951']).toBe(true)
+    // a missing Y: the next points keep their own labels
+    s.xs = [1, 2, 3]
+    s.values = [null, 733, 951]
+    at = labelX(renderChart(model!, 400, 260))
+    expect(at['733'] < at['951']).toBe(true)
+  })
+
+  test('series stop at the plot area when the axis range leaves values outside it', async () => {
+    const { model } = await modelOf(await withChart(CLUSTERED))
+    const val = model!.axes.find((a) => a.kind === 'val')!
+    val.max = 5
+    const svg = renderChart(model!, 400, 260)
+    expect(svg).toContain('<clipPath id="de-plot">')
+    expect(svg).toMatch(/<g clip-path="url\(#de-plot\)">[\s\S]*<\/g>/)
   })
 })

@@ -223,7 +223,8 @@ function legendSize(entries: LegendEntry[], vertical: boolean, size: number, max
 
 function drawPie(svg: Svg, m: ChartModel, g: ChartGroup, box: Box) {
   const s = g.series[0]
-  const vals = s.values.map((v) => (v && v > 0 ? v : 0))
+  // a negative value is a slice of its magnitude, as in Excel; its label keeps the sign
+  const vals = s.values.map((v) => (v ? Math.abs(v) : 0))
   const total = vals.reduce((a, b) => a + b, 0)
   if (!total) return
   const exploded = Math.max(0, ...Object.values(s.points).map((p) => p.explosion ?? 0))
@@ -261,7 +262,7 @@ function drawPie(svg: Svg, m: ChartModel, g: ChartGroup, box: Box) {
       const parts: string[] = []
       if (s.labels.series) parts.push(s.name)
       if (s.labels.category) parts.push(s.cats[k] ?? '')
-      if (s.labels.value) parts.push(fmt(v, s.labels.format ?? s.format, m.date1904))
+      if (s.labels.value) parts.push(fmt(s.values[k]!, s.labels.format ?? s.format, m.date1904))
       if (s.labels.percent) parts.push(fmt(v / total, s.labels.format && s.labels.format.includes('%') ? s.labels.format : '0%', m.date1904))
       const lr = outside ? r * 1.15 : hole ? (r + hole) / 2 : r * 0.65
       const p = at(lr, mid)
@@ -516,6 +517,9 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
 
   // the series: areas first, then bars, then lines and points on top
   const order = (g: ChartGroup) => (g.type === 'area' ? 0 : g.type === 'bar' ? 1 : 2)
+  // values outside a fixed axis range stop at the plot area; the margin keeps markers on its edge whole
+  const c = CLIP_MARGIN
+  svg.raw(`<defs><clipPath id="de-plot"><rect x="${Math.round(inner.x - c)}" y="${Math.round(inner.y - c)}" width="${Math.round(inner.w + 2 * c)}" height="${Math.round(inner.h + 2 * c)}"/></clipPath></defs><g clip-path="url(#de-plot)">`)
   for (const g of [...groups].sort((a, b) => order(a) - order(b))) {
     const p = plans.get(g.axIds[1]) ?? plans.get(primary)
     if (!p) continue
@@ -524,7 +528,10 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
     else if (g.type === 'line') drawLines(svg, m, g, p, { valPos, catMid, size, horizontal })
     else if (g.type === 'scatter' && xPlan) drawScatter(svg, m, g, p, { valPos, xPos, size })
   }
+  svg.raw('</g>')
 }
+
+const CLIP_MARGIN = 6
 
 function fallbackAxis(id: string, pos: string): ChartAxis {
   return { id, kind: 'val', pos, deleted: false, reverse: false, gridlines: true, labels: true, crossAx: '', crosses: 'autoZero' }
@@ -625,16 +632,17 @@ function drawScatter(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: {
   const { valPos, xPos, size } = geo
   const lines = g.scatterStyle !== 'marker' && g.scatterStyle !== 'none'
   for (const s of g.series) {
-    const pts: Pt[] = []
+    const pts: (Pt & { k: number })[] = []
     s.values.forEach((v, k) => {
-      const xv = s.xs?.[k] ?? k + 1
-      if (v === null || xv === null) return
-      pts.push({ x: xPos(xv), y: valPos(p, v) })
+      // without X values the points are numbered; with them, a point missing its X is not drawn
+      const xv = s.xs ? s.xs[k] : k + 1
+      if (v === null || xv === null || xv === undefined) return
+      pts.push({ x: xPos(xv), y: valPos(p, v), k })
     })
     if (lines && s.line && pts.length > 1) svg.path(linePath(pts, s.smooth || g.scatterStyle === 'smooth' || g.scatterStyle === 'smoothMarker'), { stroke: s.line.color, sw: Math.max(0.75, s.line.width * PX), dash: dashOf(s.line.dash, s.line.width) })
-    pts.forEach((pt, k) => {
+    pts.forEach((pt) => {
       if (s.marker) marker(svg, pt.x, pt.y, s.marker)
-      if (s.labels && s.values[k] !== null) label(svg, m, s, k, s.values[k]!, pt.x, pt.y - lineHeight(size) * 0.8, size)
+      if (s.labels) label(svg, m, s, pt.k, s.values[pt.k]!, pt.x, pt.y - lineHeight(size) * 0.8, size)
     })
   }
 }

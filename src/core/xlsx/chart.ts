@@ -238,6 +238,12 @@ interface Read {
   hidden?: boolean[]
 }
 
+/** a title whose text is a cell (`c:tx/c:strRef`): the cell's text, else the cached one */
+async function referencedText(el: XEl, ctx: ColorCtx, read: RangeReader, size: number): Promise<ChartText | undefined> {
+  const text = (await source(kid(el, 'tx'), read))?.values.filter((x) => x !== null && x !== '').join(' ')
+  return text ? { text: String(text), size, bold: false, ...txLook(el, ctx) } : undefined
+}
+
 /** a data source (`c:cat`, `c:val`, `c:xVal`, `c:yVal`, `c:tx`): its reference read from the cells, else its cache */
 async function source(el: XEl | undefined, read: RangeReader): Promise<Read | null> {
   if (!el) return null
@@ -430,7 +436,7 @@ export async function readChart(root: XEl | undefined, opts: { theme: Theme; dat
   const single = groups.length === 1 && groups[0].series.length === 1
   const titleEl = kid(chart, 'title')
   const auto = (): ChartText => ({ text: single ? groups[0].series[0].name : 'Chart Title', size: fontSize * 1.4, bold: false, ...txLook(titleEl, ctx) })
-  let title = titleEl ? (richText(titleEl, ctx, fontSize * 1.4, false) ?? auto()) : undefined
+  let title = titleEl ? (richText(titleEl, ctx, fontSize * 1.4, false) ?? (await referencedText(titleEl, ctx, opts.read, fontSize * 1.4)) ?? auto()) : undefined
   if (!titleEl && single && !on(kid(chart, 'autoTitleDeleted')) && groups[0].type !== 'scatter') title = auto()
   if (title) {
     if (!title.size) title.size = fontSize * 1.4
