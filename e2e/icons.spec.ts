@@ -54,9 +54,10 @@ describe('host icons', () => {
     expect(await v.page.locator('.de-present-btn').innerText()).toContain('Present')
     expect(await hostIcon(v, 'button[aria-label="Zoom in"]', 'zoomIn').count()).toBe(1)
 
+    // with nothing selected the PPTX toolbar shows only its slide and insert controls
     await v.edit()
     const bar = await icons(v, '.de-ebar')
-    expect(bar.host).toBeGreaterThan(20)
+    expect(bar.host).toBeGreaterThan(5)
     expect(bar.builtIn).toBe(0)
     expect(v.errors).toEqual([])
   })
