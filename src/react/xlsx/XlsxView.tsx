@@ -979,7 +979,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
       // nothing to undo or redo: the worker's history is shorter than counted (it keeps the last 200 edits)
       else if (kind === 'undo') store.history = { ...h, undo: 0 }
       else if (kind === 'redo') store.history = { ...h, redo: 0 }
-      viewer.ctl?.update({ canUndo: store.history.undo > 0, canRedo: store.history.redo > 0 })
+      viewer.ctl?.update({ canUndo: viewer.editable && store.history.undo > 0, canRedo: viewer.editable && store.history.redo > 0 })
       setDetailTick((t) => t + 1)
     } catch (e) {
       console.error('[office-engine]', e)
@@ -1191,14 +1191,15 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
   const cellFmt = cellFormat(activeCss, meta.baseFont as { fontFamily?: string; fontSize?: string | number })
   useEffect(() => {
     gridCommands.current = {
-      undo,
-      redo,
+      undo: () => editable && undo(),
+      redo: () => editable && redo(),
       format: (c) => {
         const patch = editable && cellPatch(c, cellFmt)
         if (patch) fmt(patch)
       },
     }
-    viewer.ctl?.update({ format: editable ? cellFmt : null })
+    const h = store.history
+    viewer.ctl?.update({ format: editable ? cellFmt : null, canUndo: editable && h.undo > 0, canRedo: editable && h.redo > 0 })
   })
 
   const tsv = () => {
