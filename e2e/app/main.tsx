@@ -5,10 +5,11 @@
  *   &icons=1: every icon from a host resolver, as `<svg data-host-icon={name}>`
  *   texts: &locale=de-DE opts into the explicitly imported German table, &fileLabel=… overrides the File label
  *   &components=1: the host's own Button, Separator, Dialog and Toast (`data-host-*` markers)
+ *   &headless=1: the document alone; the viewer is driven through window.__ctl (its controller) either way
  */
 import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { DocViewer, type DocViewerProps, type FileMenuItem, type UIComponents } from '../../src'
+import { createViewerController, DocViewer, type DocViewerProps, type FileMenuItem, type UIComponents, type ViewerController } from '../../src'
 import { de } from '../../src/locales/de'
 
 type Ev = { type: string; [k: string]: unknown }
@@ -18,9 +19,13 @@ declare global {
     __setProps: (p: Partial<DocViewerProps>) => void
     __setLanguage: (language: 'en' | 'de-DE') => void
     __german: typeof de
+    __ctl: ViewerController
   }
 }
 window.__events = []
+window.__ctl = createViewerController()
+// a host reading the state, as the tests do through snapshot(): views read slide titles only for one
+window.__ctl.subscribe(() => {})
 const log = (e: Ev) => window.__events.push(e)
 
 const q = new URLSearchParams(location.search)
@@ -99,6 +104,8 @@ const initial: DocViewerProps = {
   injectStyles: flag('injectStyles'),
   locale: (texts ? undefined : q.get('locale') as DocViewerProps['locale']) ?? undefined,
   strings: q.has('fileLabel') ? { ...texts, file: { ...(texts?.file ?? {}), menu: q.get('fileLabel')! } } : texts,
+  headless: flag('headless'),
+  controller: window.__ctl,
   onSave: q.has('onSave') ? async (blob, name) => void log({ type: 'save', name, b64: await b64(blob) }) : undefined,
   onDirtyChange: (dirty) => log({ type: 'dirty', dirty }),
   onRename: (name) => log({ type: 'rename', name }),

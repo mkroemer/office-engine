@@ -100,6 +100,8 @@ export interface Methods {
   'xlsx.undo'(): XlsxEditResult | null
   'xlsx.redo'(): XlsxEditResult | null
   'pptx.slide'(index: number): SlideModel
+  /** every slide's title placeholder text ('' where there is none), read without laying out the slides */
+  'pptx.titles'(): string[]
   'pptx.setText'(index: number, sid: number, paras: PParaSpec[]): SlideModel
   'pptx.shapes'(index: number, ops: ShapeOp[]): SlideModel
   'pptx.slides'(op: SlideOp): PresentationMeta

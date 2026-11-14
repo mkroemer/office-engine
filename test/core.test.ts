@@ -228,6 +228,9 @@ describe('pptx', () => {
     expect(texts).toContain('office-engine')
     const title = s0.els.find((e: any) => e.text?.paras[0].runs[0].text === 'office-engine')
     expect(title.text.paras[0].runs[0].sz).toBeGreaterThan(30)
+    expect(s0.title).toBe('office-engine')
+    // the title-only read agrees with the rendered models
+    expect(await engine.call('pptx.titles', [])).toEqual(['office-engine', 'Why it is fast', 'Shapes & images', 'Table', 'Chart (placeholder)'])
     const s1: any = await engine.call('pptx.slide', [1])
     const body = s1.els.find((e: any) => e.text?.paras.length >= 5)
     expect(body.text.paras[0].bullet?.text).toBeTruthy()
@@ -239,6 +242,7 @@ describe('pptx', () => {
     const s3: any = await engine.call('pptx.slide', [3])
     const tbl = s3.els.find((e: any) => e.t === 'table')
     expect(tbl.rows.length).toBe(5)
+    expect(s3.title).toBe('Table')
     expect(tbl.rows[0].cells[0].fill?.t).toBe('solid')
     const s4: any = await engine.call('pptx.slide', [4])
     expect(s4.els.some((e: any) => e.t === 'placeholder' && e.label === 'Chart')).toBe(true)
