@@ -98,7 +98,8 @@ describe('controller and headless mode', () => {
     await page.waitForTimeout(300)
     await page.evaluate(() => window.__ctl.setEditing(true))
     await v.clickCell('J10')
-    await until(v, 's.format && s.format.bold && s.canUndo')
+    // the fill was the last edit: it is still there
+    await until(v, "s.format && /255, 255, 0|ffff00/i.test(s.format.highlight ?? '') && s.canUndo")
     expect(v.errors).toEqual([])
   })
 
