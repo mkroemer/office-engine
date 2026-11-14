@@ -10,6 +10,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type ComponentType,
   type CSSProperties,
   type ReactElement,
   type ReactNode,
@@ -17,6 +18,7 @@ import {
 } from 'react'
 import { cssColor } from '../../core/color'
 import { useStrings } from '../strings'
+import { useHostUI, type ButtonProps, type SelectProps } from '../ui'
 
 const BORDER_GRID = <path d="M4 4h16v16H4zM12 4v16M4 12h16" strokeDasharray="1.2 2.6" opacity={0.5} strokeWidth={1.4} />
 
@@ -240,25 +242,54 @@ export function useDismiss(ref: RefObject<HTMLElement | null>, open: boolean, cl
   }, [open, ref])
 }
 
-export function Btn(props: { icon?: IconName; label?: ReactNode; title: string; active?: boolean; disabled?: boolean; onClick: () => void; wide?: boolean }) {
+function DefaultButton(props: ButtonProps) {
   return (
     <button
       type="button"
-      className={props.active ? 'de-tb de-tb-on' : 'de-tb'}
+      className={props.className}
       title={props.title}
       aria-label={props.title}
-      aria-pressed={props.active}
+      aria-pressed={props.expanded === undefined ? props.active : undefined}
+      aria-expanded={props.expanded}
       disabled={props.disabled}
-      onMouseDown={keep}
+      onMouseDown={props.onMouseDown}
       onClick={props.onClick}
       style={props.wide ? { width: 'auto', padding: '0 8px' } : undefined}
     >
-      {props.icon ? <Icon name={props.icon} /> : props.label}
+      {props.icon}
+      {props.label}
+      {props.children}
     </button>
   )
 }
 
-export const Sep = () => <span className="de-tb-sep" />
+/** A toolbar button through the host's `Button` where there is one. `extraClass` adds to the engine's classes. */
+function ToolButton(props: Omit<ButtonProps, 'onMouseDown' | 'className' | 'icon'> & { extraClass?: string; iconSize?: number }) {
+  const Button = useHostUI().Button ?? DefaultButton
+  const { extraClass, iconSize, ...rest } = props
+  const className = (props.active || props.expanded ? 'de-tb de-tb-on' : 'de-tb') + (extraClass ? ' ' + extraClass : '')
+  const icon = props.iconName ? <Icon name={props.iconName} size={iconSize} /> : undefined
+  return <Button {...rest} icon={icon} className={className} onMouseDown={keep} />
+}
+
+export function Btn(props: { icon?: IconName; label?: ReactNode; title: string; active?: boolean; disabled?: boolean; onClick: () => void; wide?: boolean }) {
+  return (
+    <ToolButton
+      title={props.title}
+      iconName={props.icon}
+      label={props.icon ? undefined : props.label}
+      active={props.active}
+      disabled={props.disabled}
+      onClick={props.onClick}
+      wide={props.wide}
+    />
+  )
+}
+
+export const Sep = () => {
+  const Separator = useHostUI().Separator
+  return Separator ? <Separator /> : <span className="de-tb-sep" />
+}
 
 export interface DropOption<T> {
   value: T
@@ -275,28 +306,17 @@ export interface DropOption<T> {
   head?: string
 }
 
+/** A dropdown through the host's `Select` where there is one. */
+export function Dropdown<T extends string | number>(props: SelectProps<T>) {
+  const Host = useHostUI().Select as ComponentType<SelectProps<T>> | undefined
+  return Host ? <Host {...props} /> : <DefaultSelect {...props} />
+}
+
 /**
  * Styled dropdown (listbox). Never takes focus from the editor: mouse down is prevented and,
  * while open, keys are captured at the window (arrows, Enter, Escape, type-ahead).
  */
-export function Dropdown<T extends string | number>(props: {
-  title: string
-  options: DropOption<T>[]
-  onChange: (v: T) => void
-  /** selected value (check mark); omit for command menus */
-  value?: T | ''
-  placeholder?: string
-  /** fixed trigger content (menus); null = icon only */
-  label?: ReactNode
-  icon?: IconName
-  width?: number
-  menuWidth?: number
-  disabled?: boolean
-  /** popup aligned to the trigger's right edge */
-  alignRight?: boolean
-  /** extra class of the trigger button */
-  className?: string
-}) {
+function DefaultSelect<T extends string | number>(props: SelectProps<T>) {
   const { options } = props
   const [open, setOpen] = useState(false)
   const [hi, setHi] = useState(-1)
@@ -476,9 +496,7 @@ export function SizeBox(props: { value?: number; placeholder?: number; sizes?: n
   const title = props.title ?? t.toolbar.fontSize
   return (
     <span ref={ref} className="de-size">
-      <button type="button" className="de-tb de-size-step" title={t.toolbar.fontSizeDown} aria-label={t.toolbar.fontSizeDown} disabled={props.disabled} onMouseDown={keep} onClick={() => set(Math.max(1, Math.ceil(base) - 1))}>
-        <Icon name="minus" size={16} />
-      </button>
+      <ToolButton title={t.toolbar.fontSizeDown} iconName="minus" iconSize={16} extraClass="de-size-step" disabled={props.disabled} onClick={() => set(Math.max(1, Math.ceil(base) - 1))} />
       <input
         ref={inputRef}
         className="de-size-input"
@@ -514,9 +532,7 @@ export function SizeBox(props: { value?: number; placeholder?: number; sizes?: n
           setOpen(false)
         }}
       />
-      <button type="button" className="de-tb de-size-step" title={t.toolbar.fontSizeUp} aria-label={t.toolbar.fontSizeUp} disabled={props.disabled} onMouseDown={keep} onClick={() => set(Math.floor(base) + 1)}>
-        <Icon name="plus" size={16} />
-      </button>
+      <ToolButton title={t.toolbar.fontSizeUp} iconName="plus" iconSize={16} extraClass="de-size-step" disabled={props.disabled} onClick={() => set(Math.floor(base) + 1)} />
       {open && (
         <div className="de-dd-pop de-size-pop" role="listbox" aria-label={title} onMouseDown={keep}>
           {sizes.map((n) => (
@@ -617,9 +633,7 @@ export function ToolbarRow({ children }: { children: ReactNode }) {
       ))}
       {rest.length > 0 && (
         <span ref={moreRef} className="de-tb-color de-ebar-morewrap">
-          <button type="button" className={more ? 'de-tb de-tb-on' : 'de-tb'} title={t.toolbar.more} aria-label={t.toolbar.moreTools} aria-expanded={more} onMouseDown={keep} onClick={() => setMore((m) => !m)}>
-            <Icon name="more" />
-          </button>
+          <ToolButton title={t.toolbar.moreTools} iconName="more" expanded={more} onClick={() => setMore((m) => !m)} />
           {more && (
             <PopBox className="de-tb-pop de-ebar-more">
               {rest.map((el, i) => (
@@ -720,10 +734,9 @@ export function ColorBtn(props: { icon: IconName; title: string; value?: string;
   )
   return (
     <span ref={ref} className="de-tb-color">
-      <button type="button" className={open ? 'de-tb de-tb-on' : 'de-tb'} title={props.title} aria-label={props.title} aria-expanded={open} onMouseDown={keep} onClick={() => setOpen((o) => !o)}>
-        <Icon name={props.icon} />
+      <ToolButton title={props.title} iconName={props.icon} expanded={open} onClick={() => setOpen((o) => !o)}>
         <span className="de-tb-swatch" style={{ background: cssColor(props.value) ?? 'transparent' }} />
-      </button>
+      </ToolButton>
       {/* kept mounted while the OS picker is open (the popover closes) */}
       <input ref={pickerRef} type="color" className="de-tb-native" tabIndex={-1} aria-hidden />
       {open && (
@@ -784,19 +797,9 @@ export function Pop(props: { icon: IconName; title: string; children: (close: ()
   useDismiss(ref, open, () => setOpen(false))
   return (
     <span ref={ref} className="de-tb-color">
-      <button
-        type="button"
-        className={(props.active || open ? 'de-tb de-tb-on' : 'de-tb') + (props.chevron ? ' de-tb-chev' : '')}
-        title={props.title}
-        aria-label={props.title}
-        aria-expanded={open}
-        disabled={props.disabled}
-        onMouseDown={keep}
-        onClick={() => setOpen((o) => !o)}
-      >
-        <Icon name={props.icon} />
+      <ToolButton title={props.title} iconName={props.icon} active={props.active} expanded={open} disabled={props.disabled} extraClass={props.chevron ? 'de-tb-chev' : undefined} onClick={() => setOpen((o) => !o)}>
         {props.chevron && <Icon name="chevron" size={14} />}
-      </button>
+      </ToolButton>
       {open && (
         <PopBox onMouseDown={(e) => (e.target as HTMLElement).closest('input, textarea') || e.preventDefault()}>
           {props.children(() => setOpen(false))}

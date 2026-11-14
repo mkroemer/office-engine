@@ -9,6 +9,8 @@ import type { DocumentClient } from '../../core/worker/client'
 import { getPeers, publishLocal, subscribePeers } from '../../collab/hosts'
 import { claimFocus, useForceUpdate, useScroll, useSize } from '../common/hooks'
 import { useFileOps, useViewer, useSelectAll } from '../common/Slots'
+import { useViewCommands, type FormatCommand } from '../controller'
+import { cellFormat, cellPatch } from '../edit/format'
 import { Status } from '../common/Status'
 import { ContextMenu, MOD, type MenuItem } from '../common/ContextMenu'
 import { Toast } from '../common/Dialog'
@@ -71,6 +73,8 @@ class XlsxStore {
   sheets = new Map<number, SheetState>()
   /** focus the grid when the next sheet grid mounts */
   focusGrid = false
+  /** edits that undo / redo can still take back (counted here: the worker's history says nothing until asked) */
+  history = { undo: 0, redo: 0 }
   private listeners = new Set<() => void>()
   private off: () => void
 
@@ -256,16 +260,23 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
       // else the worker streams the file into the new sheet, like a sheet's XML (a million rows is fine)
       const res = await client.call('xlsx.import', cur, file, { name, sep })
       store.applied(res, meta)
+      historyCleared()
       viewer.setDirty(true)
       setActive(cur + 1)
     },
   })
+  // a sheet added, deleted, moved or renamed clears the worker's undo history
+  const historyCleared = () => {
+    store.history = { undo: 0, redo: 0 }
+    viewer.ctl?.update({ canUndo: false, canRedo: false })
+  }
   /** the rows of a text file as cell edits of a new sheet (parsed here, sent through the session) */
   const importRows = async (file: Blob, name: string, sep?: string) => {
     const text = await file.text()
     const rows = parseCsv(text, sep ?? detectSeparator(text))
     const res = await client.call('xlsx.bookOp', { op: 'add', name, after: cur })
     store.applied(res, meta)
+    historyCleared()
     viewer.setDirty(true)
     const idx = cur + 1
     setActive(idx)
@@ -293,6 +304,7 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
     try {
       const res = await client.call('xlsx.bookOp', op)
       store.applied(res, meta)
+      historyCleared()
       viewer.setDirty(true)
       if (goTo !== undefined) setActive(Math.max(0, Math.min(goTo, meta.sheets.length - 1)))
       bump()
@@ -361,6 +373,23 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
   const hold = useRef(false)
   const keepEditing = !!edit && isFormula(edit.value) && canPoint(edit, formulaContext(edit.value, edit.caret))
 
+  // ---- controller: the sheets as the outline, sheet switching, undo ----
+  const { ctl, headless } = viewer
+  const gridCommands = useRef<{ undo: () => void; redo: () => void; format: (c: FormatCommand) => void } | null>(null)
+  const sheetItems = meta.sheets.filter((s) => !s.hidden).map((s) => ({ id: String(s.index), title: s.name, level: 0, current: s.index === cur }))
+  useEffect(() => {
+    ctl?.update({ outline: { kind: 'sheets', items: sheetItems } })
+  })
+  useViewCommands(ctl, {
+    goto: (id) => {
+      const i = Number(id)
+      if (meta.sheets[i] && !meta.sheets[i].hidden) setActive(i)
+    },
+    undo: () => gridCommands.current?.undo(),
+    redo: () => gridCommands.current?.redo(),
+    format: (c) => gridCommands.current?.format(c),
+  })
+
   return (
     <div className="de-xlsx">
       <Status text={status} onStatus={onStatus} />
@@ -374,8 +403,9 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
         setEdit={setEdit}
         hold={hold}
         onSheet={setActive}
+        gridCommands={gridCommands}
       />
-      <div className="de-tabs" role="tablist">
+      <div className="de-tabs" role="tablist" hidden={headless}>
         {viewer.editable && (
           <button type="button" className="de-tab de-tab-add" title={str.xlsx.addSheet} onClick={() => void bookOp({ op: 'add', after: cur }, cur + 1)}>
             <Icon name="sheetAdd" size={16} />
@@ -456,6 +486,8 @@ interface GridProps {
   setEdit: React.Dispatch<React.SetStateAction<EditState | null>>
   hold: MutableRefObject<boolean>
   onSheet: (i: number) => void
+  /** set by the grid: its undo / redo, for the viewer's controller */
+  gridCommands: MutableRefObject<{ undo: () => void; redo: () => void; format: (c: FormatCommand) => void } | null>
 }
 
 /** text rotation (OOXML degrees, + = counter-clockwise, 255 = stacked) */
@@ -526,7 +558,7 @@ export function withMerges(r: Range, merges: Merge[]): Range {
   return out
 }
 
-function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }: GridProps) {
+function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, gridCommands }: GridProps) {
   const viewer = useViewer()
   const str = useStrings()
   const editable = viewer.editable
@@ -916,11 +948,21 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
   })
   const styleOf = (r: number, c: number) => store.row(sheet, r)?.find((x) => x[0] === c)?.[2] ?? 0
 
-  const run = async (p: Promise<XlsxEditResult | null>) => {
+  const run = async (p: Promise<XlsxEditResult | null>, kind: 'edit' | 'undo' | 'redo' = 'edit') => {
     try {
       const res = await p
       store.applied(res, meta)
-      if (res) viewer.setDirty(true)
+      const h = store.history
+      if (res) {
+        viewer.setDirty(true)
+        if (kind === 'edit') store.history = { undo: h.undo + 1, redo: 0 }
+        else if (kind === 'undo') store.history = { undo: Math.max(0, h.undo - 1), redo: h.redo + 1 }
+        else store.history = { undo: h.undo + 1, redo: Math.max(0, h.redo - 1) }
+      }
+      // nothing to undo or redo: the worker's history is shorter than counted (it keeps the last 200 edits)
+      else if (kind === 'undo') store.history = { ...h, undo: 0 }
+      else if (kind === 'redo') store.history = { ...h, redo: 0 }
+      viewer.ctl?.update({ canUndo: store.history.undo > 0, canRedo: store.history.redo > 0 })
       setDetailTick((t) => t + 1)
     } catch (e) {
       console.error('[office-engine]', e)
@@ -1126,8 +1168,21 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
       k === 'b' ? activeCss.fontWeight === 700 : k === 'i' ? activeCss.fontStyle === 'italic' : String(activeCss.textDecoration ?? '').includes(k === 'u' ? 'underline' : 'line-through')
     fmt({ [k]: !on })
   }
-  const undo = () => void run(client.call('xlsx.undo'))
-  const redo = () => void run(client.call('xlsx.redo'))
+  const undo = () => void run(client.call('xlsx.undo'), 'undo')
+  const redo = () => void run(client.call('xlsx.redo'), 'redo')
+  // the controller's undo / redo and formatting: this sheet's grid runs them while it is shown
+  const cellFmt = cellFormat(activeCss, meta.baseFont as { fontFamily?: string; fontSize?: string | number })
+  useEffect(() => {
+    gridCommands.current = {
+      undo,
+      redo,
+      format: (c) => {
+        const patch = editable && cellPatch(c, cellFmt)
+        if (patch) fmt(patch)
+      },
+    }
+    viewer.ctl?.update({ format: editable ? cellFmt : null })
+  })
 
   const tsv = () => {
     const lines: string[] = []

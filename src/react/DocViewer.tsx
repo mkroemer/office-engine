@@ -7,6 +7,8 @@ import { ViewerContext, type FileOps, type ViewerApi } from './common/Slots'
 import { StatusContext } from './common/Status'
 import { ConfirmDialog, PromptDialog, Toast } from './common/Dialog'
 import { download, Icon, IconsProvider, type Icons } from './edit/Toolbar'
+import { UIComponentsProvider, type UIComponents } from './ui'
+import { ViewerController } from './controller'
 import { DetailsDialog } from './file/DetailsDialog'
 import { FileMenu, useFileActions, type FileMenuItem } from './file/FileMenu'
 import { importFile, type Imported } from './file/importFile'
@@ -14,7 +16,8 @@ import { blankPptx, parasToDocx, rowsToXlsx } from '../core/convert'
 import type { DocKind } from '../core/opc'
 import { extOf, HAS_SOURCE, PLAIN_EXT, PLAIN_FILE, unpackedName, type PlainFormat } from '../core/plain'
 import { injectStyles } from './injectStyles'
-import { isTextEntry, useDarkTheme, useSize, type Theme } from './common/hooks'
+import { isTextEntry, useSize } from './common/hooks'
+import { useThemeRoot, type Theme } from './theme'
 import { SourceEditor } from './source/SourceEditor'
 import { PictureView } from './picture/PictureView'
 import { PptxView } from './pptx/PptxView'
@@ -52,8 +55,14 @@ export interface DocViewerProps {
   /** Where to inject the stylesheet (document or a shadow root). */
   styleTarget?: Document | ShadowRoot
   /**
-   * Color scheme of the viewer chrome (bars, menus, dialogs): 'light', 'dark' or 'auto' (follows the OS / browser setting).
-   * The document itself keeps its own colors. Default 'light'.
+   * Inject the stylesheet. Default true. Set false when the page loads `@p10node/office-engine/styles.css` itself
+   * (a CSP without inline styles, a cascade layer of its own, a bundler that extracts CSS).
+   */
+  injectStyles?: boolean
+  /**
+   * Color scheme of the viewer chrome (bars, menus, dialogs): 'light', 'dark' or 'auto' (follows the OS / browser setting),
+   * or a theme object with that mode and design token overrides (see docs/theming.md). The document itself keeps its own
+   * colors. Default 'light'.
    */
   theme?: Theme
   onLoad?: (client: DocumentClient) => void
@@ -104,10 +113,26 @@ export interface DocViewerProps {
    * Each is rendered in `span.de-icon`, sized by font-size (1em).
    */
   icons?: Icons
+  /**
+   * The host's own UI components (`Button`, `Select`, `Separator`, `Dialog`, `Toast`), rendered in the toolbars and
+   * dialogs instead of the built-in ones; each one left out keeps the built-in one. See docs/theming.md.
+   */
+  components?: Partial<UIComponents>
   /** Language of the viewer's texts (bars, menus, dialogs, messages): 'en' or 'de'. Default 'en'. */
   locale?: Locale
   /** Texts replacing the locale's, key by key (see `Strings`): a group may be given in part, e.g. `{ file: { menu: 'Datei' } }`. */
   strings?: StringsOverride
+  /**
+   * The viewer's state and commands for the host (`createViewerController()`): zoom, page, outline, editing, unsaved
+   * changes, save, undo… Subscribe to it to draw your own controls; see `headless`.
+   */
+  controller?: ViewerController
+  /**
+   * The document alone: no top bar, zoom control, outline panel, sheet tabs or slide list (the host draws its own,
+   * driven by `controller`). While editing, the formatting toolbar keeps its row. The top bar shows when `toolbar` is
+   * set explicitly. Default false.
+   */
+  headless?: boolean
 }
 
 const EXT: Record<string, string> = { docx: '.docx', xlsx: '.xlsx', pptx: '.pptx' }
@@ -139,8 +164,13 @@ export function DocViewer(props: DocViewerProps) {
 function Viewer(props: DocViewerProps) {
   const t = useStrings()
   const fmtBytes = (n: number) => formatBytes(t, n)
-  const { src, name, className, style, toolbar = true, toolbarExtra, zoom, thumbnails, headers, credentials, worker, styleTarget, theme, onLoad, onError } = props
-  const dark = useDarkTheme(theme)
+  const { src, name, className, style, toolbarExtra, zoom, thumbnails, headers, credentials, worker, styleTarget, theme, onLoad, onError } = props
+  const headless = !!props.headless
+  const toolbar = props.toolbar ?? !headless
+  // without a controller from the host the viewer keeps its own: the view publishes to one either way
+  const ownCtl = useMemo(() => new ViewerController(), [])
+  const ctl = props.controller ?? ownCtl
+  const root = useThemeRoot(theme, style)
   const { allowEdit = true, allowSave = true, allowDownload = true, fileMenu = true, allowOpen = true, captureSelectAll = true, onSave, onDirtyChange } = props
   const [editing, setEditing] = useState(!!props.editable)
   useEffect(() => {
@@ -149,7 +179,10 @@ function Viewer(props: DocViewerProps) {
   const [dirty, setDirtyState] = useState(false)
   const [saving, setSaving] = useState(false)
   const [barEl, setBarEl] = useState<HTMLDivElement | null>(null)
-  useInsertionEffect(() => injectStyles(styleTarget), [styleTarget])
+  const inject = props.injectStyles ?? true
+  useInsertionEffect(() => {
+    if (inject) injectStyles(styleTarget)
+  }, [styleTarget, inject])
   // File → New / Open: a local file shown instead of `src` until the host passes another `src`
   const [opened, setOpened] = useState<Imported | null>(null)
   const [renamed, setRenamed] = useState<string | null>(null)
@@ -272,9 +305,12 @@ function Viewer(props: DocViewerProps) {
     cmCtl.select(root)
   }, [cmCtl, cmFocus, cmState.rev])
 
+  // once per opened document, also when the host passes a new callback on every render
+  const onLoadRef = useRef(onLoad)
+  onLoadRef.current = onLoad
   useEffect(() => {
-    if (client) onLoad?.(client)
-  }, [client, onLoad])
+    if (client) onLoadRef.current?.(client)
+  }, [client])
   useEffect(() => {
     if (error) onError?.(error)
   }, [error, onError])
@@ -339,8 +375,8 @@ function Viewer(props: DocViewerProps) {
   // next to its source, the document is a preview: it is edited through the source
   const docEditable = editing && canEdit && !codeShown
   const api = useMemo<ViewerApi>(
-    () => ({ bar: barEl, editable: docEditable, setDirty: setDocDirty, save, canDownload: allowDownload, client, fileOps, selectAll }),
-    [barEl, docEditable, setDocDirty, save, allowDownload, client],
+    () => ({ bar: barEl, editable: docEditable, setDirty: setDocDirty, save, canDownload: allowDownload, client, fileOps, selectAll, ctl, headless }),
+    [barEl, docEditable, setDocDirty, save, allowDownload, client, ctl, headless],
   )
 
   const editSource = (text: string) => {
@@ -499,6 +535,25 @@ function Viewer(props: DocViewerProps) {
   const busy = loading || (!!progress && pct < 100)
   const title = renamed ?? client?.name ?? docName ?? (typeof src === 'string' ? decodeURIComponent(src.split(/[?#]/)[0].split('/').pop() ?? '') : (src as File | undefined)?.name) ?? ''
 
+  // ---- controller: the viewer's part of the state, and its commands ----
+  const editAllowed = allowEdit && !readOnly && !codeShown
+  useEffect(() => {
+    ctl.update({ kind: client?.kind ?? null, loading: busy, editing: docEditable, canEdit: editAllowed && canEdit, dirty, saving })
+  }, [ctl, client, busy, docEditable, editAllowed, canEdit, dirty, saving])
+  const commands = useRef({ editAllowed, save, fileActions, cmCtl })
+  commands.current = { editAllowed, save, fileActions, cmCtl }
+  useEffect(() => {
+    ctl.attachViewer({
+      setEditing: (on) => {
+        if (!on || commands.current.editAllowed) setEditing(on)
+      },
+      save: () => commands.current.save(),
+      fileAction: (id) => commands.current.fileActions.run(id),
+      toggleComments: (open) => commands.current.cmCtl?.toggle(open),
+    })
+    return () => ctl.attachViewer(null)
+  }, [ctl])
+
   let body: ReactNode
   if (error) {
     body = (
@@ -525,7 +580,8 @@ function Viewer(props: DocViewerProps) {
 
   return (
     <IconsProvider icons={props.icons}>
-    <div ref={rootRef} className={'de-root' + (dark ? ' de-dark' : '') + (className ? ` ${className}` : '')} style={style} onKeyDown={onKeyDown}>
+    <UIComponentsProvider components={props.components}>
+    <div ref={rootRef} className={root.className + (headless ? ' de-headless' : '') + (className ? ` ${className}` : '')} style={root.style} onKeyDown={onKeyDown}>
       {toolbar && (
         <div className="de-bar">
           {client && <span className={`de-badge de-badge-${client.kind}`}>{client.info?.from ?? client.info?.converted ?? (client.info?.imported ? IMPORTED_BADGE[client.info.imported] : client.kind)}</span>}
@@ -579,7 +635,7 @@ function Viewer(props: DocViewerProps) {
           <div className="de-progress" style={{ width: `${busy ? Math.max(pct, 3) : 100}%`, opacity: busy ? 1 : 0 }} />
         </div>
       )}
-      {toolbar && client && docEditable && <div className="de-ebar-host" ref={setBarEl} />}
+      {(toolbar || headless) && client && docEditable && <div className="de-ebar-host" ref={setBarEl} />}
       <div className={'de-body' + (codeShown && stacked ? ' de-body-stacked' : '')} ref={bodyRef}>
         {codeShown && (
           <div className="de-src-pane" style={stacked ? { height: `${split * 100}%` } : { width: `${split * 100}%` }}>
@@ -680,6 +736,7 @@ function Viewer(props: DocViewerProps) {
         />
       )}
     </div>
+    </UIComponentsProvider>
     </IconsProvider>
   )
 }

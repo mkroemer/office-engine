@@ -47,7 +47,7 @@ PDF goes through the browser print dialog ("Save as PDF"), so text stays selecta
 />
 ```
 
-CSS is auto-injected, no import needed. Container must have a height.
+CSS is auto-injected, no import needed (or import `@p10node/office-engine/styles.css` with `injectStyles={false}`). Container must have a height. Colors, type and shape: [Theming](theming.md).
 
 | Prop               | Type                                           | Default   | Notes                                                                                                                    |
 |--------------------|------------------------------------------------|-----------|--------------------------------------------------------------------------------------------------------------------------|
@@ -61,7 +61,8 @@ CSS is auto-injected, no import needed. Container must have a height.
 | `credentials`      | `RequestCredentials`                           | –         | Cross-origin cookies                                                                                                     |
 | `worker`           | `() => Worker \| false`                        | inline    | Custom worker (CSP), `false` = main thread                                                                               |
 | `styleTarget`      | `Document \| ShadowRoot`                       | document  | Where CSS is injected                                                                                                    |
-| `theme`            | `'light' \| 'dark' \| 'auto'`                  | `'light'` | Color scheme of the chrome; `'auto'` follows `prefers-color-scheme`. Documents keep their own colors                     |
+| `injectStyles`     | `boolean`                                      | `true`    | Inject the stylesheet; false when the page loads `@p10node/office-engine/styles.css` itself                              |
+| `theme`            | `'light' \| 'dark' \| 'auto' \| ThemeOptions`  | `'light'` | Color scheme of the chrome; `'auto'` follows `prefers-color-scheme`; an object adds token overrides ([Theming](theming.md)). Documents keep their own colors |
 | `locale`           | `'en' \| 'de'`                                 | `'en'`    | Language of the texts (bars, menus, dialogs, messages); numbers and dates follow it. See [UI texts](#ui-texts)            |
 | `strings`          | `StringsOverride`                              | –         | Texts replacing the locale's, key by key (a group may be given in part)                                                  |
 | `editable`         | `boolean`                                      | `false`   | Open in edit mode (Pages, Keynote and Numbers files stay view only)                                                      |
@@ -73,14 +74,121 @@ CSS is auto-injected, no import needed. Container must have a height.
 | `captureSelectAll` | `boolean`                                      | `true`    | Ctrl/⌘+A from anywhere on the page selects the document; `false`: from the viewer only                                   |
 | `fileMenuItems`    | `FileMenuItem[]`                               | –         | Extra File menu entries (`label`, `onClick`, `icon`, `hint`)                                                             |
 | `icons`            | `Icons`                                        | built-in  | Your own icons: a map by `IconName` or a resolver `(name, { size }) => node`; see [Icons](#icons)                        |
+| `components`       | `Partial<UIComponents>`                        | built-in  | Your own `Button`, `Select`, `Separator`, `Dialog`, `Toast` in the toolbars and dialogs; see [Theming](theming.md#your-own-components) |
 | `onRename`         | `(name) => void`                               | –         | File → Rename result (extension included)                                                                                |
 | `onClose`          | `() => void`                                   | –         | Adds File → Close                                                                                                        |
 | `onSave`           | `(blob, name) => void`                         | download  | Receives saved file (downloads by default): the Office file, or a Markdown / HTML / SVG file as itself                   |
 | `onDirtyChange`    | `(dirty) => void`                              | –         | Whether there are unsaved changes                                                                                        |
 | `collab`           | `CollabOptions`                                | –         | Real-time collaboration, see [collaboration](collaboration.md)                                                           |
 | `comments`         | `CommentOptions \| false`                      | `{}`      | Comments (see below); `false` hides them                                                                                 |
-| `onLoad`           | `(client) => void`                             | –         |                                                                                                                          |
+| `onLoad`           | `(client) => void`                             | –         | Once per opened document                                                                                                 |
 | `onError`          | `(error) => void`                              | –         |                                                                                                                          |
+| `controller`       | `ViewerController`                             | its own   | The viewer's state and commands for the host, see [headless mode](#headless-mode)                                        |
+| `headless`         | `boolean`                                      | `false`   | The document alone: no top bar, zoom control, outline panel, sheet tabs or slide list                                    |
+| `icons`            | `Partial<Record<string, ReactNode>>`           | –         | The host's icons by name (`ICON_NAMES`), sized by font-size (1em), instead of the built-in ones                          |
+
+### Headless mode
+
+For a host that draws its own controls around the document: `headless` leaves the viewer with the document alone, and a
+`controller` (`createViewerController()`) carries its state and the commands that drive it. While editing, the formatting
+toolbar keeps its row above the document; dialogs, the find bar and the comments panel are the viewer's own. `toolbar`
+set explicitly brings back the top bar (File menu, comments, Save) and leaves the rest headless.
+
+```tsx
+import { createViewerController, DocViewer, useViewerState } from '@p10node/office-engine'
+import { useMemo } from 'react'
+
+function Viewer({ file }: { file: File }) {
+  const ctl = useMemo(() => createViewerController(), [])
+  const s = useViewerState(ctl)
+  return (
+    <>
+      <nav>
+        {s.outline?.items.map((i) => (
+          <button key={i.id} aria-current={i.current} style={{ paddingLeft: i.level * 12 }} onClick={() => ctl.goto(i.id)}>
+            {i.title}
+          </button>
+        ))}
+      </nav>
+      {s.zoom && <button onClick={() => ctl.zoomIn()}>{s.zoom.value === 'fit' ? 'Fit' : `${Math.round(s.zoom.effective * 100)}%`}</button>}
+      {s.canEdit && <button onClick={() => ctl.setEditing(!s.editing)}>{s.editing ? 'View' : 'Edit'}</button>}
+      {s.dirty && <button onClick={() => ctl.save()}>Save</button>}
+      <DocViewer src={file} controller={ctl} headless style={{ height: 600 }} />
+    </>
+  )
+}
+```
+
+| `ViewerState` | Meaning |
+|---------------|---------|
+| `rev` | counts the changes (the state object is replaced on each) |
+| `kind` | `'docx'`, `'xlsx'`, `'pptx'`, or `null` before a document is open |
+| `loading` | loading or downloading |
+| `editing`, `canEdit` | in edit mode; whether editing is possible (allowed, not view only) |
+| `dirty`, `saving` | unsaved changes; a save running |
+| `canUndo`, `canRedo` | whether undo / redo can run (spreadsheets count the edits made here; presentations offer redo whenever editing) |
+| `zoom` | `{ value: 'fit' \| number, effective }`, `null` for spreadsheets |
+| `page` | `{ current, count }` from 1: the page (documents; `count` 0 while laid out) or slide in view; `null` for spreadsheets |
+| `outline` | `{ kind, items: [{ id, title, level, current }] }`: a document's headings, a workbook's visible sheets, a presentation's slides (titled by their title placeholder, else "Slide n") |
+| `status` | the status line ("Page 2 of 7 · 1,204 words", "Slide 3 of 12", "200 rows × 8 cols") |
+| `format` | while editing, the formatting at the selection (`TextFormat`, below); `null` while viewing, and in a presentation unless text is being edited |
+
+Commands: `setEditing(on)`, `save()`, `undo()`, `redo()`, `zoomIn()`, `zoomOut()`, `setZoom('fit' | number)`,
+`goto(outlineId)`, `gotoPage(n)`, `present()` (a slideshow from the slide in view), `print()`, `fileAction(id)` (a File menu
+action: `pdf`, `html`, `text:md`, `details`, `rename`…), `toggleComments(open?)`, `format(command)` (below). A command the
+open document has no use for does nothing. `subscribe(fn)` returns its unsubscribe; `snapshot()` the current state;
+`useViewerState(ctl)` is the state in React. Without `react`, `mount()` returns the controller (`mounted.controller`), and
+`<office-viewer headless>` has it as `element.controller`.
+
+#### Formatting
+
+One formatting API for documents, cells and slide text, for a toolbar of your own:
+
+```tsx
+const f = useViewerState(ctl).format
+<button aria-pressed={!!f?.bold} disabled={!f} onMouseDown={(e) => e.preventDefault()}
+  onClick={() => ctl.format({ op: 'toggle', mark: 'bold' })}>B</button>
+```
+
+`TextFormat`: `bold`, `italic`, `underline`, `strike`, `font`, `size` (points), `color`, `highlight` (a cell's fill in a
+spreadsheet), `align` (`'left' | 'center' | 'right' | 'justify'`), `list` (`'bullet' | 'number' | null`; undefined for
+cells). `FormatCommand`: `{ op: 'toggle', mark }`, `{ op: 'font', name }`, `{ op: 'size', pt }`, `{ op: 'color', color }`,
+`{ op: 'highlight', color }` (`null` removes either), `{ op: 'align', align }`, `{ op: 'list', list }`, `{ op: 'clear' }`.
+What a kind has no use for does nothing (lists and justified text in cells). A button must not take the focus from the
+document (prevent its mouse down), or the command loses the selection. Tables, pictures, tracked changes and cell borders
+stay with the built-in toolbars.
+
+#### Ready-made controls
+
+For a host that wants the controls but its own layout, each of these is driven by the controller alone and placed
+anywhere around a headless viewer:
+
+```tsx
+import { DocViewer, FormatBar, OfficeUIProvider, OutlineList, SheetTabs, StatusText, useThemeRoot, ZoomBar } from '@p10node/office-engine'
+
+const root = useThemeRoot(theme, undefined, { host: true })
+<OfficeUIProvider icons={icons} components={components} locale="de">
+  <header className={root.className} style={root.style}>
+    <ZoomBar controller={ctl} /> <StatusText controller={ctl} />
+    <FormatBar controller={ctl} />
+  </header>
+  <aside className={root.className} style={root.style}><OutlineList controller={ctl} /><SheetTabs controller={ctl} /></aside>
+  <DocViewer src={file} controller={ctl} headless icons={icons} components={components} locale="de" theme={theme} />
+</OfficeUIProvider>
+```
+
+| Control | Shows |
+|---|---|
+| `ZoomBar` | zoom out, the zoom (a click switches between fitting the width and 100 %), zoom in; nothing for spreadsheets |
+| `StatusText` | the status line |
+| `OutlineList` | headings (indented), sheets or slides; a click shows it, the one in view is marked |
+| `SheetTabs` | a workbook's sheets as tabs; nothing for other documents |
+| `FormatBar` | while editing: undo, redo, size, bold / italic / underline / strike, alignment, lists (where there are lists), clear formatting |
+
+They render through the same components, icons, texts and design tokens as the built-in toolbars: outside `DocViewer`,
+`OfficeUIProvider` brings them, and an element with `useThemeRoot()`'s class and style brings the tokens. Give a
+container of controls `{ host: true }`: it is sized by them, and their popups (the size list, the overflow menu) show
+beyond it, above the viewer.
 
 ### Comments
 
@@ -130,7 +238,7 @@ const { client, error, progress } = useDocument(src)
 if (client?.kind === 'xlsx') return <div className="de-root"><XlsxView client={client} /></div>
 ```
 
-The views style themselves from CSS variables on `.de-root` (`--de-bg`, `--de-chrome`, `--de-accent`…): override them to match your app. Add `de-dark` to the root element for the dark theme.
+The views style themselves from design tokens on their root: `useThemeRoot(theme)` gives its class name and style (see [Theming](theming.md)).
 
 ### UI texts
 
@@ -241,7 +349,7 @@ import { IconsProvider, XlsxView } from '@p10node/office-engine'
 </script>
 ```
 
-`<office-viewer>`: attributes `src`, `name`, `editable`, `toolbar="false"`, `thumbnails="false"`, `save="false"`, `download="false"`, `file-menu="false"`, `open="false"`, `capture-select-all="false"`, `theme="dark"` (or `"auto"`), `locale="de"`, `collab` / `room` / `user` / `base` (real-time collaboration; `user` also writes the comments), `comments="false"`; properties `.file = File`, `.icons` (map or resolver, as `icons` above) and `.strings = { … }` (see [UI texts](#ui-texts)); events `load`, `error`, `comment` (`detail`: a `CommentEvent`).
+`<office-viewer>`: attributes `src`, `name`, `editable`, `toolbar="false"`, `thumbnails="false"`, `save="false"`, `download="false"`, `file-menu="false"`, `open="false"`, `capture-select-all="false"`, `theme="dark"` (or `"auto"`), `locale="de"`, `collab` / `room` / `user` / `base` (real-time collaboration; `user` also writes the comments), `comments="false"`, `headless`; properties `.file = File`, `.icons` (map or resolver, as `icons` above), `.strings = { … }` (see [UI texts](#ui-texts)), `.controller` (see [headless mode](#headless-mode)); events `load`, `error`, `comment` (`detail`: a `CommentEvent`).
 
 ## Core API (no React)
 

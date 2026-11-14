@@ -5,10 +5,14 @@ export type Zoom = number | 'fit'
 
 const STEPS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3]
 
+/** the zoom step after `effective` in direction `dir`, or undefined at the end of the range */
+export function stepZoom(effective: number, dir: 1 | -1): number | undefined {
+  return dir > 0 ? STEPS.find((s) => s > effective + 0.001) : [...STEPS].reverse().find((s) => s < effective - 0.001)
+}
+
 export function ZoomControl({ zoom, effective, onChange }: { zoom: Zoom; effective: number; onChange: (z: Zoom) => void }) {
   const step = (dir: 1 | -1) => {
-    const cur = effective
-    const next = dir > 0 ? STEPS.find((s) => s > cur + 0.001) : [...STEPS].reverse().find((s) => s < cur - 0.001)
+    const next = stepZoom(effective, dir)
     if (next) onChange(next)
   }
   const t = useStrings()

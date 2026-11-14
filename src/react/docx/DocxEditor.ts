@@ -204,6 +204,17 @@ export class DocxEditor implements RichHost<Paragraph> {
   /** paragraphs whose look on screen may be behind their style / list: a conversion was asked, none was applied yet */
   private stale = new Set<number>()
   onState?: (s: FormatState | null) => void
+  private stateSubs = new Set<(s: FormatState | null) => void>()
+  /** hears the current formatting state, then every one `onState` does (the viewer's controller, beside the toolbar) */
+  subscribeState(fn: (s: FormatState | null) => void): () => void {
+    this.stateSubs.add(fn)
+    fn(this.state())
+    return () => {
+      this.stateSubs.delete(fn)
+    }
+  }
+  /** whether undo / redo can run, after every change of the selection or the document (the viewer's controller) */
+  onHistory?: (canUndo: boolean, canRedo: boolean) => void
   /** image selection changed (overlay with resize handles) */
   onImage?: (img: FormatState['img'] | null) => void
   /** style list changed (a built-in style was added to the document, a style got another look) */
@@ -725,7 +736,18 @@ export class DocxEditor implements RichHost<Paragraph> {
     return list.map((b) => (b.t === 'p' && b.pid !== undefined && cur.has(b.pid) ? cur.get(b.pid)! : b))
   }
 
+  // the state published while an entry is applied comes before its move to the other stack: publish again after
   undo() {
+    this.undoStep()
+    this.onHistory?.(this.canUndo, this.canRedo)
+  }
+
+  redo() {
+    this.redoStep()
+    this.onHistory?.(this.canUndo, this.canRedo)
+  }
+
+  private undoStep() {
     const e = this.history.pop()
     if (!e) return
     if (e.group) {
@@ -733,7 +755,7 @@ export class DocxEditor implements RichHost<Paragraph> {
       for (const part of [...e.group].reverse()) {
         this.history.push(part)
         const n = this.future.length
-        this.undo()
+        this.undoStep()
         if (this.future.length > n) this.future.pop()
       }
       this.future.push(e)
@@ -761,14 +783,14 @@ export class DocxEditor implements RichHost<Paragraph> {
     this.future.push(e)
   }
 
-  redo() {
+  private redoStep() {
     const e = this.future.pop()
     if (!e) return
     if (e.group) {
       for (const part of e.group) {
         this.future.push(part)
         const n = this.history.length
-        this.redo()
+        this.redoStep()
         if (this.history.length > n) this.history.pop()
       }
       this.history.push(e)
@@ -1865,7 +1887,9 @@ export class DocxEditor implements RichHost<Paragraph> {
   private emitState(sel: Sel | null) {
     const st = sel ? this.state(sel) : null
     this.onState?.(st)
+    for (const fn of this.stateSubs) fn(st)
     this.onImage?.(st?.img ?? null)
+    this.onHistory?.(this.canUndo, this.canRedo)
   }
 
   onSelection(sel: Sel | null) {

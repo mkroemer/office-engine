@@ -4,19 +4,26 @@
  *   comments: &me=Ann&meId=u1 (author), &people=1 (mentions: Ann, Bob Stone, Cid), &comments=0 (hidden), &cmOpen=1
  *   &icons=1: every icon from a host resolver, as `<svg data-host-icon={name}>`
  *   texts: &locale=de, &fileLabel=… (a partial `strings` override of the File menu's label)
+ *   &components=1: the host's own Button, Separator, Dialog and Toast (`data-host-*` markers)
+ *   &headless=1: the document alone; the viewer is driven through window.__ctl (its controller) either way
+ *   &chrome=1: the host-placed controls (ZoomBar, StatusText, FormatBar, OutlineList, SheetTabs) in `#host-chrome`
  */
 import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { DocViewer, type DocViewerProps, type FileMenuItem } from '../../src'
+import { createViewerController, DocViewer, FormatBar, OutlineList, SheetTabs, StatusText, useThemeRoot, ZoomBar, type DocViewerProps, type FileMenuItem, type UIComponents, type ViewerController } from '../../src'
 
 type Ev = { type: string; [k: string]: unknown }
 declare global {
   interface Window {
     __events: Ev[]
     __setProps: (p: Partial<DocViewerProps>) => void
+    __ctl: ViewerController
   }
 }
 window.__events = []
+window.__ctl = createViewerController()
+// a host reading the state, as the tests do through snapshot(): views read slide titles only for one
+window.__ctl.subscribe(() => {})
 const log = (e: Ev) => window.__events.push(e)
 
 const q = new URLSearchParams(location.search)
@@ -34,6 +41,49 @@ const items: FileMenuItem[] = [
   { label: 'Version history', hint: 'beta', onClick: () => log({ type: 'item', label: 'Version history' }) },
 ]
 
+// plain host components: no engine classes, so nothing of the engine's CSS styles them
+const components: Partial<UIComponents> = {
+  Button: (p) => (
+    <button type="button" data-host-button="" data-active={p.active || undefined} title={p.title} aria-label={p.title} aria-expanded={p.expanded} disabled={p.disabled} onMouseDown={p.onMouseDown} onClick={p.onClick}>
+      {p.icon}
+      {p.label}
+      {p.children}
+    </button>
+  ),
+  Separator: () => <i data-host-sep="" />,
+  Dialog: (p) => {
+    const actions = p.actions.map((a, i) => (
+      <button key={i} type={a.submit ? 'submit' : 'button'} data-primary={a.primary || undefined} autoFocus={a.autoFocus} onClick={a.onClick}>
+        {a.label}
+      </button>
+    ))
+    const body = (
+      <>
+        <h2>{p.title}</h2>
+        {p.children}
+        {actions}
+      </>
+    )
+    return (
+      <div data-host-dialog="" role={p.kind === 'alert' ? 'alertdialog' : 'dialog'} aria-label={p.title} onKeyDown={(e) => e.key === 'Escape' && p.onClose()}>
+        {p.onSubmit ? (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              p.onSubmit!()
+            }}
+          >
+            {body}
+          </form>
+        ) : (
+          body
+        )}
+      </div>
+    )
+  },
+  Toast: ({ text }) => <output data-host-toast="">{text}</output>,
+}
+
 const initial: DocViewerProps = {
   src: q.get('src'),
   name: q.get('name') ?? undefined,
@@ -48,8 +98,11 @@ const initial: DocViewerProps = {
   thumbnails: flag('thumbnails'),
   captureSelectAll: flag('captureSelectAll'),
   theme: (q.get('theme') as DocViewerProps['theme']) ?? undefined,
+  injectStyles: flag('injectStyles'),
   locale: (q.get('locale') as DocViewerProps['locale']) ?? undefined,
   strings: q.has('fileLabel') ? { file: { menu: q.get('fileLabel')! } } : undefined,
+  headless: flag('headless'),
+  controller: window.__ctl,
   onSave: q.has('onSave') ? async (blob, name) => void log({ type: 'save', name, b64: await b64(blob) }) : undefined,
   onDirtyChange: (dirty) => log({ type: 'dirty', dirty }),
   onRename: (name) => log({ type: 'rename', name }),
@@ -66,6 +119,7 @@ const initial: DocViewerProps = {
           open: flag('cmOpen'),
           onEvent: (e) => log({ type: 'comment', action: e.type, id: e.comment.id, text: e.comment.text, thread: e.thread.id, quote: e.quote, mentioned: e.mentioned.map((m) => m.id ?? m.name), participants: e.participants.map((m) => m.id ?? m.name) }),
         },
+  components: q.has('components') ? components : undefined,
   icons: q.has('icons')
     ? (name) => (
         <svg data-host-icon={name} viewBox="0 0 24 24">
@@ -79,7 +133,31 @@ const initial: DocViewerProps = {
 function App() {
   const [props, setProps] = useState(initial)
   window.__setProps = (p) => setProps((cur) => ({ ...cur, ...p }))
-  return <DocViewer {...props} />
+  if (!q.has('chrome')) return <DocViewer {...props} />
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+      <HostChrome />
+      <DocViewer {...props} style={{ flex: 1, minHeight: 0 }} />
+    </div>
+  )
+}
+
+function HostChrome() {
+  const root = useThemeRoot(undefined, undefined, { host: true })
+  const ctl = window.__ctl
+  return (
+    <div id="host-chrome" className={root.className} style={{ ...root.style, flex: 'none' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <ZoomBar controller={ctl} />
+        <StatusText controller={ctl} />
+      </div>
+      <FormatBar controller={ctl} />
+      <div style={{ display: 'flex' }}>
+        <OutlineList controller={ctl} style={{ maxHeight: 160, width: 300 }} />
+        <SheetTabs controller={ctl} />
+      </div>
+    </div>
+  )
 }
 
 createRoot(document.getElementById('root')!).render(<App />)

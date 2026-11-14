@@ -174,7 +174,7 @@ Single row, buttons that don't fit collapse into `⋮`; custom-drawn dropdowns (
 
 ### Dark mode
 
-`theme="dark"`, or `"auto"` to follow the OS / browser setting (`prefers-color-scheme`), darkens the chrome: bars, toolbar, menus, dialogs, sheet headers and tabs, thumbnails, popovers, scrollbars. Pages, slides and cells keep the colors the document gives them, like paper in a dark PDF viewer. Everything is driven by CSS variables on `.de-root`, so a host can also tune the palette.
+`theme="dark"`, or `"auto"` to follow the OS / browser setting (`prefers-color-scheme`), darkens the chrome: bars, toolbar, menus, dialogs, sheet headers and tabs, thumbnails, popovers, scrollbars. Pages, slides and cells keep the colors the document gives them, like paper in a dark PDF viewer. Everything is driven by design tokens (CSS variables on `.de-root`), which a host sets through a theme object or its own CSS: see [Theming](theming.md).
 
 ## Comments
 
