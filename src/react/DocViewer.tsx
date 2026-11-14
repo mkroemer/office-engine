@@ -106,7 +106,8 @@ export interface DocViewerProps {
   controller?: ViewerController
   /**
    * The document alone: no top bar, zoom control, outline panel, sheet tabs or slide list (the host draws its own,
-   * driven by `controller`). While editing, the formatting toolbar keeps its row. Default false.
+   * driven by `controller`). While editing, the formatting toolbar keeps its row. The top bar shows when `toolbar` is
+   * set explicitly. Default false.
    */
   headless?: boolean
   /** The host's icons by name (see `ICON_NAMES`), shown instead of the built-in ones; each is sized by font-size (1em). */
@@ -162,7 +163,7 @@ function fmtBytes(n: number) {
 export function DocViewer(props: DocViewerProps) {
   const { src, name, className, style, toolbarExtra, zoom, thumbnails, headers, credentials, worker, styleTarget, theme, onLoad, onError } = props
   const headless = !!props.headless
-  const toolbar = (props.toolbar ?? true) && !headless
+  const toolbar = props.toolbar ?? !headless
   // without a controller from the host the viewer keeps its own: the view publishes to one either way
   const ownCtl = useMemo(() => new ViewerController(), [])
   const ctl = props.controller ?? ownCtl
