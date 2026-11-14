@@ -117,7 +117,10 @@ describe('xlsx editing', () => {
     await v.page.keyboard.press('Alt+Enter')
     await v.page.keyboard.type('c')
     expect(await bar.inputValue()).toBe('a\nb\nc')
-    expect(await bar.evaluate((el) => el.scrollTop / parseFloat(getComputedStyle(el).lineHeight))).toBe(2)
+    // the bar snaps to a whole line in its scroll handler, a frame after the browser scrolled the caret into view
+    const lines = (el: HTMLElement) => el.scrollTop / parseFloat(getComputedStyle(el).lineHeight)
+    await v.page.waitForFunction((el) => el.scrollTop / parseFloat(getComputedStyle(el).lineHeight) === 2, await bar.elementHandle(), { timeout: 2000 }).catch(() => {})
+    expect(await bar.evaluate(lines)).toBe(2)
     await v.page.keyboard.press('Enter')
     await v.page.waitForTimeout(200)
     expect(await v.shown('J12')).toBe('a\nb\nc')
