@@ -44,6 +44,9 @@ export function formatNumber(s: Strings, n: number, opts?: Intl.NumberFormatOpti
   return f.format(n)
 }
 
+/** A count (pages, words, rows) with digit grouping. */
+export const formatCount = (s: Strings, n: number) => formatNumber(s, n, { useGrouping: true })
+
 /** A byte count as B / KB / MB. */
 export function formatBytes(s: Strings, n: number): string {
   if (n < 1024) return `${formatNumber(s, n)} B`
