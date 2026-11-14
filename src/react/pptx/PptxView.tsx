@@ -86,7 +86,7 @@ export function useSlide(client: DocumentClient, index: number): SlideModel | { 
 export function SlideSlot(props: { client: DocumentClient; index: number; meta: PresentationMeta; scale: number; live: boolean; editing?: SlideEditing; overlay?: ReactNode }) {
   const { client, index, meta, scale, live, editing, overlay } = props
   const model = useSlide(client, index)
-  if (!model) return <div className="de-slide" style={{ width: meta.w * scale, height: meta.h * scale, background: '#fff' }} />
+  if (!model) return <div className="de-slide" style={{ width: meta.w * scale, height: meta.h * scale, background: 'var(--de-page, #fff)' }} />
   if ('error' in model) {
     return (
       <div className="de-slide de-ph" style={{ width: meta.w * scale, height: meta.h * scale, display: 'flex' }}>

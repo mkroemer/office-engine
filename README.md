@@ -58,6 +58,7 @@ Also online at [p10node.github.io/office-engine](https://p10node.github.io/offic
 
 - [Features](docs/features.md): format coverage, editing, saving, limitations
 - [API](docs/api.md): props, custom views, `mount()`, `<office-viewer>`, core API, CSP
+- [Theming](docs/theming.md): design tokens, light / dark, loading the stylesheet yourself
 - [Real-time collaboration](docs/collaboration.md)
 - [Development](docs/development.md): playground, architecture, demo deploy, release
 
@@ -75,7 +76,7 @@ Also online at [p10node.github.io/office-engine](https://p10node.github.io/offic
 - **File menu**: new, open (also DOC / XLS / PPT / RTF / OpenDocument / Pages / Keynote / Numbers / CSV / text / Markdown / HTML / SVG / diagrams), import CSV, rename, download as PDF / HTML / text / CSV, document details, print
 - **Comments**: threads with replies, resolve, edit / delete, @mentions; on DOCX text, XLSX cells and PPTX slides, stored in the file the way Word, Excel and PowerPoint store them
 - **Real-time collaboration**: live edits, avatars, collaborators' cursors, offline edits sync on reconnect
-- **Dark mode**: `theme="dark"` or `"auto"` (follows the OS); documents keep their own colors
+- **Dark mode and theming**: `theme="dark"` or `"auto"` (follows the OS), or a theme object with design tokens for colors, type and shape ([Theming](docs/theming.md)); documents keep their own colors
 - **Embed anywhere**: React component, hook, vanilla `mount()`, `<office-viewer>` web component, single `<script>` file
 
 Full list, format coverage and limitations: [Features](docs/features.md).

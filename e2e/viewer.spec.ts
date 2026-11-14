@@ -440,6 +440,35 @@ describe('viewing', () => {
     expect(v.errors).toEqual([])
   })
 
+  test('theme object: tokens for both modes and per mode, pages keep paper colors', async () => {
+    const v = await viewer({ src: 'samples/sample.docx' })
+    const { page } = v
+    const bg = (sel: string) => page.locator(sel).first().evaluate((el) => getComputedStyle(el).backgroundColor)
+    const theme = { tokens: { chrome: 'rgb(1, 2, 3)', font: 'serif' }, light: { bg: 'rgb(10, 20, 30)' }, dark: { bg: 'rgb(40, 50, 60)', chrome: 'rgb(4, 5, 6)' } }
+    await page.evaluate((t) => window.__setProps({ theme: t }), theme)
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('.de-bar')!).backgroundColor === 'rgb(1, 2, 3)')
+    expect(await bg('.de-root')).toBe('rgb(10, 20, 30)')
+    expect(await page.locator('.de-bar').evaluate((el) => getComputedStyle(el).fontFamily)).toBe('serif')
+    expect(await bg('.de-page')).toBe('rgb(255, 255, 255)')
+
+    await page.evaluate((t) => window.__setProps({ theme: { ...t, mode: 'dark' } }), theme)
+    await page.waitForFunction(() => document.querySelector('.de-root')!.classList.contains('de-dark'))
+    expect(await bg('.de-bar')).toBe('rgb(4, 5, 6)')
+    expect(await bg('.de-root')).toBe('rgb(40, 50, 60)')
+    // a token the theme leaves alone keeps the dark default
+    await v.menu()
+    expect(await bg('.de-dd-pop')).toBe('rgb(46, 49, 54)')
+    await page.keyboard.press('Escape')
+    expect(await bg('.de-page')).toBe('rgb(255, 255, 255)')
+    expect(v.errors).toEqual([])
+  })
+
+  test('injectStyles=false: no stylesheet is added', async () => {
+    const v = await viewer({ src: 'samples/sample.docx', injectStyles: false }, { wait: false })
+    await v.page.waitForSelector('.de-root')
+    expect(await v.page.locator('style#office-engine-styles').count()).toBe(0)
+  })
+
   test('links: a script or data link is shown as text, not followed', async () => {
     // the builder refuses script links: write safe placeholders, then put the bad targets in the relationships
     const docx = await parasToDocx([

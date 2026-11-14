@@ -1,6 +1,6 @@
 import { StrictMode, useCallback, useEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { DocViewer, type DocSource, type Theme } from '../src'
+import { DocViewer, type DocSource, type ThemeMode as Theme } from '../src'
 import type { CollabOptions } from '../src/collab'
 import { OPEN_ACCEPT } from '../src/react/file/importFile'
 
