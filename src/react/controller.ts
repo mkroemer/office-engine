@@ -5,7 +5,7 @@
  * store), state replaced as a whole on every change (`rev` counts them). The viewer and its mounted view publish their
  * state and register the commands they can run; a command with nobody to run it does nothing.
  */
-import { useEffect } from 'react'
+import { useEffect, useSyncExternalStore } from 'react'
 import type { DocKind } from '../core/opc'
 import { stepZoom, type Zoom } from './common/ZoomControl'
 import { useLatest } from './common/hooks'
@@ -189,6 +189,11 @@ export class ViewerController {
 }
 
 export const createViewerController = () => new ViewerController()
+
+/** The controller's state, rendering again whenever it changes: for a host's own controls in React. */
+export function useViewer(ctl: ViewerController): ViewerState {
+  return useSyncExternalStore(ctl.subscribe, ctl.snapshot, ctl.snapshot)
+}
 
 /** Registers a view's commands (the latest closures each render) while it is mounted. */
 export function useViewCommands(ctl: ViewerController | null, commands: ViewCommands) {

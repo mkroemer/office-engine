@@ -13,7 +13,7 @@ export { THEME_TOKENS, createTheme, themeStyle, useThemeRoot, type Theme, type T
 export { IconsProvider, ICON_NAMES, type DropOption, type IconName, type Icons } from './react/edit/Toolbar'
 export { OfficeUIProvider, UIComponentsProvider, type ButtonProps, type DialogAction, type DialogProps, type SelectProps, type ToastProps, type UIComponents } from './react/ui'
 export { StringsProvider, useStrings, resolveStrings, LOCALES, en, de, type Strings, type StringsOverride, type Locale } from './react/strings'
-export { ViewerController, createViewerController, type ViewerState, type ViewerOutline, type OutlineItem } from './react/controller'
+export { ViewerController, createViewerController, useViewer, type ViewerState, type ViewerOutline, type OutlineItem } from './react/controller'
 
 export { DocumentClient, setDefaultWorker, type OpenOptions } from './core/worker/client'
 export type { DocSource } from './core/source'
