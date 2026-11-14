@@ -166,9 +166,9 @@ anywhere around a headless viewer:
 ```tsx
 import { DocViewer, FormatBar, OfficeUIProvider, OutlineList, SheetTabs, StatusText, useThemeRoot, ZoomBar } from '@p10node/office-engine'
 
-const root = useThemeRoot(theme)
+const root = useThemeRoot(theme, undefined, { host: true })
 <OfficeUIProvider icons={icons} components={components} locale="de">
-  <header className={root.className} style={{ ...root.style, height: 'auto' }}>
+  <header className={root.className} style={root.style}>
     <ZoomBar controller={ctl} /> <StatusText controller={ctl} />
     <FormatBar controller={ctl} />
   </header>
@@ -186,7 +186,9 @@ const root = useThemeRoot(theme)
 | `FormatBar` | while editing: undo, redo, size, bold / italic / underline / strike, alignment, lists (where there are lists), clear formatting |
 
 They render through the same components, icons, texts and design tokens as the built-in toolbars: outside `DocViewer`,
-`OfficeUIProvider` brings them, and an element with `useThemeRoot()`'s class and style brings the tokens.
+`OfficeUIProvider` brings them, and an element with `useThemeRoot()`'s class and style brings the tokens. Give a
+container of controls `{ host: true }`: it is sized by them, and their popups (the size list, the overflow menu) show
+beyond it, above the viewer.
 
 ### Comments
 

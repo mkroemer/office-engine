@@ -39,6 +39,18 @@ describe('host-placed controls around a headless viewer', () => {
     expect(await bold.getAttribute('aria-pressed')).toBe('true')
     // lists exist in documents
     expect(await chrome(v, '.de-ebar button[aria-label="Bulleted list"]').count()).toBe(1)
+
+    // the size list opens beyond the host's container, over the viewer, and its last size can be picked
+    await chrome(v, '.de-size-input').click()
+    const pop = chrome(v, '.de-size-pop')
+    await pop.waitFor()
+    const visible = await pop.evaluate((el) => {
+      const r = el.getBoundingClientRect()
+      const host = document.getElementById('host-chrome')!.getBoundingClientRect()
+      const top = document.elementFromPoint(r.left + r.width / 2, r.bottom - 4)
+      return { beyond: r.bottom > host.bottom, onTop: !!top && el.contains(top) }
+    })
+    expect(visible).toEqual({ beyond: true, onTop: true })
     expect(v.errors).toEqual([])
   })
 

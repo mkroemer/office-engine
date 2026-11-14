@@ -143,10 +143,10 @@ function App() {
 }
 
 function HostChrome() {
-  const root = useThemeRoot()
+  const root = useThemeRoot(undefined, undefined, { host: true })
   const ctl = window.__ctl
   return (
-    <div id="host-chrome" className={root.className} style={{ ...root.style, height: 'auto', minHeight: 0, flex: 'none' }}>
+    <div id="host-chrome" className={root.className} style={{ ...root.style, flex: 'none' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <ZoomBar controller={ctl} />
         <StatusText controller={ctl} />
