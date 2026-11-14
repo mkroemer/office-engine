@@ -7,6 +7,7 @@ import { slidesToText } from '../file/text'
 import { Status } from '../common/Status'
 import { ZoomControl, type Zoom } from '../common/ZoomControl'
 import { useViewCommands, useControllerObserved } from '../controller'
+import { applyPptx, pptxFormat } from '../edit/format'
 import { getSel } from '../edit/input'
 import { PptxEditor } from './PptxEditor'
 import { PptxToolbar, type AlignTo, type Arrange, type Rotate, type SlideCmd } from './PptxToolbar'
@@ -646,7 +647,20 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
     undo: () => viewer.editable && (editor.active ? editor.undo() : void undoShapes(false)),
     redo: () => viewer.editable && (editor.active ? editor.redo() : void undoShapes(true)),
     present: () => setPresenting(current),
+    format: (c) => {
+      if (viewer.editable && editor.active) applyPptx(editor, c)
+    },
   })
+  // formatting reaches text being edited; a shape that is only selected has none
+  useEffect(() => {
+    if (!ctl) return
+    if (!viewer.editable) return ctl.update({ format: null })
+    const off = editor.subscribeState((s) => ctl.update({ format: s && pptxFormat(s) }))
+    return () => {
+      off()
+      ctl.update({ format: null })
+    }
+  }, [ctl, editor, viewer.editable])
 
   // ---- comments: a thread points at a point of a slide ----
   const cm = useCommentsCtl()

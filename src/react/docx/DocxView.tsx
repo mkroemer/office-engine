@@ -9,6 +9,7 @@ import { useFileOps, useSelectAll, useViewer } from '../common/Slots'
 import { Status } from '../common/Status'
 import { ZoomControl, type Zoom } from '../common/ZoomControl'
 import { useViewCommands, useControllerObserved } from '../controller'
+import { applyDocx, docxFormat } from '../edit/format'
 import { ContextMenu, MOD, type MenuItem } from '../common/ContextMenu'
 import { PromptDialog, Toast, type PromptSpec } from '../common/Dialog'
 import { domFromPos, getSel, opInsert, posFromDom, selPoints } from '../edit/input'
@@ -819,7 +820,19 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     redo: () => {
       if (isEditing) editor.redo()
     },
+    format: (c) => {
+      if (isEditing) applyDocx(editor, c)
+    },
   })
+  useEffect(() => {
+    if (!ctl) return
+    if (!isEditing) return ctl.update({ format: null })
+    const off = editor.subscribeState((s) => ctl.update({ format: s && docxFormat(s) }))
+    return () => {
+      off()
+      ctl.update({ format: null })
+    }
+  }, [ctl, editor, isEditing])
 
   return (
     <div style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex' }}>

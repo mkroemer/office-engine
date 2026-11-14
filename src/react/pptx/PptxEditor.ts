@@ -95,6 +95,19 @@ export class PptxEditor implements RichHost<EPara> {
   onCommitted?: (slide: number, model: SlideModel) => void
   onDirty?: () => void
   onState?: (s: PptxFormat | null) => void
+  private stateSubs = new Set<(s: PptxFormat | null) => void>()
+  /** hears the current formatting state, then every one `onState` does (the viewer's controller, beside the toolbar) */
+  subscribeState(fn: (s: PptxFormat | null) => void): () => void {
+    this.stateSubs.add(fn)
+    fn(this.state())
+    return () => {
+      this.stateSubs.delete(fn)
+    }
+  }
+  private emitState(s: PptxFormat | null) {
+    this.onState?.(s)
+    for (const fn of this.stateSubs) fn(s)
+  }
 
   constructor(private client: DocumentClient) {
     this.input = new RichInput(this)
@@ -122,7 +135,7 @@ export class PptxEditor implements RichHost<EPara> {
     this.sid = -1
     this.slide = -1
     this.body = undefined
-    this.onState?.(null)
+    this.emitState(null)
   }
 
   text(): TextBody | undefined {
@@ -202,7 +215,7 @@ export class PptxEditor implements RichHost<EPara> {
     clearTimeout(this.timer)
     this.timer = setTimeout(() => this.commitInBackground(), 400)
     this.onChange?.()
-    this.onState?.(this.state(sel))
+    this.emitState(this.state(sel))
   }
 
   undo() {
@@ -225,7 +238,7 @@ export class PptxEditor implements RichHost<EPara> {
     clearTimeout(this.timer)
     this.timer = setTimeout(() => this.commitInBackground(), 400)
     this.onChange?.()
-    this.onState?.(this.state(sel))
+    this.emitState(this.state(sel))
   }
 
   private commitInBackground() {
@@ -287,7 +300,7 @@ export class PptxEditor implements RichHost<EPara> {
     if (collapsed(sel)) {
       this.pend = { s: { ...(this.pend?.s ?? {}), ...s }, d: { ...(this.pend?.d ?? {}), ...d }, at: sel.a }
       this.input.restore(sel)
-      this.onState?.(this.state(sel))
+      this.emitState(this.state(sel))
       return
     }
     const [a, b] = ordered(this, sel)
@@ -388,7 +401,7 @@ export class PptxEditor implements RichHost<EPara> {
 
   onSelection(sel: Sel | null) {
     if (sel && this.pend && (sel.a.pa !== this.pend.at.pa || sel.a.o !== this.pend.at.o)) this.pend = null
-    this.onState?.(sel ? this.state(sel) : null)
+    this.emitState(sel ? this.state(sel) : null)
   }
 
   shortcut?: (e: KeyboardEvent) => boolean

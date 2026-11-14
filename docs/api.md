@@ -130,12 +130,32 @@ function Viewer({ file }: { file: File }) {
 | `page` | `{ current, count }` from 1: the page (documents; `count` 0 while laid out) or slide in view; `null` for spreadsheets |
 | `outline` | `{ kind, items: [{ id, title, level, current }] }`: a document's headings, a workbook's visible sheets, a presentation's slides (titled by their title placeholder, else "Slide n") |
 | `status` | the status line ("Page 2 of 7 · 1,204 words", "Slide 3 of 12", "200 rows × 8 cols") |
+| `format` | while editing, the formatting at the selection (`TextFormat`, below); `null` while viewing, and in a presentation unless text is being edited |
 
 Commands: `setEditing(on)`, `save()`, `undo()`, `redo()`, `zoomIn()`, `zoomOut()`, `setZoom('fit' | number)`,
 `goto(outlineId)`, `gotoPage(n)`, `present()` (a slideshow from the slide in view), `print()`, `fileAction(id)` (a File menu
-action: `pdf`, `html`, `text:md`, `details`, `rename`…), `toggleComments(open?)`. A command the open document has no use
-for does nothing. `subscribe(fn)` returns its unsubscribe; `snapshot()` the current state. Without `react`, `mount()`
-returns the controller (`mounted.controller`), and `<office-viewer headless>` has it as `element.controller`.
+action: `pdf`, `html`, `text:md`, `details`, `rename`…), `toggleComments(open?)`, `format(command)` (below). A command the
+open document has no use for does nothing. `subscribe(fn)` returns its unsubscribe; `snapshot()` the current state;
+`useViewerState(ctl)` is the state in React. Without `react`, `mount()` returns the controller (`mounted.controller`), and
+`<office-viewer headless>` has it as `element.controller`.
+
+#### Formatting
+
+One formatting API for documents, cells and slide text, for a toolbar of your own:
+
+```tsx
+const f = useViewerState(ctl).format
+<button aria-pressed={!!f?.bold} disabled={!f} onMouseDown={(e) => e.preventDefault()}
+  onClick={() => ctl.format({ op: 'toggle', mark: 'bold' })}>B</button>
+```
+
+`TextFormat`: `bold`, `italic`, `underline`, `strike`, `font`, `size` (points), `color`, `highlight` (a cell's fill in a
+spreadsheet), `align` (`'left' | 'center' | 'right' | 'justify'`), `list` (`'bullet' | 'number' | null`; undefined for
+cells). `FormatCommand`: `{ op: 'toggle', mark }`, `{ op: 'font', name }`, `{ op: 'size', pt }`, `{ op: 'color', color }`,
+`{ op: 'highlight', color }` (`null` removes either), `{ op: 'align', align }`, `{ op: 'list', list }`, `{ op: 'clear' }`.
+What a kind has no use for does nothing (lists and justified text in cells). A button must not take the focus from the
+document (prevent its mouse down), or the command loses the selection. Tables, pictures, tracked changes and cell borders
+stay with the built-in toolbars.
 
 Controller actions obey `allowSave`, `allowDownload` and `allowOpen` even when the File menu is hidden.
 `fileMenu={false}` hides that menu and its keyboard shortcuts; it does not disable a host's controller controls.
