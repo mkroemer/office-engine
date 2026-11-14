@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { ViewerState } from '../src'
-import { useBrowser, viewer, type Viewer } from './harness'
+import { docxParas, paraText, runsOf, useBrowser, viewer, type Viewer } from './harness'
 
 useBrowser()
 
@@ -51,6 +51,42 @@ describe('controller and headless mode', () => {
     expect(saved.name).toBe('sample.docx')
     await page.evaluate(() => window.__ctl.setEditing(false))
     await until(v, '!s.editing')
+    expect(v.errors).toEqual([])
+  })
+
+  test('docx: formatting state and commands through the controller', async () => {
+    const v = await viewer({ src: 'samples/sample.docx', editable: true, onSave: true, headless: true })
+    const { page } = v
+    await until(v, 's.editing')
+    expect((await state(v)).format).toBeNull()
+    await v.selectText('document')
+    await until(v, 's.format && !s.format.bold')
+    await page.evaluate(() => window.__ctl.format({ op: 'toggle', mark: 'bold' }))
+    await until(v, 's.format.bold')
+    await page.evaluate(() => window.__ctl.format({ op: 'size', pt: 20 }))
+    await until(v, 's.format.size === 20')
+    const p = (await docxParas((await v.save()).bytes)).find((x) => paraText(x).startsWith('This document'))!
+    const run = runsOf(p).find((r) => r.text.includes('document'))!
+    expect(run.s.b).toBe(true)
+    expect(run.s.sz).toBe(20)
+    // viewing: no formatting state, and commands do nothing
+    await page.evaluate(() => window.__ctl.setEditing(false))
+    await until(v, '!s.editing && s.format === null')
+    expect(v.errors).toEqual([])
+  })
+
+  test("xlsx: the active cell's format through the controller", async () => {
+    const v = await viewer({ src: 'samples/sample.xlsx', editable: true, onSave: true, headless: true })
+    const { page } = v
+    await page.locator('.de-grid').waitFor()
+    await v.typeCell('J10', '12.5')
+    await v.clickCell('J10')
+    await until(v, 's.format && !s.format.bold && s.format.list === undefined')
+    await page.evaluate(() => window.__ctl.format({ op: 'toggle', mark: 'bold' }))
+    await page.evaluate(() => window.__ctl.format({ op: 'highlight', color: '#ffff00' }))
+    await until(v, "s.format.bold && /255, 255, 0|ffff00/i.test(s.format.highlight ?? '')")
+    // lists are not a cell format: nothing happens
+    await page.evaluate(() => window.__ctl.format({ op: 'list', list: 'bullet' }))
     expect(v.errors).toEqual([])
   })
 

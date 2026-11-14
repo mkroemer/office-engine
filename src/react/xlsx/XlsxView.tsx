@@ -9,7 +9,8 @@ import type { DocumentClient } from '../../core/worker/client'
 import { getPeers, publishLocal, subscribePeers } from '../../collab/hosts'
 import { claimFocus, useForceUpdate, useScroll, useSize } from '../common/hooks'
 import { useFileOps, useViewer, useSelectAll } from '../common/Slots'
-import { useViewCommands } from '../controller'
+import { useViewCommands, type FormatCommand } from '../controller'
+import { cellFormat, cellPatch } from '../edit/format'
 import { Status } from '../common/Status'
 import { ContextMenu, MOD, type MenuItem } from '../common/ContextMenu'
 import { Toast } from '../common/Dialog'
@@ -374,7 +375,7 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
 
   // ---- controller: the sheets as the outline, sheet switching, undo ----
   const { ctl, headless } = viewer
-  const gridCommands = useRef<{ undo: () => void; redo: () => void } | null>(null)
+  const gridCommands = useRef<{ undo: () => void; redo: () => void; format: (c: FormatCommand) => void } | null>(null)
   const sheetItems = meta.sheets.filter((s) => !s.hidden).map((s) => ({ id: String(s.index), title: s.name, level: 0, current: s.index === cur }))
   useEffect(() => {
     ctl?.update({ outline: { kind: 'sheets', items: sheetItems } })
@@ -386,6 +387,7 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
     },
     undo: () => gridCommands.current?.undo(),
     redo: () => gridCommands.current?.redo(),
+    format: (c) => gridCommands.current?.format(c),
   })
 
   return (
@@ -485,7 +487,7 @@ interface GridProps {
   hold: MutableRefObject<boolean>
   onSheet: (i: number) => void
   /** set by the grid: its undo / redo, for the viewer's controller */
-  gridCommands: MutableRefObject<{ undo: () => void; redo: () => void } | null>
+  gridCommands: MutableRefObject<{ undo: () => void; redo: () => void; format: (c: FormatCommand) => void } | null>
 }
 
 /** text rotation (OOXML degrees, + = counter-clockwise, 255 = stacked) */
@@ -1168,9 +1170,18 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
   }
   const undo = () => void run(client.call('xlsx.undo'), 'undo')
   const redo = () => void run(client.call('xlsx.redo'), 'redo')
-  // the controller's undo / redo: this sheet's grid runs them while it is shown
+  // the controller's undo / redo and formatting: this sheet's grid runs them while it is shown
+  const cellFmt = cellFormat(activeCss, meta.baseFont as { fontFamily?: string; fontSize?: string | number })
   useEffect(() => {
-    gridCommands.current = { undo, redo }
+    gridCommands.current = {
+      undo,
+      redo,
+      format: (c) => {
+        const patch = editable && cellPatch(c, cellFmt)
+        if (patch) fmt(patch)
+      },
+    }
+    viewer.ctl?.update({ format: editable ? cellFmt : null })
   })
 
   const tsv = () => {
