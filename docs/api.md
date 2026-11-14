@@ -95,12 +95,12 @@ toolbar keeps its row above the document; dialogs, the find bar and the comments
 set explicitly brings back the top bar (File menu, comments, Save) and leaves the rest headless.
 
 ```tsx
-import { createViewerController, DocViewer, useViewer } from '@p10node/office-engine'
+import { createViewerController, DocViewer, useViewerState } from '@p10node/office-engine'
 import { useMemo } from 'react'
 
 function Viewer({ file }: { file: File }) {
   const ctl = useMemo(() => createViewerController(), [])
-  const s = useViewer(ctl)
+  const s = useViewerState(ctl)
   return (
     <>
       <nav>

@@ -2,6 +2,19 @@ import { describe, expect, test } from 'bun:test'
 import { createViewerController } from '../src/react/controller'
 
 describe('viewer controller', () => {
+  test('observed once a host subscribes; watchers hear the first subscriber only', () => {
+    const ctl = createViewerController()
+    let heard = 0
+    const stop = ctl.watchObserved(() => heard++)
+    expect(ctl.observed).toBe(false)
+    const off = ctl.subscribe(() => {})
+    ctl.subscribe(() => {})
+    expect(ctl.observed).toBe(true)
+    expect(heard).toBe(1)
+    off()
+    stop()
+  })
+
   test('state changes count once each; an equal update is no change', () => {
     const ctl = createViewerController()
     let calls = 0

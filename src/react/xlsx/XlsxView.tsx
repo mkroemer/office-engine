@@ -259,16 +259,23 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
       // else the worker streams the file into the new sheet, like a sheet's XML (a million rows is fine)
       const res = await client.call('xlsx.import', cur, file, { name, sep })
       store.applied(res, meta)
+      historyCleared()
       viewer.setDirty(true)
       setActive(cur + 1)
     },
   })
+  // a sheet added, deleted, moved or renamed clears the worker's undo history
+  const historyCleared = () => {
+    store.history = { undo: 0, redo: 0 }
+    viewer.ctl?.update({ canUndo: false, canRedo: false })
+  }
   /** the rows of a text file as cell edits of a new sheet (parsed here, sent through the session) */
   const importRows = async (file: Blob, name: string, sep?: string) => {
     const text = await file.text()
     const rows = parseCsv(text, sep ?? detectSeparator(text))
     const res = await client.call('xlsx.bookOp', { op: 'add', name, after: cur })
     store.applied(res, meta)
+    historyCleared()
     viewer.setDirty(true)
     const idx = cur + 1
     setActive(idx)
@@ -296,6 +303,7 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
     try {
       const res = await client.call('xlsx.bookOp', op)
       store.applied(res, meta)
+      historyCleared()
       viewer.setDirty(true)
       if (goTo !== undefined) setActive(Math.max(0, Math.min(goTo, meta.sheets.length - 1)))
       bump()
@@ -942,14 +950,17 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
     try {
       const res = await p
       store.applied(res, meta)
+      const h = store.history
       if (res) {
         viewer.setDirty(true)
-        const h = store.history
         if (kind === 'edit') store.history = { undo: h.undo + 1, redo: 0 }
         else if (kind === 'undo') store.history = { undo: Math.max(0, h.undo - 1), redo: h.redo + 1 }
         else store.history = { undo: h.undo + 1, redo: Math.max(0, h.redo - 1) }
-        viewer.ctl?.update({ canUndo: store.history.undo > 0, canRedo: store.history.redo > 0 })
       }
+      // nothing to undo or redo: the worker's history is shorter than counted (it keeps the last 200 edits)
+      else if (kind === 'undo') store.history = { ...h, undo: 0 }
+      else if (kind === 'redo') store.history = { ...h, redo: 0 }
+      viewer.ctl?.update({ canUndo: store.history.undo > 0, canRedo: store.history.redo > 0 })
       setDetailTick((t) => t + 1)
     } catch (e) {
       console.error('[office-engine]', e)

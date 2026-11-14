@@ -727,7 +727,18 @@ export class DocxEditor implements RichHost<Paragraph> {
     return list.map((b) => (b.t === 'p' && b.pid !== undefined && cur.has(b.pid) ? cur.get(b.pid)! : b))
   }
 
+  // the state published while an entry is applied comes before its move to the other stack: publish again after
   undo() {
+    this.undoStep()
+    this.onHistory?.(this.canUndo, this.canRedo)
+  }
+
+  redo() {
+    this.redoStep()
+    this.onHistory?.(this.canUndo, this.canRedo)
+  }
+
+  private undoStep() {
     const e = this.history.pop()
     if (!e) return
     if (e.group) {
@@ -735,7 +746,7 @@ export class DocxEditor implements RichHost<Paragraph> {
       for (const part of [...e.group].reverse()) {
         this.history.push(part)
         const n = this.future.length
-        this.undo()
+        this.undoStep()
         if (this.future.length > n) this.future.pop()
       }
       this.future.push(e)
@@ -763,14 +774,14 @@ export class DocxEditor implements RichHost<Paragraph> {
     this.future.push(e)
   }
 
-  redo() {
+  private redoStep() {
     const e = this.future.pop()
     if (!e) return
     if (e.group) {
       for (const part of e.group) {
         this.future.push(part)
         const n = this.history.length
-        this.redo()
+        this.redoStep()
         if (this.history.length > n) this.history.pop()
       }
       this.history.push(e)

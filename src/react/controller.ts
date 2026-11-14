@@ -82,13 +82,29 @@ function same(a: unknown, b: unknown): boolean {
 export class ViewerController {
   private state: ViewerState = EMPTY
   private subs = new Set<() => void>()
+  private watchers = new Set<() => void>()
   private view: ViewCommands | null = null
   private viewer: ViewerCommands | null = null
 
   subscribe = (fn: () => void) => {
+    const first = this.subs.size === 0
     this.subs.add(fn)
+    if (first) for (const w of this.watchers) w()
     return () => {
       this.subs.delete(fn)
+    }
+  }
+
+  /** whether a host reads the state: views skip work that only the controller's state needs while nobody does */
+  get observed(): boolean {
+    return this.subs.size > 0
+  }
+
+  /** calls `fn` when the first subscriber arrives */
+  watchObserved(fn: () => void): () => void {
+    this.watchers.add(fn)
+    return () => {
+      this.watchers.delete(fn)
     }
   }
 
@@ -191,7 +207,7 @@ export class ViewerController {
 export const createViewerController = () => new ViewerController()
 
 /** The controller's state, rendering again whenever it changes: for a host's own controls in React. */
-export function useViewer(ctl: ViewerController): ViewerState {
+export function useViewerState(ctl: ViewerController): ViewerState {
   return useSyncExternalStore(ctl.subscribe, ctl.snapshot, ctl.snapshot)
 }
 

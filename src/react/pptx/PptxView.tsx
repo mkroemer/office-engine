@@ -24,21 +24,24 @@ interface SlideCache {
   models: Map<number, SlideModel>
   pending: Map<number, Promise<SlideModel>>
   listeners: Map<number, Set<(m: SlideModel) => void>>
+  /** told of every replaced slide, whichever its index */
+  edits: Set<(index: number, m: SlideModel) => void>
 }
 
 const caches = new WeakMap<DocumentClient, SlideCache>()
 
 function cacheFor(client: DocumentClient): SlideCache {
   let c = caches.get(client)
-  if (!c) caches.set(client, (c = { models: new Map(), pending: new Map(), listeners: new Map() }))
+  if (!c) caches.set(client, (c = { models: new Map(), pending: new Map(), listeners: new Map(), edits: new Set() }))
   return c
 }
 
-/** replaces a cached slide (after an edit) and notifies mounted views */
+/** replaces a cached slide (after an edit, here or a collaborator's) and notifies mounted views */
 function putSlide(client: DocumentClient, index: number, m: SlideModel) {
   const c = cacheFor(client)
   c.models.set(index, m)
   for (const fn of c.listeners.get(index) ?? []) fn(m)
+  for (const fn of c.edits) fn(index, m)
 }
 
 /** forget every cached slide (after slides were added / removed / reordered) */
@@ -595,23 +598,38 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
 
   // ---- controller: zoom, slide, the slides as the outline, undo, slideshow ----
   const { ctl, headless } = viewer
-  // slide titles for the outline: read one slide at a time after the first ones are shown, so the slides in view come first
-  const [titles, setTitles] = useState<(string | undefined)[]>([])
+  // slide titles for the outline, read only while a host reads the controller: from the slides' XML in one call
+  // once the first slides are shown, then from each slide model an edit puts in the cache
+  const [observed, setObserved] = useState(() => !!ctl?.observed)
   useEffect(() => {
     if (!ctl) return
+    if (ctl.observed) setObserved(true)
+    return ctl.watchObserved(() => setObserved(true))
+  }, [ctl])
+  const [titles, setTitles] = useState<string[]>([])
+  useEffect(() => {
+    if (!observed) return
     let live = true
-    const timer = setTimeout(async () => {
-      const out: (string | undefined)[] = []
-      for (let i = 0; i < meta.count && live; i++) {
-        out.push((await client.call('pptx.slide', i).catch(() => undefined))?.title)
-        if (i % 20 === 19 || i === meta.count - 1) live && setTitles([...out])
-      }
+    const timer = setTimeout(() => {
+      client
+        .call('pptx.titles')
+        .then((t) => live && setTitles(t))
+        .catch(() => {})
     }, 800)
     return () => {
       live = false
       clearTimeout(timer)
     }
-  }, [ctl, client, meta.count, slidesVer])
+  }, [observed, client, meta.count, slidesVer])
+  useEffect(() => {
+    if (!observed) return
+    const edits = cacheFor(client).edits
+    const on = (i: number, m: SlideModel) => setTitles((t) => (t[i] === (m.title ?? '') ? t : Object.assign([...t], { [i]: m.title ?? '' })))
+    edits.add(on)
+    return () => {
+      edits.delete(on)
+    }
+  }, [observed, client])
   useEffect(() => {
     ctl?.update({ zoom: { value: zoom, effective: scale } })
   }, [ctl, zoom, scale])
@@ -629,8 +647,8 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
     setZoom,
     goto: (id) => go(Number(id)),
     gotoPage: (n) => go(n - 1),
-    undo: () => (editor.active ? editor.undo() : void undoShapes(false)),
-    redo: () => (editor.active ? editor.redo() : void undoShapes(true)),
+    undo: () => viewer.editable && (editor.active ? editor.undo() : void undoShapes(false)),
+    redo: () => viewer.editable && (editor.active ? editor.redo() : void undoShapes(true)),
     present: () => setPresenting(current),
   })
 

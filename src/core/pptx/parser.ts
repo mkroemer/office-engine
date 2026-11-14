@@ -162,6 +162,16 @@ function phOf(el: XEl): { type: string; idx?: string } | undefined {
 const TITLE_SYMBOLS: Record<string, string> = {
   '\uF0E0': '➔', '\uF0E8': '➔', '\uF0F0': '⇨', '\uF0D8': '➢', '\uF0FC': '✓', '\uF0FB': '✗', '\uF0B7': '•', '\uF0A7': '▪', '\uF06C': '●',
 }
+const plainTitle = (paras: string[]) => paras.join(' ').replace(/[\uF000-\uF0FF]/g, (c) => TITLE_SYMBOLS[c] ?? '').replace(/\s+/g, ' ').trim()
+
+/** the text of the title placeholder in a slide's shape tree (groups included), or '' */
+function titleOf(tree: XEl | undefined): string {
+  for (const c of tree?.c ?? []) {
+    const t = c.n === 'grpSp' ? titleOf(c) : c.n === 'sp' && ['title', 'ctrTitle'].includes(phOf(c)?.type ?? '') ? plainTitle(kids(kid(c, 'txBody'), 'p').map(textOf)) : ''
+    if (t) return t
+  }
+  return ''
+}
 
 const masterType = (t: string) => (t === 'ctrTitle' ? 'title' : t === 'subTitle' || t === 'obj' ? 'body' : t)
 
@@ -318,6 +328,13 @@ export class PptxPresentation {
       hidden: slide.root.a.show === '0',
       title: r.title,
     }
+  }
+
+  /** every slide's title placeholder text ('' where there is none): its XML only, nothing laid out */
+  async titles(): Promise<string[]> {
+    const out: string[] = []
+    for (const s of this.meta.slides) out.push(titleOf((await this.part(s.path)).spTree))
+    return out
   }
 
   get defaults() {
@@ -882,7 +899,7 @@ class SlideRenderer {
     const text = el.n === 'sp' ? this.textBody(kid(el, 'txBody'), chain, ph, kid(style, 'fontRef'), part, sid) : undefined
     // the slide's own title placeholder names the slide (outline, slide list)
     if (text && part === this.slide && this.title === undefined && (ph?.type === 'title' || ph?.type === 'ctrTitle')) {
-      const t = text.paras.map((p) => p.runs.map((r) => r.text).join('')).join(' ').replace(/[\uF000-\uF0FF]/g, (c) => TITLE_SYMBOLS[c] ?? '').replace(/\s+/g, ' ').trim()
+      const t = plainTitle(text.paras.map((p) => p.runs.map((r) => r.text).join('')))
       if (t) this.title = t
     }
     if ((!fill || fill.t === 'none') && !stroke && !text) return

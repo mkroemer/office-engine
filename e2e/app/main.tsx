@@ -21,6 +21,8 @@ declare global {
 }
 window.__events = []
 window.__ctl = createViewerController()
+// a host reading the state, as the tests do through snapshot(): views read slide titles only for one
+window.__ctl.subscribe(() => {})
 const log = (e: Ev) => window.__events.push(e)
 
 const q = new URLSearchParams(location.search)
