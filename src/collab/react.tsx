@@ -6,6 +6,7 @@ import type { DocumentClient } from '../core/worker/client'
 import { getPeers, subscribePeers, type PeerView } from './hosts'
 import { startCollab, type Collab, type CollabOptions } from './index'
 import type { CollabStatus } from './session'
+import { useStrings } from '../react/strings'
 
 const transportIds = new WeakMap<object, number>()
 let nextTransportId = 0
@@ -66,16 +67,10 @@ const initials = (name: string) =>
     .map((w) => w[0]!.toUpperCase())
     .join('') || '?'
 
-const LABEL: Record<CollabStatus, string> = {
-  connecting: 'Connecting…',
-  syncing: 'Syncing…',
-  live: 'Live',
-  offline: 'Offline · changes will sync',
-  error: 'Not synced',
-}
-
 /** status chip + collaborators' avatars (top bar) */
 export function CollabBar({ client, state }: { client: DocumentClient; state: CollabState }) {
+  const t = useStrings()
+  const LABEL: Record<CollabStatus, string> = t.collab
   const peers = useSyncExternalStore(
     (fn) => subscribePeers(client, fn),
     () => getPeers(client),
@@ -88,12 +83,12 @@ export function CollabBar({ client, state }: { client: DocumentClient; state: Co
     return () => clearInterval(t)
   }, [state.collab])
   if (!state.status) return null
-  const title = state.status === 'error' ? state.error ?? 'Collaboration stopped' : state.status === 'live' && pending ? `Saving ${pending} change${pending > 1 ? 's' : ''}…` : LABEL[state.status]
+  const title = state.status === 'error' ? state.error ?? t.collab.stopped : state.status === 'live' && pending ? t.collab.saving(pending) : LABEL[state.status]
   return (
     <span className="de-collab">
       <span className={`de-collab-status de-collab-${state.status}`} title={title}>
         <span className="de-collab-dot" />
-        <span className="de-collab-label">{state.status === 'live' ? (peers.length ? `${peers.length + 1} editing` : 'Live') : LABEL[state.status]}</span>
+        <span className="de-collab-label">{state.status === 'live' ? (peers.length ? t.collab.editing(peers.length + 1) : LABEL.live) : LABEL[state.status]}</span>
       </span>
       {peers.length > 0 && (
         <span className="de-peers">

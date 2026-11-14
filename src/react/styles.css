@@ -538,7 +538,7 @@
 /* empty placeholders while editing (new slides, blank presentations) */
 .de-slide-editable .de-el > .de-txt:empty { outline: 1.5px dashed rgba(60, 64, 67, 0.4); outline-offset: -1px; }
 .de-slide-editable .de-el > .de-txt:empty::after {
-  content: 'Click to add text';
+  content: attr(data-placeholder);
   color: #80868b;
   font: 28px/1.2 system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
   text-align: center;
