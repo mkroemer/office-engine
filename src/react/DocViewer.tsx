@@ -258,6 +258,7 @@ function Viewer(props: DocViewerProps) {
   const cmOpts = props.comments || {}
   if (cmCtl) {
     cmCtl.opts = cmOpts
+    cmCtl.t = t
     cmCtl.me = cmOpts.user ?? props.collab?.user ?? { name: 'Me' }
     cmCtl.canComment = !readOnly && (cmOpts.canComment ?? (editing && canEdit))
   }
@@ -457,7 +458,7 @@ function Viewer(props: DocViewerProps) {
       }),
     open: (file) =>
       replace(t.bar.replaceOpen(file.name), () => {
-        importFile(file).then(show, (e: Error) => setToast(e.message))
+        importFile(file, t.file.unsupported).then(show, (e: Error) => setToast(e.message))
       }),
     save,
     downloadOriginal: async () => {

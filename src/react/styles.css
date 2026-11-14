@@ -613,7 +613,7 @@
 /* empty placeholders while editing (new slides, blank presentations) */
 .de-slide-editable .de-el > .de-txt:empty { outline: 1.5px dashed var(--de-ph-outline); outline-offset: -1px; }
 .de-slide-editable .de-el > .de-txt:empty::after {
-  content: 'Click to add text';
+  content: attr(data-placeholder);
   color: var(--de-ph-hint);
   font: 28px/1.2 var(--de-font);
   text-align: center;

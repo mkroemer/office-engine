@@ -1,5 +1,6 @@
 import { extOf, PLAIN_EXT, plainFormat, unpackedName } from '../../core/plain'
 import { LEGACY_EXT, legacyFormatOf } from '../../core/legacy'
+import { en } from '../strings/en'
 
 // .pages / .key / .numbers (Apple iWork) open as read-only Word / PowerPoint / Excel files
 const OFFICE = new Set(['docx', 'dotx', 'xlsx', 'xltx', 'pptx', 'potx', 'pages', 'key', 'numbers'])
@@ -21,7 +22,7 @@ export interface Imported {
  * OpenDocument files are converted to Office Open XML; CSV / TSV become a workbook, text / Markdown / HTML, SVG and
  * Mermaid / PlantUML / Graphviz diagrams a document, also gzip-compressed (.svgz, .csv.gz).
  */
-export async function importFile(file: File): Promise<Imported> {
+export async function importFile(file: File, unsupported: (name: string) => string = en.file.unsupported): Promise<Imported> {
   const ext = extOf(file.name)
   if (OFFICE.has(ext)) return { src: file, name: file.name, converted: false }
   const head = new Uint8Array(await file.slice(0, 4096).arrayBuffer())
@@ -33,7 +34,5 @@ export async function importFile(file: File): Promise<Imported> {
   if (format) return { src: file, name: file.name, converted: true }
   // no / unknown extension: an Office package is a ZIP
   if (head[0] === 0x50 && head[1] === 0x4b) return { src: file, name: file.name, converted: false }
-  throw new Error(
-    `Cannot open “${file.name}”: supported files are Word, Excel, PowerPoint (also 97-2003), OpenDocument, RTF, Pages, Keynote, Numbers, CSV, text, Markdown, HTML, SVG, Mermaid, PlantUML and Graphviz (also gzip-compressed: .svgz, .csv.gz)`,
-  )
+  throw new Error(unsupported(file.name))
 }
