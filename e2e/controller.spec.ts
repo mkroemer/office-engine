@@ -58,7 +58,6 @@ describe('controller and headless mode', () => {
     const v = await viewer({ src: 'samples/sample.docx', editable: true, onSave: true, headless: true })
     const { page } = v
     await until(v, 's.editing')
-    expect((await state(v)).format).toBeNull()
     await v.selectText('document')
     await until(v, 's.format && !s.format.bold')
     await page.evaluate(() => window.__ctl.format({ op: 'toggle', mark: 'bold' }))

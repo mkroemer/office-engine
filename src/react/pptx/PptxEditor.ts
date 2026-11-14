@@ -91,9 +91,10 @@ export class PptxEditor implements RichHost<EPara> {
   onDirty?: () => void
   onState?: (s: PptxFormat | null) => void
   private stateSubs = new Set<(s: PptxFormat | null) => void>()
-  /** hears every formatting state `onState` does (the viewer's controller, beside the toolbar's `onState`) */
+  /** hears the current formatting state, then every one `onState` does (the viewer's controller, beside the toolbar) */
   subscribeState(fn: (s: PptxFormat | null) => void): () => void {
     this.stateSubs.add(fn)
+    fn(this.state())
     return () => {
       this.stateSubs.delete(fn)
     }

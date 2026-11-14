@@ -205,9 +205,10 @@ export class DocxEditor implements RichHost<Paragraph> {
   private stale = new Set<number>()
   onState?: (s: FormatState | null) => void
   private stateSubs = new Set<(s: FormatState | null) => void>()
-  /** hears every formatting state `onState` does (the viewer's controller, beside the toolbar's `onState`) */
+  /** hears the current formatting state, then every one `onState` does (the viewer's controller, beside the toolbar) */
   subscribeState(fn: (s: FormatState | null) => void): () => void {
     this.stateSubs.add(fn)
+    fn(this.state())
     return () => {
       this.stateSubs.delete(fn)
     }
