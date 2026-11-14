@@ -221,6 +221,8 @@ export class Engine {
         return addSlideImage(this.need(this.pptx), args[0] as number, new Uint8Array(args[1] as ArrayBuffer), args[2] as string)
       case 'pptx.slide':
         return this.need(this.pptx).slide(args[0] as number)
+      case 'pptx.titles':
+        return this.need(this.pptx).titles()
       case 'pptx.undo':
         return undoShapes(this.need(this.pptx), !!args[0])
     }

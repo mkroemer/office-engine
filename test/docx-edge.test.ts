@@ -354,6 +354,18 @@ describe('review findings', () => {
     expect(ed.changeCount()).toBe(0)
     client.destroy()
   })
+
+  test('undo and redo report history availability after the move to the other stack', async () => {
+    const { ed, client } = await editorOn(await tracked())
+    const seen: [boolean, boolean][] = []
+    ed.onHistory = (u, r) => seen.push([u, r])
+    ed.review(true, true)
+    ed.undo()
+    expect(seen.at(-1)).toEqual([false, true])
+    ed.redo()
+    expect(seen.at(-1)).toEqual([true, false])
+    client.destroy()
+  })
 })
 
 describe('saving in between', () => {

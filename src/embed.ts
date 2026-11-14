@@ -4,6 +4,7 @@ import './core/default-worker'
 import { DocViewer, type DocViewerProps } from './react/DocViewer'
 import type { Icons } from './react/edit/Toolbar'
 import type { StringsOverride } from './react/strings'
+import { ViewerController } from './react/controller'
 
 export type MountOptions = Omit<DocViewerProps, 'styleTarget'>
 
@@ -11,6 +12,8 @@ const THEMES = ['light', 'dark', 'auto'] as const
 const LOCALE_NAMES = ['en', 'de'] as const
 
 export interface MountedViewer {
+  /** the viewer's state and commands (the one passed in `options.controller`, else its own) */
+  controller: ViewerController
   update(next: Partial<MountOptions>): void
   destroy(): void
 }
@@ -19,10 +22,12 @@ export interface MountedViewer {
 export function mount(el: HTMLElement, options: MountOptions): MountedViewer {
   let root: Root | null = createRoot(el)
   let props = options
+  const controller = options.controller ?? new ViewerController()
   const shadow = el.getRootNode() instanceof ShadowRoot ? (el.getRootNode() as ShadowRoot) : undefined
-  const render = () => root?.render(createElement(DocViewer, { ...props, styleTarget: shadow }))
+  const render = () => root?.render(createElement(DocViewer, { ...props, controller, styleTarget: shadow }))
   render()
   return {
+    controller,
     update(next) {
       props = { ...props, ...next }
       render()
@@ -38,17 +43,20 @@ export function mount(el: HTMLElement, options: MountOptions): MountedViewer {
  * `<office-viewer src="/file.xlsx" style="height:600px"></office-viewer>`
  * Rendered inside a shadow root so host page CSS cannot leak in.
  * Attributes: src, name, editable, toolbar / thumbnails / save / download / file-menu / open / capture-select-all ("false" to turn off),
- * theme ("light" | "dark" | "auto"), locale ("en" | "de");
+ * theme ("light" | "dark" | "auto"), locale ("en" | "de"), headless (the document alone, driven through `controller`);
  * real-time collaboration: collab (hub WebSocket URL), room, user (display name), base (snapshot seq `src` was opened at).
  * Properties: `file` (File/Blob/ArrayBuffer) for local data; `icons` (map or resolver, as DocViewer's `icons`);
- * `strings` (texts replacing the locale's).
+ * `strings` (texts replacing the locale's); `controller` (ViewerController) for the viewer's
+ * state and commands.
  */
 export class OfficeViewerElement extends HTMLElement {
-  static observedAttributes = ['src', 'name', 'toolbar', 'thumbnails', 'editable', 'save', 'download', 'file-menu', 'open', 'capture-select-all', 'theme', 'collab', 'room', 'user', 'base', 'comments', 'locale']
+  static observedAttributes = ['src', 'name', 'toolbar', 'thumbnails', 'editable', 'save', 'download', 'file-menu', 'open', 'capture-select-all', 'theme', 'collab', 'room', 'user', 'base', 'comments', 'locale', 'headless']
   private viewer?: MountedViewer
   private _file?: Blob | ArrayBuffer
   private _icons?: Icons
   private _strings?: StringsOverride
+  /** the viewer's state and commands, the same object for the element's whole life */
+  readonly controller = new ViewerController()
 
   get file() {
     return this._file
@@ -97,7 +105,7 @@ export class OfficeViewerElement extends HTMLElement {
     return {
       src: this._file ?? this.getAttribute('src'),
       name: this.getAttribute('name') ?? undefined,
-      toolbar: this.getAttribute('toolbar') !== 'false',
+      toolbar: this.hasAttribute('toolbar') ? this.getAttribute('toolbar') !== 'false' : undefined,
       thumbnails: this.getAttribute('thumbnails') !== 'false',
       editable: this.hasAttribute('editable') && this.getAttribute('editable') !== 'false',
       allowSave: this.getAttribute('save') !== 'false',
@@ -109,6 +117,8 @@ export class OfficeViewerElement extends HTMLElement {
       icons: this._icons,
       locale: LOCALE_NAMES.find((l) => l === this.getAttribute('locale')),
       strings: this._strings,
+      headless: this.hasAttribute('headless') && this.getAttribute('headless') !== 'false',
+      controller: this.controller,
       collab:
         this.getAttribute('collab') && this.getAttribute('room')
           ? {
