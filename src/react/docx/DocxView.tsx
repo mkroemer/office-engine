@@ -727,12 +727,19 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [outline, version, titleId],
   )
-  const topBlock = pages[Math.max(0, cur - 1)]?.start ?? 0
-  const activeHeading = headings.reduce((acc, h, i) => (h.bi <= Math.max(topBlock, caretBi) ? i : acc), -1)
+  // the heading jumped to counts as current while its page is the one in view, though it may sit
+  // below headings further up that page
+  const [jumpBi, setJumpBi] = useState(-1)
+  const curPage = pages[Math.max(0, cur - 1)]
+  const topBlock = curPage?.start ?? 0
+  const jumped = curPage && jumpBi >= curPage.start && jumpBi < curPage.end ? jumpBi : -1
+  const atBlock = Math.max(topBlock, caretBi, jumped)
+  const activeHeading = headings.reduce((acc, h, i) => (h.bi <= atBlock ? i : acc), -1)
   const gotoBlock = (bi: number) => {
     const sc = scrollRef.current
     const pi = pages.findIndex((p) => bi >= p.start && bi < p.end)
     if (!sc || pi < 0) return
+    setJumpBi(bi)
     sc.scrollTop = Math.max(0, tops[pi] - 16)
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
@@ -752,7 +759,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     const id = setTimeout(() => setCtlHeadings(outlineOf(st.blocks, titleId)), 150)
     return () => clearTimeout(id)
   }, [ctl, version, titleId, st])
-  const ctlActive = ctlHeadings.reduce((acc, h, i) => (h.bi <= Math.max(topBlock, caretBi) ? i : acc), -1)
+  const ctlActive = ctlHeadings.reduce((acc, h, i) => (h.bi <= atBlock ? i : acc), -1)
   useEffect(() => {
     ctl?.update({ zoom: { value: zoom, effective: z } })
   }, [ctl, zoom, z])
