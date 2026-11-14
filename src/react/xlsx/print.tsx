@@ -6,6 +6,8 @@ import type { Axis } from './axis'
 import { fitNumber, fontPx } from './fit'
 import { cssColor, cssPaint } from '../../core/color'
 import { dict } from '../../core/dict'
+import { formatCount } from '../strings'
+import { en, type Strings } from '../strings/en'
 
 export interface SheetLayout {
   rows: number
@@ -34,14 +36,13 @@ async function sheetRows(client: DocumentClient, sheet: number, rows: number): P
   return out
 }
 
-const loading = () => new Error('The sheet is still loading — try again in a moment')
 
 /** Shown values of the sheet as CSV / TSV (UTF-8 BOM for CSV so Excel reads accents). */
 const VALIGN: Record<string, CSSProperties['verticalAlign']> = dict({ 'flex-start': 'top', center: 'middle', 'flex-end': 'bottom' })
 
 /** The sheet as a table (used range, hidden rows / columns left out), fitted to the paper width. */
-export async function sheetPrintable(client: DocumentClient, sheet: number, l: SheetLayout, meta: WorkbookMeta): Promise<Printable> {
-  if (!l.done) throw loading()
+export async function sheetPrintable(client: DocumentClient, sheet: number, l: SheetLayout, meta: WorkbookMeta, t: Strings = en): Promise<Printable> {
+  if (!l.done) throw new Error(t.xlsx.sheetLoading)
   const data = await sheetRows(client, sheet, Math.min(l.rows, MAX_PRINT_ROWS))
   let lastR = -1
   let lastC = -1
@@ -160,6 +161,6 @@ export async function sheetPrintable(client: DocumentClient, sheet: number, l: S
     node,
     size: landscape ? 'landscape' : 'auto',
     margin: '12mm',
-    notice: l.rows > MAX_PRINT_ROWS ? `Only the first ${MAX_PRINT_ROWS.toLocaleString()} rows are included` : undefined,
+    notice: l.rows > MAX_PRINT_ROWS ? t.xlsx.printOnlyFirst(formatCount(t, MAX_PRINT_ROWS)) : undefined,
   }
 }
