@@ -16,6 +16,7 @@ import {
   type RefObject,
 } from 'react'
 import { cssColor } from '../../core/color'
+import { useStrings } from '../strings'
 
 const BORDER_GRID = <path d="M4 4h16v16H4zM12 4v16M4 12h16" strokeDasharray="1.2 2.6" opacity={0.5} strokeWidth={1.4} />
 
@@ -471,10 +472,11 @@ export function SizeBox(props: { value?: number; placeholder?: number; sizes?: n
     if (text !== null) set(parseFloat(text))
     inputRef.current?.blur()
   }
-  const title = props.title ?? 'Font size'
+  const t = useStrings()
+  const title = props.title ?? t.toolbar.fontSize
   return (
     <span ref={ref} className="de-size">
-      <button type="button" className="de-tb de-size-step" title="Decrease font size" aria-label="Decrease font size" disabled={props.disabled} onMouseDown={keep} onClick={() => set(Math.max(1, Math.ceil(base) - 1))}>
+      <button type="button" className="de-tb de-size-step" title={t.toolbar.fontSizeDown} aria-label={t.toolbar.fontSizeDown}disabled={props.disabled} onMouseDown={keep} onClick={() => set(Math.max(1, Math.ceil(base) - 1))}>
         <Icon name="minus" size={16} />
       </button>
       <input
@@ -512,7 +514,7 @@ export function SizeBox(props: { value?: number; placeholder?: number; sizes?: n
           setOpen(false)
         }}
       />
-      <button type="button" className="de-tb de-size-step" title="Increase font size" aria-label="Increase font size" disabled={props.disabled} onMouseDown={keep} onClick={() => set(Math.floor(base) + 1)}>
+      <button type="button" className="de-tb de-size-step" title={t.toolbar.fontSizeUp} aria-label={t.toolbar.fontSizeUp}disabled={props.disabled} onMouseDown={keep} onClick={() => set(Math.floor(base) + 1)}>
         <Icon name="plus" size={16} />
       </button>
       {open && (
@@ -551,6 +553,7 @@ const signature = (el: ReactElement) => {
  * Item widths are measured once per set of items and cached for resizes.
  */
 export function ToolbarRow({ children }: { children: ReactNode }) {
+  const t = useStrings()
   const items = flatten(children)
   const sig = items.map(signature).join('|')
   const rowRef = useRef<HTMLDivElement>(null)
@@ -614,7 +617,7 @@ export function ToolbarRow({ children }: { children: ReactNode }) {
       ))}
       {rest.length > 0 && (
         <span ref={moreRef} className="de-tb-color de-ebar-morewrap">
-          <button type="button" className={more ? 'de-tb de-tb-on' : 'de-tb'} title="More" aria-label="More tools" aria-expanded={more} onMouseDown={keep} onClick={() => setMore((m) => !m)}>
+          <button type="button" className={more ? 'de-tb de-tb-on' : 'de-tb'} title={t.toolbar.more} aria-label={t.toolbar.moreTools} aria-expanded={more} onMouseDown={keep} onClick={() => setMore((m) => !m)}>
             <Icon name="more" />
           </button>
           {more && (
@@ -685,6 +688,7 @@ export function ColorBtn(props: { icon: IconName; title: string; value?: string;
   const onPick = useRef(props.onPick)
   onPick.current = props.onPick
   const cur = props.value?.toLowerCase()
+  const t = useStrings()
 
   // native 'change' fires once the OS picker is confirmed (React's onChange would fire while dragging)
   useEffect(() => {
@@ -725,13 +729,13 @@ export function ColorBtn(props: { icon: IconName; title: string; value?: string;
       {open && (
         <PopBox onMouseDown={keep}>
           <button type="button" className="de-tb-none" onClick={() => (props.onPick(null), setOpen(false))}>
-            {props.noneLabel ?? 'None'}
+            {props.noneLabel ?? t.common.none}
           </button>
           <div className="de-tb-grid">{(props.palette ?? PALETTE).map(swatch)}</div>
-          <div className="de-tb-custom">Custom</div>
+          <div className="de-tb-custom">{t.toolbar.custom}</div>
           <div className="de-tb-grid">
             {custom.map(swatch)}
-            <button type="button" className="de-tb-add" title="Custom color…" aria-label="Custom color" onClick={openPicker}>
+            <button type="button" className="de-tb-add" title={t.toolbar.customColorTitle} aria-label={t.toolbar.customColor}onClick={openPicker}>
               <Icon name="plus" size={14} />
             </button>
           </div>
@@ -805,6 +809,7 @@ export function Pop(props: { icon: IconName; title: string; children: (close: ()
 /** rows × cols picker for new tables */
 export function GridPicker({ onPick }: { onPick: (r: number, c: number) => void }) {
   const [hover, setHover] = useState<[number, number]>([0, 0])
+  const t = useStrings()
   return (
     <div>
       <div className="de-gridpick" onMouseLeave={() => setHover([0, 0])}>
@@ -814,7 +819,7 @@ export function GridPicker({ onPick }: { onPick: (r: number, c: number) => void 
           return <button key={i} type="button" className={r <= hover[0] && c <= hover[1] ? 'on' : ''} onMouseEnter={() => setHover([r, c])} onMouseDown={keep} onClick={() => onPick(r, c)} />
         })}
       </div>
-      <div className="de-gridpick-label">{hover[0] ? `${hover[0]} × ${hover[1]}` : 'Table size'}</div>
+      <div className="de-gridpick-label">{hover[0] ? `${hover[0]} × ${hover[1]}` : t.toolbar.tableSize}</div>
     </div>
   )
 }
