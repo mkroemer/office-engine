@@ -158,6 +158,36 @@ What a kind has no use for does nothing (lists and justified text in cells). A b
 document (prevent its mouse down), or the command loses the selection. Tables, pictures, tracked changes and cell borders
 stay with the built-in toolbars.
 
+#### Ready-made controls
+
+For a host that wants the controls but its own layout, each of these is driven by the controller alone and placed
+anywhere around a headless viewer:
+
+```tsx
+import { DocViewer, FormatBar, OfficeUIProvider, OutlineList, SheetTabs, StatusText, useThemeRoot, ZoomBar } from '@p10node/office-engine'
+
+const root = useThemeRoot(theme)
+<OfficeUIProvider icons={icons} components={components} locale="de">
+  <header className={root.className} style={{ ...root.style, height: 'auto' }}>
+    <ZoomBar controller={ctl} /> <StatusText controller={ctl} />
+    <FormatBar controller={ctl} />
+  </header>
+  <aside className={root.className} style={root.style}><OutlineList controller={ctl} /><SheetTabs controller={ctl} /></aside>
+  <DocViewer src={file} controller={ctl} headless icons={icons} components={components} locale="de" theme={theme} />
+</OfficeUIProvider>
+```
+
+| Control | Shows |
+|---|---|
+| `ZoomBar` | zoom out, the zoom (a click switches between fitting the width and 100 %), zoom in; nothing for spreadsheets |
+| `StatusText` | the status line |
+| `OutlineList` | headings (indented), sheets or slides; a click shows it, the one in view is marked |
+| `SheetTabs` | a workbook's sheets as tabs; nothing for other documents |
+| `FormatBar` | while editing: undo, redo, size, bold / italic / underline / strike, alignment, lists (where there are lists), clear formatting |
+
+They render through the same components, icons, texts and design tokens as the built-in toolbars: outside `DocViewer`,
+`OfficeUIProvider` brings them, and an element with `useThemeRoot()`'s class and style brings the tokens.
+
 ### Comments
 
 ```tsx

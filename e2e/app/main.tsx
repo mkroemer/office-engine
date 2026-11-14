@@ -6,10 +6,11 @@
  *   texts: &locale=de, &fileLabel=… (a partial `strings` override of the File menu's label)
  *   &components=1: the host's own Button, Separator, Dialog and Toast (`data-host-*` markers)
  *   &headless=1: the document alone; the viewer is driven through window.__ctl (its controller) either way
+ *   &chrome=1: the host-placed controls (ZoomBar, StatusText, FormatBar, OutlineList, SheetTabs) in `#host-chrome`
  */
 import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { createViewerController, DocViewer, type DocViewerProps, type FileMenuItem, type UIComponents, type ViewerController } from '../../src'
+import { createViewerController, DocViewer, FormatBar, OutlineList, SheetTabs, StatusText, useThemeRoot, ZoomBar, type DocViewerProps, type FileMenuItem, type UIComponents, type ViewerController } from '../../src'
 
 type Ev = { type: string; [k: string]: unknown }
 declare global {
@@ -132,7 +133,31 @@ const initial: DocViewerProps = {
 function App() {
   const [props, setProps] = useState(initial)
   window.__setProps = (p) => setProps((cur) => ({ ...cur, ...p }))
-  return <DocViewer {...props} />
+  if (!q.has('chrome')) return <DocViewer {...props} />
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+      <HostChrome />
+      <DocViewer {...props} style={{ flex: 1, minHeight: 0 }} />
+    </div>
+  )
+}
+
+function HostChrome() {
+  const root = useThemeRoot()
+  const ctl = window.__ctl
+  return (
+    <div id="host-chrome" className={root.className} style={{ ...root.style, height: 'auto', minHeight: 0, flex: 'none' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <ZoomBar controller={ctl} />
+        <StatusText controller={ctl} />
+      </div>
+      <FormatBar controller={ctl} />
+      <div style={{ display: 'flex' }}>
+        <OutlineList controller={ctl} style={{ maxHeight: 160, width: 300 }} />
+        <SheetTabs controller={ctl} />
+      </div>
+    </div>
+  )
 }
 
 createRoot(document.getElementById('root')!).render(<App />)

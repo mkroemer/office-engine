@@ -14,6 +14,7 @@ export { IconsProvider, ICON_NAMES, type DropOption, type IconName, type Icons }
 export { OfficeUIProvider, UIComponentsProvider, type ButtonProps, type DialogAction, type DialogProps, type SelectProps, type ToastProps, type UIComponents } from './react/ui'
 export { StringsProvider, useStrings, resolveStrings, LOCALES, en, de, type Strings, type StringsOverride, type Locale } from './react/strings'
 export { ViewerController, createViewerController, useViewerState, type FormatCommand, type TextFormat, type ViewerState, type ViewerOutline, type OutlineItem } from './react/controller'
+export { FormatBar, OutlineList, SheetTabs, StatusText, ZoomBar } from './react/chrome'
 
 export { DocumentClient, setDefaultWorker, type OpenOptions } from './core/worker/client'
 export type { DocSource } from './core/source'

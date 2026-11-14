@@ -1119,6 +1119,10 @@
 }
 .de-outline-item:hover { background: var(--de-hover-solid); }
 .de-outline-item.on { color: var(--de-on-ink); font-weight: 600; }
+/* controls a host places around a headless viewer (chrome.tsx) */
+.de-ctl-zoom { display: inline-flex; align-items: center; gap: 2px; }
+.de-ctl-outline { display: flex; flex-direction: column; min-height: 0; overflow-y: auto; }
+.de-ctl-status { color: var(--de-muted); font-size: 12px; white-space: nowrap; }
 .de-outline-empty { flex-shrink: 0; padding: 8px 10px; color: var(--de-muted); }
 .de-outline-toggle {
   position: absolute;
