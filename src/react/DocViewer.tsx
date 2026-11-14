@@ -242,6 +242,7 @@ function Viewer(props: DocViewerProps) {
   const cmOpts = props.comments || {}
   if (cmCtl) {
     cmCtl.opts = cmOpts
+    cmCtl.t = t
     cmCtl.me = cmOpts.user ?? props.collab?.user ?? { name: 'Me' }
     cmCtl.canComment = !readOnly && (cmOpts.canComment ?? (editing && canEdit))
   }
