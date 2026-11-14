@@ -748,7 +748,7 @@ export function ColorBtn(props: { icon: IconName; title: string; value?: string;
           <div className="de-tb-custom">{t.toolbar.custom}</div>
           <div className="de-tb-grid">
             {custom.map(swatch)}
-            <button type="button" className="de-tb-add" title={t.toolbar.customColorTitle} aria-label={t.toolbar.customColor}onClick={openPicker}>
+            <button type="button" className="de-tb-add" title={t.toolbar.customColorTitle} aria-label={t.toolbar.customColor} onClick={openPicker}>
               <Icon name="plus" size={14} />
             </button>
           </div>
