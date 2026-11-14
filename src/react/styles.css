@@ -454,6 +454,9 @@
   pointer-events: none;
   z-index: 3;
 }
+.de-tabs[hidden] {
+  display: none;
+}
 .de-tabs {
   display: flex;
   align-items: stretch;

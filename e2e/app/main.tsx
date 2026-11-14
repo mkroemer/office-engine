@@ -4,19 +4,22 @@
  *   comments: &me=Ann&meId=u1 (author), &people=1 (mentions: Ann, Bob Stone, Cid), &comments=0 (hidden), &cmOpen=1
  *   &icons=1: every icon from a host resolver, as `<svg data-host-icon={name}>`
  *   texts: &locale=de, &fileLabel=… (a partial `strings` override of the File menu's label)
+ *   &headless=1: the document alone; the viewer is driven through window.__ctl (its controller) either way
  */
 import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { DocViewer, type DocViewerProps, type FileMenuItem } from '../../src'
+import { createViewerController, DocViewer, type DocViewerProps, type FileMenuItem, type ViewerController } from '../../src'
 
 type Ev = { type: string; [k: string]: unknown }
 declare global {
   interface Window {
     __events: Ev[]
     __setProps: (p: Partial<DocViewerProps>) => void
+    __ctl: ViewerController
   }
 }
 window.__events = []
+window.__ctl = createViewerController()
 const log = (e: Ev) => window.__events.push(e)
 
 const q = new URLSearchParams(location.search)
@@ -50,6 +53,8 @@ const initial: DocViewerProps = {
   theme: (q.get('theme') as DocViewerProps['theme']) ?? undefined,
   locale: (q.get('locale') as DocViewerProps['locale']) ?? undefined,
   strings: q.has('fileLabel') ? { file: { menu: q.get('fileLabel')! } } : undefined,
+  headless: flag('headless'),
+  controller: window.__ctl,
   onSave: q.has('onSave') ? async (blob, name) => void log({ type: 'save', name, b64: await b64(blob) }) : undefined,
   onDirtyChange: (dirty) => log({ type: 'dirty', dirty }),
   onRename: (name) => log({ type: 'rename', name }),

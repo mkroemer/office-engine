@@ -7,6 +7,7 @@ import { ViewerContext, type FileOps, type ViewerApi } from './common/Slots'
 import { StatusContext } from './common/Status'
 import { ConfirmDialog, PromptDialog, Toast } from './common/Dialog'
 import { download, Icon, IconsProvider, type Icons } from './edit/Toolbar'
+import { ViewerController } from './controller'
 import { DetailsDialog } from './file/DetailsDialog'
 import { FileMenu, useFileActions, type FileMenuItem } from './file/FileMenu'
 import { importFile, type Imported } from './file/importFile'
@@ -108,6 +109,17 @@ export interface DocViewerProps {
   locale?: Locale
   /** Texts replacing the locale's, key by key (see `Strings`): a group may be given in part, e.g. `{ file: { menu: 'Datei' } }`. */
   strings?: StringsOverride
+  /**
+   * The viewer's state and commands for the host (`createViewerController()`): zoom, page, outline, editing, unsaved
+   * changes, save, undo… Subscribe to it to draw your own controls; see `headless`.
+   */
+  controller?: ViewerController
+  /**
+   * The document alone: no top bar, zoom control, outline panel, sheet tabs or slide list (the host draws its own,
+   * driven by `controller`). While editing, the formatting toolbar keeps its row. The top bar shows when `toolbar` is
+   * set explicitly. Default false.
+   */
+  headless?: boolean
 }
 
 const EXT: Record<string, string> = { docx: '.docx', xlsx: '.xlsx', pptx: '.pptx' }
@@ -139,7 +151,12 @@ export function DocViewer(props: DocViewerProps) {
 function Viewer(props: DocViewerProps) {
   const t = useStrings()
   const fmtBytes = (n: number) => formatBytes(t, n)
-  const { src, name, className, style, toolbar = true, toolbarExtra, zoom, thumbnails, headers, credentials, worker, styleTarget, theme, onLoad, onError } = props
+  const { src, name, className, style, toolbarExtra, zoom, thumbnails, headers, credentials, worker, styleTarget, theme, onLoad, onError } = props
+  const headless = !!props.headless
+  const toolbar = props.toolbar ?? !headless
+  // without a controller from the host the viewer keeps its own: the view publishes to one either way
+  const ownCtl = useMemo(() => new ViewerController(), [])
+  const ctl = props.controller ?? ownCtl
   const dark = useDarkTheme(theme)
   const { allowEdit = true, allowSave = true, allowDownload = true, fileMenu = true, allowOpen = true, captureSelectAll = true, onSave, onDirtyChange } = props
   const [editing, setEditing] = useState(!!props.editable)
@@ -272,9 +289,12 @@ function Viewer(props: DocViewerProps) {
     cmCtl.select(root)
   }, [cmCtl, cmFocus, cmState.rev])
 
+  // once per opened document, also when the host passes a new callback on every render
+  const onLoadRef = useRef(onLoad)
+  onLoadRef.current = onLoad
   useEffect(() => {
-    if (client) onLoad?.(client)
-  }, [client, onLoad])
+    if (client) onLoadRef.current?.(client)
+  }, [client])
   useEffect(() => {
     if (error) onError?.(error)
   }, [error, onError])
@@ -339,8 +359,8 @@ function Viewer(props: DocViewerProps) {
   // next to its source, the document is a preview: it is edited through the source
   const docEditable = editing && canEdit && !codeShown
   const api = useMemo<ViewerApi>(
-    () => ({ bar: barEl, editable: docEditable, setDirty: setDocDirty, save, canDownload: allowDownload, client, fileOps, selectAll }),
-    [barEl, docEditable, setDocDirty, save, allowDownload, client],
+    () => ({ bar: barEl, editable: docEditable, setDirty: setDocDirty, save, canDownload: allowDownload, client, fileOps, selectAll, ctl, headless }),
+    [barEl, docEditable, setDocDirty, save, allowDownload, client, ctl, headless],
   )
 
   const editSource = (text: string) => {
@@ -499,6 +519,25 @@ function Viewer(props: DocViewerProps) {
   const busy = loading || (!!progress && pct < 100)
   const title = renamed ?? client?.name ?? docName ?? (typeof src === 'string' ? decodeURIComponent(src.split(/[?#]/)[0].split('/').pop() ?? '') : (src as File | undefined)?.name) ?? ''
 
+  // ---- controller: the viewer's part of the state, and its commands ----
+  const editAllowed = allowEdit && !readOnly && !codeShown
+  useEffect(() => {
+    ctl.update({ kind: client?.kind ?? null, loading: busy, editing: docEditable, canEdit: editAllowed && canEdit, dirty, saving })
+  }, [ctl, client, busy, docEditable, editAllowed, canEdit, dirty, saving])
+  const commands = useRef({ editAllowed, save, fileActions, cmCtl })
+  commands.current = { editAllowed, save, fileActions, cmCtl }
+  useEffect(() => {
+    ctl.attachViewer({
+      setEditing: (on) => {
+        if (!on || commands.current.editAllowed) setEditing(on)
+      },
+      save: () => commands.current.save(),
+      fileAction: (id) => commands.current.fileActions.run(id),
+      toggleComments: (open) => commands.current.cmCtl?.toggle(open),
+    })
+    return () => ctl.attachViewer(null)
+  }, [ctl])
+
   let body: ReactNode
   if (error) {
     body = (
@@ -525,7 +564,7 @@ function Viewer(props: DocViewerProps) {
 
   return (
     <IconsProvider icons={props.icons}>
-    <div ref={rootRef} className={'de-root' + (dark ? ' de-dark' : '') + (className ? ` ${className}` : '')} style={style} onKeyDown={onKeyDown}>
+    <div ref={rootRef} className={'de-root' + (dark ? ' de-dark' : '') + (headless ? ' de-headless' : '') + (className ? ` ${className}` : '')} style={style} onKeyDown={onKeyDown}>
       {toolbar && (
         <div className="de-bar">
           {client && <span className={`de-badge de-badge-${client.kind}`}>{client.info?.from ?? client.info?.converted ?? (client.info?.imported ? IMPORTED_BADGE[client.info.imported] : client.kind)}</span>}
@@ -579,7 +618,7 @@ function Viewer(props: DocViewerProps) {
           <div className="de-progress" style={{ width: `${busy ? Math.max(pct, 3) : 100}%`, opacity: busy ? 1 : 0 }} />
         </div>
       )}
-      {toolbar && client && docEditable && <div className="de-ebar-host" ref={setBarEl} />}
+      {(toolbar || headless) && client && docEditable && <div className="de-ebar-host" ref={setBarEl} />}
       <div className={'de-body' + (codeShown && stacked ? ' de-body-stacked' : '')} ref={bodyRef}>
         {codeShown && (
           <div className="de-src-pane" style={stacked ? { height: `${split * 100}%` } : { width: `${split * 100}%` }}>

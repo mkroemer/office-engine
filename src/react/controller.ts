@@ -1,0 +1,202 @@
+/**
+ * A viewer's controller: what the shown document's view is doing (zoom, page, outline, editing, unsaved changes) and the
+ * commands that drive it, for a host that draws its own controls around a headless viewer
+ * (`<DocViewer controller={ctl} headless />`). Framework-free: `subscribe` + `snapshot` (for `useSyncExternalStore` or any
+ * store), state replaced as a whole on every change (`rev` counts them). The viewer and its mounted view publish their
+ * state and register the commands they can run; a command with nobody to run it does nothing.
+ */
+import { useEffect } from 'react'
+import type { DocKind } from '../core/opc'
+import { stepZoom, type Zoom } from './common/ZoomControl'
+import { useLatest } from './common/hooks'
+
+/** an entry of the outline: a document's heading, a workbook's sheet, a presentation's slide */
+export interface OutlineItem {
+  id: string
+  title: string
+  /** 0 for the top level (headings only go deeper) */
+  level: number
+  /** the one in view */
+  current: boolean
+}
+
+export interface ViewerOutline {
+  kind: 'headings' | 'sheets' | 'slides'
+  items: OutlineItem[]
+}
+
+export interface ViewerState {
+  /** counts the changes */
+  rev: number
+  /** the open document's kind, null before one is open */
+  kind: DocKind | null
+  /** loading or downloading */
+  loading: boolean
+  editing: boolean
+  /** whether editing is possible (allowed, and the file is not view only) */
+  canEdit: boolean
+  /** unsaved changes */
+  dirty: boolean
+  saving: boolean
+  canUndo: boolean
+  canRedo: boolean
+  /** `value` as set ('fit' or a factor), `effective` the factor it comes to; null where the view has no zoom (spreadsheets) */
+  zoom: { value: Zoom; effective: number } | null
+  /** the page or slide in view, from 1, and how many there are (0 while a document is still being laid out) */
+  page: { current: number; count: number } | null
+  outline: ViewerOutline | null
+  /** the view's status line ("Page 2 of 7 · 1,204 words") */
+  status: string
+}
+
+/** commands a mounted view runs (each optional: a spreadsheet has no zoom) */
+export interface ViewCommands {
+  setZoom?(z: Zoom): void
+  goto?(id: string): void
+  gotoPage?(n: number): void
+  undo?(): void
+  redo?(): void
+  present?(): void
+}
+
+/** commands the viewer runs */
+export interface ViewerCommands {
+  setEditing(on: boolean): void
+  save(): Promise<void>
+  fileAction(id: string): void
+  toggleComments(open?: boolean): void
+}
+
+/** the view's part of the state, cleared when a view goes */
+const VIEW_STATE = { canUndo: false, canRedo: false, zoom: null, page: null, outline: null, status: '' } as const
+
+const EMPTY: ViewerState = { rev: 0, kind: null, loading: false, editing: false, canEdit: false, dirty: false, saving: false, ...VIEW_STATE }
+
+/** equal for the state's purposes: the same primitive, or the same JSON (small objects and the outline) */
+function same(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false
+  return JSON.stringify(a) === JSON.stringify(b)
+}
+
+export class ViewerController {
+  private state: ViewerState = EMPTY
+  private subs = new Set<() => void>()
+  private view: ViewCommands | null = null
+  private viewer: ViewerCommands | null = null
+
+  subscribe = (fn: () => void) => {
+    this.subs.add(fn)
+    return () => {
+      this.subs.delete(fn)
+    }
+  }
+
+  snapshot = () => this.state
+
+  // ---------------------------------------------------------------- commands
+
+  setEditing(on: boolean) {
+    this.viewer?.setEditing(on)
+  }
+
+  /** builds the edited file and hands it to `onSave` (or downloads it) */
+  save(): Promise<void> {
+    return this.viewer?.save() ?? Promise.resolve()
+  }
+
+  undo() {
+    this.view?.undo?.()
+  }
+
+  redo() {
+    this.view?.redo?.()
+  }
+
+  setZoom(z: Zoom) {
+    this.view?.setZoom?.(z)
+  }
+
+  zoomIn() {
+    this.zoomStep(1)
+  }
+
+  zoomOut() {
+    this.zoomStep(-1)
+  }
+
+  /** shows an outline entry: scrolls to a heading, shows a sheet or a slide */
+  goto(id: string) {
+    this.view?.goto?.(id)
+  }
+
+  /** scrolls to a page or slide, from 1 */
+  gotoPage(n: number) {
+    this.view?.gotoPage?.(n)
+  }
+
+  /** a presentation as a slideshow, from the slide in view */
+  present() {
+    this.view?.present?.()
+  }
+
+  print() {
+    this.fileAction('print')
+  }
+
+  /** a File menu action by its id: 'pdf', 'html', 'text:md', 'details', 'rename'… (see FileMenu) */
+  fileAction(id: string) {
+    this.viewer?.fileAction(id)
+  }
+
+  /** the comments panel open (true), closed (false) or the other way round */
+  toggleComments(open?: boolean) {
+    this.viewer?.toggleComments(open)
+  }
+
+  private zoomStep(dir: 1 | -1) {
+    const z = this.state.zoom
+    const next = z && stepZoom(z.effective, dir)
+    if (next) this.setZoom(next)
+  }
+
+  // ---------------------------------------------------------------- published by the viewer and its view
+
+  /** @internal the state changed: only what differs counts as a change */
+  update(p: Partial<Omit<ViewerState, 'rev'>>) {
+    let changed = false
+    for (const k of Object.keys(p) as (keyof typeof p)[]) {
+      if (!same(this.state[k], p[k])) {
+        changed = true
+        break
+      }
+    }
+    if (!changed) return
+    this.state = { ...this.state, ...p, rev: this.state.rev + 1 }
+    for (const fn of this.subs) fn()
+  }
+
+  /** @internal the mounted view's commands; null when it goes (its state is cleared) */
+  attachView(c: ViewCommands | null) {
+    this.view = c
+    if (!c) this.update(VIEW_STATE)
+  }
+
+  /** @internal the viewer's commands */
+  attachViewer(c: ViewerCommands | null) {
+    this.viewer = c
+  }
+}
+
+export const createViewerController = () => new ViewerController()
+
+/** Registers a view's commands (the latest closures each render) while it is mounted. */
+export function useViewCommands(ctl: ViewerController | null, commands: ViewCommands) {
+  const latest = useLatest(commands)
+  useEffect(() => {
+    if (!ctl) return
+    const call = <K extends keyof ViewCommands>(k: K) => ((...a: unknown[]) => (latest.current[k] as ((...x: unknown[]) => void) | undefined)?.(...a)) as ViewCommands[K]
+    ctl.attachView({ setZoom: call('setZoom'), goto: call('goto'), gotoPage: call('gotoPage'), undo: call('undo'), redo: call('redo'), present: call('present') })
+    return () => ctl.attachView(null)
+  }, [ctl, latest])
+}

@@ -204,6 +204,8 @@ export class DocxEditor implements RichHost<Paragraph> {
   /** paragraphs whose look on screen may be behind their style / list: a conversion was asked, none was applied yet */
   private stale = new Set<number>()
   onState?: (s: FormatState | null) => void
+  /** whether undo / redo can run, after every change of the selection or the document (the viewer's controller) */
+  onHistory?: (canUndo: boolean, canRedo: boolean) => void
   /** image selection changed (overlay with resize handles) */
   onImage?: (img: FormatState['img'] | null) => void
   /** style list changed (a built-in style was added to the document, a style got another look) */
@@ -1866,6 +1868,7 @@ export class DocxEditor implements RichHost<Paragraph> {
     const st = sel ? this.state(sel) : null
     this.onState?.(st)
     this.onImage?.(st?.img ?? null)
+    this.onHistory?.(this.canUndo, this.canRedo)
   }
 
   onSelection(sel: Sel | null) {
