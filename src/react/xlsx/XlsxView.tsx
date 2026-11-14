@@ -16,6 +16,7 @@ import { Toast } from '../common/Dialog'
 import { FindBar } from '../docx/FindBar'
 import { XlsxToolbar, type MergeMode } from './XlsxToolbar'
 import { Axis } from './axis'
+import { drawingBox, drawingEl, drawingExtent, useSheetDrawings } from './drawings'
 import { fitNumber, fontPx } from './fit'
 import { sheetPrintable } from './print'
 import { useCommentsCtl, useCommentsState, type CommentsCtl, type PlacedThread } from '../comments/Comments'
@@ -72,6 +73,8 @@ class XlsxStore {
   focusGrid = false
   /** edits that undo / redo can still take back (counted here: the worker's history says nothing until asked) */
   history = { undo: 0, redo: 0 }
+  /** edit results applied (here or a collaborator's): charts read their cells again */
+  edits = 0
   private listeners = new Set<() => void>()
   private off: () => void
 
@@ -169,6 +172,7 @@ class XlsxStore {
   /** applies an edit result: new styles, layout, sheet list + refetch of touched rows */
   applied(res: XlsxEditResult | null, meta: WorkbookMeta) {
     if (!res) return
+    this.edits++
     for (const st of res.styles ?? []) {
       meta.styles[st.index] = st.css
       meta.formats[st.index] = st.format
@@ -578,11 +582,14 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
   const [resizing, setResizing] = useState<{ axis: 'col' | 'row'; i: number; start: number; size: number } | null>(null)
 
   const { rowAxis, colAxis, frozen } = s
+  const drawings = useSheetDrawings(client, sheet, store.edits)
+  // the sheet reaches as far as its drawings, past its last filled cell
+  const drawn = drawingExtent(drawings, colAxis, rowAxis)
   const HW = Math.max(40, 12 + 7 * String(Math.max(s.rows, 1000)).length)
   const viewW = Math.max(0, size.w - HW)
   const viewH = Math.max(0, size.h - HH)
-  rowAxis.count = Math.max(s.rows + (s.done ? 20 : 1), Math.ceil(viewH / rowAxis.def) + 1, frozen.rows + 1, sel.fr + 2)
-  colAxis.count = Math.max(s.cols + 3, 26, Math.ceil(viewW / Math.max(1, colAxis.def)) + 1, frozen.cols + 1, sel.fc + 2)
+  rowAxis.count = Math.max(s.rows + (s.done ? 20 : 1), Math.ceil(viewH / rowAxis.def) + 1, frozen.rows + 1, sel.fr + 2, drawn.rows + 1)
+  colAxis.count = Math.max(s.cols + 3, 26, Math.ceil(viewW / Math.max(1, colAxis.def)) + 1, frozen.cols + 1, sel.fc + 2, drawn.cols + 1)
   const frozenW = colAxis.pos(frozen.cols)
   const frozenH = rowAxis.pos(frozen.rows)
   const totalW = colAxis.total()
@@ -745,6 +752,16 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
         out.push(cellEl(r, cell, undefined, undefined, filled))
       }
     }
+    // pictures and charts over the cells, where they reach into this pane
+    const px0 = colAxis.pos(cc0)
+    const px1 = colAxis.pos(cc1 + 1)
+    const py0 = rowAxis.pos(rr0)
+    const py1 = rowAxis.pos(rr1 + 1)
+    drawings.forEach((d, i) => {
+      const b = drawingBox(d, colAxis, rowAxis)
+      if (!b || b.x > px1 || b.x + b.w < px0 || b.y > py1 || b.y + b.h < py0) return
+      out.push(drawingEl('dr' + i, d, { left: b.x - ox, top: b.y - oy, width: b.w, height: b.h }))
+    })
     // selection range + active cell
     if (rect.r1 >= rr0 && rect.r0 <= rr1 && rect.c1 >= cc0 && rect.c0 <= cc1 && !oneCell) {
       out.push(
