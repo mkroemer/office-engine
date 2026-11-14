@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 import type { DocKind } from '../../core/opc'
 import { MOD } from '../common/ContextMenu'
 import type { FileOps } from '../common/Slots'
-import { download, Dropdown, pickFiles, type DropOption } from '../edit/Toolbar'
+import { download, Dropdown, pickFiles, type DropOption, type IconName } from '../edit/Toolbar'
 import { OPEN_ACCEPT } from './importFile'
 import { exportHtml, printDocument } from './print'
 import { useStrings } from '../strings'
@@ -25,7 +25,7 @@ const TEXT_FORMATS: Record<DocKind, { id: 'txt' | 'md' | 'csv' | 'tsv'; ext: str
 export interface FileMenuItem {
   label: string
   /** built-in icon name */
-  icon?: string
+  icon?: IconName
   /** shortcut / note on the right */
   hint?: string
   disabled?: boolean
@@ -101,8 +101,8 @@ export function useFileActions(o: FileActionsOptions): FileActions {
       { value: 'original', label: t.kind[kind], icon: 'save', hint: EXT[kind], head: t.file.downloadAs },
       { value: 'pdf', label: t.file.pdf, icon: 'pdf', hint: '.pdf' },
       ...(o.picture
-        ? [{ value: 'picture', label: o.picture.label, icon: 'image', hint: o.picture.ext }]
-        : [{ value: 'html', label: t.file.html, icon: 'html', hint: '.html' }, ...TEXT_FORMATS[kind].map((f) => ({ value: 'text:' + f.id, label: t.file[f.id], icon: 'doc', hint: f.ext }))]),
+        ? [{ value: 'picture', label: o.picture.label, icon: 'image', hint: o.picture.ext } as const]
+        : [{ value: 'html', label: t.file.html, icon: 'html', hint: '.html' } as const, ...TEXT_FORMATS[kind].map((f) => ({ value: 'text:' + f.id, label: t.file[f.id], icon: 'doc', hint: f.ext }) as const)]),
     ])
   }
   const tail: DropOption<string>[] = []

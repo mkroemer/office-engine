@@ -11,7 +11,7 @@ import { PptxEditor } from './PptxEditor'
 import { PptxToolbar, type AlignTo, type Arrange, type Rotate, type SlideCmd } from './PptxToolbar'
 import { ContextMenu, MOD, type MenuItem } from '../common/ContextMenu'
 import { Presenter } from './Presenter'
-import { pickFiles } from '../edit/Toolbar'
+import { Icon, pickFiles } from '../edit/Toolbar'
 import { SlideView, type SlideEditing } from './Slide'
 import { publishLocal, registerHost } from '../../collab/hosts'
 import { initialsOf, type CommentThread } from '../../core/comments'
@@ -790,7 +790,8 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
         <ZoomControl zoom={zoom} effective={scale} onChange={setZoom} />
         {!viewer.editable && (
           <button type="button" className="de-mode de-present-btn" title={str.pptx.presentTitle} onClick={() => setPresenting(current)}>
-            ▶ {str.pptx.present}
+            <Icon name="present" size={14} />
+            {str.pptx.present}
           </button>
         )}
         <Status text={str.pptx.status(formatCount(str, current + 1), formatCount(str, meta.count))} onStatus={onStatus} />

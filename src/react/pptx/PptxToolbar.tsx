@@ -2,13 +2,13 @@ import { useEffect, useState } from 'react'
 import type { ShapeKind } from '../../core/pptx/types'
 import { MOD } from '../common/ContextMenu'
 import { EditorBar } from '../common/Slots'
-import { Btn, ColorBtn, Dropdown, fontName, fontOptions, Menu, Select, Sep, SizeBox } from '../edit/Toolbar'
+import { Btn, ColorBtn, Dropdown, fontName, fontOptions, Menu, Select, Sep, SizeBox, type IconName } from '../edit/Toolbar'
 import type { PptxEditor, PptxFormat } from './PptxEditor'
 import { formatNumber, useStrings, type Strings } from '../strings'
 
 const HIGHLIGHTS = ['#ffff00', '#00ff00', '#00ffff', '#ff00ff', '#ff0000', '#0000ff', '#ffc000', '#92d050', '#c0c0c0', '#000000']
 
-const SHAPES: { value: keyof Strings['pptx']['shapes']; icon?: string; sep?: boolean }[] = [
+const SHAPES: { value: keyof Strings['pptx']['shapes']; icon?: IconName; sep?: boolean }[] = [
   { value: 'text', icon: 'textbox' },
   { value: 'image', icon: 'image' },
   { value: 'line', icon: 'line' },

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Icon } from '../edit/Toolbar'
+import { Icon, type IconName } from '../edit/Toolbar'
 
 export interface MenuItem {
   label: string
@@ -10,7 +10,7 @@ export interface MenuItem {
   sep?: boolean
   /** shortcut / secondary text */
   hint?: string
-  icon?: string
+  icon?: IconName
   /** small section title above this item */
   head?: string
   /** submenu: the item opens these beside it */
