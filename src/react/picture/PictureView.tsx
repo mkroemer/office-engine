@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { svgImage } from '../../core/svgfile'
 import type { DocumentClient } from '../../core/worker/client'
 import { useFileOps } from '../common/Slots'
+import { formatNumber, useStrings } from '../strings'
 
 type Pic = { url: string; w: number; h: number; alt: string } | { error: string }
 
@@ -10,6 +11,7 @@ type Pic = { url: string; w: number; h: number; alt: string } | { error: string 
  * Drawn from the file's text (the Code pane edits it); the document built from it is what Download as Word gives.
  */
 export function PictureView({ client }: { client: DocumentClient }) {
+  const t = useStrings()
   const [pic, setPic] = useState<Pic | null>(null)
   useEffect(() => {
     let live = true
@@ -37,11 +39,11 @@ export function PictureView({ client }: { client: DocumentClient }) {
   const shown = pic && 'url' in pic ? pic : null
   useFileOps({
     printable: async () => {
-      if (!shown) throw new Error('The picture is not shown')
+      if (!shown) throw new Error(t.picture.notShown)
       return { size: 'auto', margin: '1cm', node: <img src={shown.url} alt={shown.alt} style={{ width: `${shown.w}px`, maxWidth: '100%' }} /> }
     },
     text: async () => ((await client.call('plain.source')) as string | null) ?? '',
-    stats: () => (shown ? [['Picture size', `${Math.round(shown.w)} × ${Math.round(shown.h)} px`]] : []),
+    stats: () => (shown ? [[t.picture.size, `${formatNumber(t, Math.round(shown.w))} × ${formatNumber(t, Math.round(shown.h))} px`]] : []),
   })
   if (!pic)
     return (
@@ -53,7 +55,7 @@ export function PictureView({ client }: { client: DocumentClient }) {
     return (
       <div className="de-center">
         <div className="de-error" role="alert">
-          <strong>SVG picture not drawn.</strong>
+          <strong>{t.picture.notDrawn}</strong>
           <div>{pic.error}</div>
         </div>
       </div>
