@@ -13,12 +13,9 @@ export const en = {
     save: 'Save',
     delete: 'Delete',
     edit: 'Edit',
-    more: 'More',
     none: 'None',
     apply: 'Apply',
     remove: 'Remove',
-    insert: 'Insert',
-    loading: 'Loading…',
     error: (message: string) => `Error: ${message}`,
     stillLoading: 'The document is still loading — try again in a moment',
   },
@@ -56,7 +53,7 @@ export const en = {
 
   /** file names of new documents (the extension is added) */
   untitled: { docx: 'Untitled document', xlsx: 'Untitled spreadsheet', pptx: 'Untitled presentation' },
-  /** what File → New makes, in "A new … replaces the current document" */
+  /** what File → New makes: the subject of `bar.replaceNew` */
   newWhat: { docx: 'document', xlsx: 'spreadsheet', pptx: 'presentation' },
 
   kind: { docx: 'Word document', xlsx: 'Excel workbook', pptx: 'PowerPoint presentation' },
@@ -193,7 +190,6 @@ export const en = {
     selectAll: 'Select all',
     clipboardBlocked: (keys: string) => `The browser blocked clipboard access — use ${keys} to paste`,
     useKeys: (keys: string) => `Use ${keys}`,
-    find: 'Find',
     findReplace: 'Find & replace',
     /** a menu entry or button with its shortcut */
     keyed: (label: string, keys: string) => `${label} (${keys})`,
@@ -562,7 +558,7 @@ export const en = {
 
   source: {
     source: 'Source',
-    lines: (n: number) => (n === 1 ? 'line' : 'lines'),
+    lines: (n: number): string => (n === 1 ? 'line' : 'lines'),
     copy: 'Copy the source',
     download: 'Download the source',
     input: (format: string) => `${format} source`,
