@@ -249,7 +249,7 @@ function PicView({ el, client, live }: { el: Extract<SlideEl, { t: 'pic' }>; cli
           {str.pptx.imageOf(el.target?.split('.').pop()?.toUpperCase() ?? '')}
         </div>
       ) : null}
-      {el.video && <div className="de-ph" style={{ position: 'absolute', right: 8, bottom: 8, padding: '2px 6px', border: 0, background: 'rgba(0,0,0,.6)', color: '#fff' }}>▶ {str.pptx.media}</div>}
+      {el.video && <div className="de-ph" style={{ position: 'absolute', right: 8, bottom: 8, padding: '2px 6px', border: 0, background: 'var(--de-tip-bg, rgba(0,0,0,.6))', color: 'var(--de-tip-ink, #fff)' }}>▶ {str.pptx.media}</div>}
     </div>
   )
 }
@@ -322,7 +322,7 @@ export const SlideView = memo(function SlideView({ model, client, scale, live = 
   const bg = useFillCss(client, model.bg, live)
   return (
     <div className={model.hidden ? 'de-slide de-hidden-slide' : 'de-slide'} style={{ width: model.w * scale, height: model.h * scale }}>
-      <div className="de-slide-inner" style={{ width: model.w, height: model.h, transform: `scale(${scale})`, background: '#fff', ...(bg ?? {}) }}>
+      <div className="de-slide-inner" style={{ width: model.w, height: model.h, transform: `scale(${scale})`, background: 'var(--de-page, #fff)', ...(bg ?? {}) }}>
         {model.els.map((el, i) => (
           <ElView key={i} el={el} client={client} live={live} editing={editing} />
         ))}

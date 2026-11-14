@@ -7,6 +7,7 @@ import { ViewerContext, type FileOps, type ViewerApi } from './common/Slots'
 import { StatusContext } from './common/Status'
 import { ConfirmDialog, PromptDialog, Toast } from './common/Dialog'
 import { download, Icon, IconsProvider, type Icons } from './edit/Toolbar'
+import { UIComponentsProvider, type UIComponents } from './ui'
 import { DetailsDialog } from './file/DetailsDialog'
 import { FileMenu, useFileActions, type FileMenuItem } from './file/FileMenu'
 import { importFile, type Imported } from './file/importFile'
@@ -14,7 +15,8 @@ import { blankPptx, parasToDocx, rowsToXlsx } from '../core/convert'
 import type { DocKind } from '../core/opc'
 import { extOf, HAS_SOURCE, PLAIN_EXT, PLAIN_FILE, unpackedName, type PlainFormat } from '../core/plain'
 import { injectStyles } from './injectStyles'
-import { isTextEntry, useDarkTheme, useSize, type Theme } from './common/hooks'
+import { isTextEntry, useSize } from './common/hooks'
+import { useThemeRoot, type Theme } from './theme'
 import { SourceEditor } from './source/SourceEditor'
 import { PictureView } from './picture/PictureView'
 import { PptxView } from './pptx/PptxView'
@@ -52,8 +54,14 @@ export interface DocViewerProps {
   /** Where to inject the stylesheet (document or a shadow root). */
   styleTarget?: Document | ShadowRoot
   /**
-   * Color scheme of the viewer chrome (bars, menus, dialogs): 'light', 'dark' or 'auto' (follows the OS / browser setting).
-   * The document itself keeps its own colors. Default 'light'.
+   * Inject the stylesheet. Default true. Set false when the page loads `@p10node/office-engine/styles.css` itself
+   * (a CSP without inline styles, a cascade layer of its own, a bundler that extracts CSS).
+   */
+  injectStyles?: boolean
+  /**
+   * Color scheme of the viewer chrome (bars, menus, dialogs): 'light', 'dark' or 'auto' (follows the OS / browser setting),
+   * or a theme object with that mode and design token overrides (see docs/theming.md). The document itself keeps its own
+   * colors. Default 'light'.
    */
   theme?: Theme
   onLoad?: (client: DocumentClient) => void
@@ -104,6 +112,11 @@ export interface DocViewerProps {
    * Each is rendered in `span.de-icon`, sized by font-size (1em).
    */
   icons?: Icons
+  /**
+   * The host's own UI components (`Button`, `Select`, `Separator`, `Dialog`, `Toast`), rendered in the toolbars and
+   * dialogs instead of the built-in ones; each one left out keeps the built-in one. See docs/theming.md.
+   */
+  components?: Partial<UIComponents>
   /** Language of the viewer's texts (bars, menus, dialogs, messages): 'en' or 'de'. Default 'en'. */
   locale?: Locale
   /** Texts replacing the locale's, key by key (see `Strings`): a group may be given in part, e.g. `{ file: { menu: 'Datei' } }`. */
@@ -140,7 +153,7 @@ function Viewer(props: DocViewerProps) {
   const t = useStrings()
   const fmtBytes = (n: number) => formatBytes(t, n)
   const { src, name, className, style, toolbar = true, toolbarExtra, zoom, thumbnails, headers, credentials, worker, styleTarget, theme, onLoad, onError } = props
-  const dark = useDarkTheme(theme)
+  const root = useThemeRoot(theme, style)
   const { allowEdit = true, allowSave = true, allowDownload = true, fileMenu = true, allowOpen = true, captureSelectAll = true, onSave, onDirtyChange } = props
   const [editing, setEditing] = useState(!!props.editable)
   useEffect(() => {
@@ -149,7 +162,10 @@ function Viewer(props: DocViewerProps) {
   const [dirty, setDirtyState] = useState(false)
   const [saving, setSaving] = useState(false)
   const [barEl, setBarEl] = useState<HTMLDivElement | null>(null)
-  useInsertionEffect(() => injectStyles(styleTarget), [styleTarget])
+  const inject = props.injectStyles ?? true
+  useInsertionEffect(() => {
+    if (inject) injectStyles(styleTarget)
+  }, [styleTarget, inject])
   // File → New / Open: a local file shown instead of `src` until the host passes another `src`
   const [opened, setOpened] = useState<Imported | null>(null)
   const [renamed, setRenamed] = useState<string | null>(null)
@@ -525,7 +541,8 @@ function Viewer(props: DocViewerProps) {
 
   return (
     <IconsProvider icons={props.icons}>
-    <div ref={rootRef} className={'de-root' + (dark ? ' de-dark' : '') + (className ? ` ${className}` : '')} style={style} onKeyDown={onKeyDown}>
+    <UIComponentsProvider components={props.components}>
+    <div ref={rootRef} className={root.className + (className ? ` ${className}` : '')} style={root.style} onKeyDown={onKeyDown}>
       {toolbar && (
         <div className="de-bar">
           {client && <span className={`de-badge de-badge-${client.kind}`}>{client.info?.from ?? client.info?.converted ?? (client.info?.imported ? IMPORTED_BADGE[client.info.imported] : client.kind)}</span>}
@@ -680,6 +697,7 @@ function Viewer(props: DocViewerProps) {
         />
       )}
     </div>
+    </UIComponentsProvider>
     </IconsProvider>
   )
 }
