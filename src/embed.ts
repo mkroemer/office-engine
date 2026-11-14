@@ -2,12 +2,15 @@ import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import './core/default-worker'
 import { DocViewer, type DocViewerProps } from './react/DocViewer'
+import { ViewerController } from './react/controller'
 
 export type MountOptions = Omit<DocViewerProps, 'styleTarget'>
 
 const THEMES = ['light', 'dark', 'auto'] as const
 
 export interface MountedViewer {
+  /** the viewer's state and commands (the one passed in `options.controller`, else its own) */
+  controller: ViewerController
   update(next: Partial<MountOptions>): void
   destroy(): void
 }
@@ -16,10 +19,12 @@ export interface MountedViewer {
 export function mount(el: HTMLElement, options: MountOptions): MountedViewer {
   let root: Root | null = createRoot(el)
   let props = options
+  const controller = options.controller ?? new ViewerController()
   const shadow = el.getRootNode() instanceof ShadowRoot ? (el.getRootNode() as ShadowRoot) : undefined
-  const render = () => root?.render(createElement(DocViewer, { ...props, styleTarget: shadow }))
+  const render = () => root?.render(createElement(DocViewer, { ...props, controller, styleTarget: shadow }))
   render()
   return {
+    controller,
     update(next) {
       props = { ...props, ...next }
       render()
@@ -35,14 +40,16 @@ export function mount(el: HTMLElement, options: MountOptions): MountedViewer {
  * `<office-viewer src="/file.xlsx" style="height:600px"></office-viewer>`
  * Rendered inside a shadow root so host page CSS cannot leak in.
  * Attributes: src, name, editable, toolbar / thumbnails / save / download / file-menu / open / capture-select-all ("false" to turn off),
- * theme ("light" | "dark" | "auto");
+ * theme ("light" | "dark" | "auto"), headless (the document alone, driven through `controller`);
  * real-time collaboration: collab (hub WebSocket URL), room, user (display name), base (snapshot seq `src` was opened at).
- * Property: `file` (File/Blob/ArrayBuffer) for local data.
+ * Properties: `file` (File/Blob/ArrayBuffer) for local data; `controller` (ViewerController) for the viewer's state and commands.
  */
 export class OfficeViewerElement extends HTMLElement {
-  static observedAttributes = ['src', 'name', 'toolbar', 'thumbnails', 'editable', 'save', 'download', 'file-menu', 'open', 'capture-select-all', 'theme', 'collab', 'room', 'user', 'base', 'comments']
+  static observedAttributes = ['src', 'name', 'toolbar', 'thumbnails', 'editable', 'save', 'download', 'file-menu', 'open', 'capture-select-all', 'theme', 'collab', 'room', 'user', 'base', 'comments', 'headless']
   private viewer?: MountedViewer
   private _file?: Blob | ArrayBuffer
+  /** the viewer's state and commands, the same object for the element's whole life */
+  readonly controller = new ViewerController()
 
   get file() {
     return this._file
@@ -85,6 +92,8 @@ export class OfficeViewerElement extends HTMLElement {
       allowOpen: this.getAttribute('open') !== 'false',
       captureSelectAll: this.getAttribute('capture-select-all') !== 'false',
       theme: THEMES.find((t) => t === this.getAttribute('theme')),
+      headless: this.hasAttribute('headless') && this.getAttribute('headless') !== 'false',
+      controller: this.controller,
       collab:
         this.getAttribute('collab') && this.getAttribute('room')
           ? {

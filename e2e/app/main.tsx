@@ -2,19 +2,22 @@
  * Fixture for the browser tests: DocViewer configured from the query string, callbacks recorded on window.
  *   ?src=samples/sample.docx&editable=1&allowSave=0&onSave=1&items=1&close=1&collab=ws://…&room=r
  *   comments: &me=Ann&meId=u1 (author), &people=1 (mentions: Ann, Bob Stone, Cid), &comments=0 (hidden), &cmOpen=1
+ *   &headless=1: the document alone; the viewer is driven through window.__ctl (its controller) either way
  */
 import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { DocViewer, type DocViewerProps, type FileMenuItem } from '../../src'
+import { createViewerController, DocViewer, type DocViewerProps, type FileMenuItem, type ViewerController } from '../../src'
 
 type Ev = { type: string; [k: string]: unknown }
 declare global {
   interface Window {
     __events: Ev[]
     __setProps: (p: Partial<DocViewerProps>) => void
+    __ctl: ViewerController
   }
 }
 window.__events = []
+window.__ctl = createViewerController()
 const log = (e: Ev) => window.__events.push(e)
 
 const q = new URLSearchParams(location.search)
@@ -46,6 +49,8 @@ const initial: DocViewerProps = {
   thumbnails: flag('thumbnails'),
   captureSelectAll: flag('captureSelectAll'),
   theme: (q.get('theme') as DocViewerProps['theme']) ?? undefined,
+  headless: flag('headless'),
+  controller: window.__ctl,
   onSave: q.has('onSave') ? async (blob, name) => void log({ type: 'save', name, b64: await b64(blob) }) : undefined,
   onDirtyChange: (dirty) => log({ type: 'dirty', dirty }),
   onRename: (name) => log({ type: 'rename', name }),

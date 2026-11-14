@@ -8,6 +8,7 @@ import { claimFocus, lowerIndex, useForceUpdate, useIsoLayoutEffect, useScroll, 
 import { useFileOps, useSelectAll, useViewer } from '../common/Slots'
 import { Status } from '../common/Status'
 import { ZoomControl, type Zoom } from '../common/ZoomControl'
+import { useViewCommands } from '../controller'
 import { ContextMenu, MOD, type MenuItem } from '../common/ContextMenu'
 import { PromptDialog, Toast, type PromptSpec } from '../common/Dialog'
 import { domFromPos, getSel, opInsert, posFromDom } from '../edit/input'
@@ -742,6 +743,48 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     )
   }
 
+  // ---- controller: zoom, page, headings, undo ----
+  const { ctl, headless } = viewer
+  // the headings for the controller: read again once the document stops changing, not on every keystroke
+  const [ctlHeadings, setCtlHeadings] = useState<{ bi: number; lvl: number; text: string }[]>([])
+  useEffect(() => {
+    if (!ctl) return
+    const id = setTimeout(() => setCtlHeadings(outlineOf(st.blocks, titleId)), 150)
+    return () => clearTimeout(id)
+  }, [ctl, version, titleId, st])
+  const ctlActive = ctlHeadings.reduce((acc, h, i) => (h.bi <= Math.max(topBlock, caretBi) ? i : acc), -1)
+  useEffect(() => {
+    ctl?.update({ zoom: { value: zoom, effective: z } })
+  }, [ctl, zoom, z])
+  useEffect(() => {
+    ctl?.update({ page: { current: cur, count: pageCount } })
+  }, [ctl, cur, pageCount])
+  useEffect(() => {
+    ctl?.update({ outline: { kind: 'headings', items: ctlHeadings.map((h, i) => ({ id: String(h.bi), title: h.text, level: h.lvl, current: i === ctlActive })) } })
+  }, [ctl, ctlHeadings, ctlActive])
+  useEffect(() => {
+    if (!ctl) return
+    editor.onHistory = (canUndo, canRedo) => ctl.update({ canUndo, canRedo })
+    return () => {
+      editor.onHistory = undefined
+    }
+  }, [ctl, editor])
+  useViewCommands(ctl, {
+    setZoom,
+    goto: (id) => gotoBlock(Number(id)),
+    gotoPage: (n) => {
+      const sc = scrollRef.current
+      const top = tops[Math.min(Math.max(1, n), tops.length) - 1]
+      if (sc && top !== undefined) sc.scrollTop = Math.max(0, top - 16)
+    },
+    undo: () => {
+      if (isEditing) editor.undo()
+    },
+    redo: () => {
+      if (isEditing) editor.redo()
+    },
+  })
+
   return (
     <div style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex' }}>
       <div
@@ -875,7 +918,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
           styles={meta?.styles ?? []}
           onFind={() => setFind((f) => ({ ...f, open: true }))}
           outline={outline}
-          onOutline={() => setOutline((o) => !o)}
+          onOutline={headless ? undefined : () => setOutline((o) => !o)}
           painter={painter}
           onLink={askLink}
           image={imageActions}
@@ -884,7 +927,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
           onNotice={setToast}
         />
       )}
-      {!isEditing && done && (
+      {!isEditing && done && !headless && (
         <button type="button" className={outline ? 'de-outline-toggle on' : 'de-outline-toggle'} title="Document outline" onClick={() => setOutline((o) => !o)}>
           ☰
         </button>
@@ -897,7 +940,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
       {prompt && <PromptDialog spec={prompt} onClose={() => setPrompt(null)} />}
       {toast && <Toast text={toast} onDone={() => setToast(null)} />}
       {cmMarks.length > 0 && <style>{markCss('.de-pages', cmMarks, cmState.active)}</style>}
-      <ZoomControl zoom={zoom} effective={z} onChange={setZoom} />
+      {!headless && <ZoomControl zoom={zoom} effective={z} onChange={setZoom} />}
       <Status text={status} onStatus={onStatus} />
     </div>
   )

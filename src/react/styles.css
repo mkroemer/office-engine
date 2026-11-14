@@ -451,6 +451,9 @@
   pointer-events: none;
   z-index: 3;
 }
+.de-tabs[hidden] {
+  display: none;
+}
 .de-tabs {
   display: flex;
   align-items: stretch;
@@ -611,6 +614,18 @@
   max-width: min(360px, 90vw);
   padding: 6px;
   background: var(--de-ebar);
+}
+/* a host's icon (DocViewer `icons`), sized by font-size */
+.de-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.de-icon > svg {
+  width: 1em;
+  height: 1em;
 }
 .de-tb {
   appearance: none;

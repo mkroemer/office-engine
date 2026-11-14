@@ -100,7 +100,8 @@ export function DocxToolbar(props: {
   styles: StyleInfo[]
   onFind: () => void
   outline: boolean
-  onOutline: () => void
+  /** the outline panel opened / closed; no button without it (a headless viewer: the host shows the outline) */
+  onOutline?: () => void
   painter: boolean
   onLink: () => void
   image: ImageActions
@@ -299,7 +300,7 @@ export function DocxToolbar(props: {
       <Btn icon="pagebreak" title={`Page break (${MOD}Enter)`} disabled={dis || st?.inTable} onClick={() => editor.insertPageBreak()} />
       <Btn icon="clear" title={`Clear formatting (${MOD}\\)`} disabled={dis} onClick={() => editor.clearFormat()} />
       <Sep />
-      <Btn icon="outline" title="Document outline" active={props.outline} onClick={props.onOutline} />
+      {props.onOutline && <Btn icon="outline" title="Document outline" active={props.outline} onClick={props.onOutline} />}
       <Btn icon="search" title={`Find & replace (${MOD}F)`} onClick={props.onFind} />
     </EditorBar>
   )

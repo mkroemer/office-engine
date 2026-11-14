@@ -310,6 +310,7 @@ export class PptxPresentation {
       bg: r.background(),
       els,
       hidden: slide.root.a.show === '0',
+      title: r.title,
     }
   }
 
@@ -456,6 +457,8 @@ function readXfrm(x: XEl | undefined): Box | undefined {
 }
 
 class SlideRenderer {
+  /** the text of the slide's title placeholder, once walked */
+  title: string | undefined
   constructor(
     private pres: PptxPresentation,
     private slide: Part,
@@ -871,6 +874,11 @@ class SlideRenderer {
     const idAttr = path(el, 'nvSpPr', 'cNvPr')?.a.id
     const sid = part === this.slide && el.n === 'sp' && idAttr ? Number(idAttr) : undefined
     const text = el.n === 'sp' ? this.textBody(kid(el, 'txBody'), chain, ph, kid(style, 'fontRef'), part, sid) : undefined
+    // the slide's own title placeholder names the slide (outline, slide list)
+    if (text && part === this.slide && this.title === undefined && (ph?.type === 'title' || ph?.type === 'ctrTitle')) {
+      const t = text.paras.map((p) => p.runs.map((r) => r.text).join('')).join(' ').replace(/\s+/g, ' ').trim()
+      if (t) this.title = t
+    }
     if ((!fill || fill.t === 'none') && !stroke && !text) return
     out.push({ t: 'shape', box, geom, adj, fill, stroke, text, path: pathD, sid })
   }

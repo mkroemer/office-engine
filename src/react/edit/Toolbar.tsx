@@ -1,7 +1,9 @@
 import {
   Children,
+  createContext,
   Fragment,
   isValidElement,
+  useContext,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -147,7 +149,20 @@ const P: Record<string, ReactNode> = {
   commentAdd: <path d="M5 5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-8l-4 3.5V16H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM12 8v5M9.5 10.5h5" />,
 }
 
+/** the names of the viewer's icons, for a host's own set (`<DocViewer icons>`) */
+export const ICON_NAMES = Object.keys(P)
+
+/** a host's icons by name (DocViewer `icons`), shown instead of the built-in ones; each sized by font-size (1em) */
+export const IconsContext = createContext<Partial<Record<string, ReactNode>> | null>(null)
+
 export function Icon({ name, size = 18 }: { name: string; size?: number }) {
+  const own = useContext(IconsContext)?.[name]
+  if (own)
+    return (
+      <span className="de-icon" style={{ fontSize: size, width: size, height: size }} aria-hidden>
+        {own}
+      </span>
+    )
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
       {P[name]}

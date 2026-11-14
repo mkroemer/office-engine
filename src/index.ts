@@ -9,6 +9,8 @@ export { SlideView } from './react/pptx/Slide'
 export { useDocument, type DocumentState } from './react/useDocument'
 export { injectStyles, stylesText } from './react/injectStyles'
 export type { Zoom } from './react/common/ZoomControl'
+export { ViewerController, createViewerController, type ViewerState, type ViewerOutline, type OutlineItem } from './react/controller'
+export { ICON_NAMES } from './react/edit/Toolbar'
 export type { Theme } from './react/common/hooks'
 
 export { DocumentClient, setDefaultWorker, type OpenOptions } from './core/worker/client'
