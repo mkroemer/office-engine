@@ -85,7 +85,8 @@ CSS is auto-injected, no import needed. Container must have a height.
 
 For a host that draws its own controls around the document: `headless` leaves the viewer with the document alone, and a
 `controller` (`createViewerController()`) carries its state and the commands that drive it. While editing, the formatting
-toolbar keeps its row above the document; dialogs, the find bar and the comments panel are the viewer's own.
+toolbar keeps its row above the document; dialogs, the find bar and the comments panel are the viewer's own. `toolbar`
+set explicitly brings back the top bar (File menu, comments, Save) and leaves the rest headless.
 
 ```tsx
 import { createViewerController, DocViewer } from '@p10node/office-engine'

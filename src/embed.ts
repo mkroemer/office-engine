@@ -83,7 +83,7 @@ export class OfficeViewerElement extends HTMLElement {
     return {
       src: this._file ?? this.getAttribute('src'),
       name: this.getAttribute('name') ?? undefined,
-      toolbar: this.getAttribute('toolbar') !== 'false',
+      toolbar: this.hasAttribute('toolbar') ? this.getAttribute('toolbar') !== 'false' : undefined,
       thumbnails: this.getAttribute('thumbnails') !== 'false',
       editable: this.hasAttribute('editable') && this.getAttribute('editable') !== 'false',
       allowSave: this.getAttribute('save') !== 'false',
