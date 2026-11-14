@@ -171,7 +171,7 @@ type Resolve = (name: IconName, size: number) => ReactNode | undefined
 
 const IconsContext = createContext<Resolve | null>(null)
 
-/** the host's icon for `name`, or `undefined` for the built-in one */
+/** the host's icon for `name`, or `undefined` for the built-in one; `false` counts as none, as a resolver written `name === 'x' && <X />` returns it */
 export function hostIcon(icons: Icons | undefined, name: IconName, size: number): ReactNode | undefined {
   if (!icons) return undefined
   const own = typeof icons === 'function' ? icons(name, { size }) : icons[name]

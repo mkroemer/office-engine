@@ -10,7 +10,7 @@ const html = (icons: Icons | undefined, name: IconName, size?: number) =>
   )
 
 describe('icons', () => {
-  test('names cover the controls that had text glyphs', () => {
+  test('names exist for zoom, outline, Present, add sheet and Replace', () => {
     for (const n of ['zoomIn', 'zoomOut', 'outline', 'present', 'sheetAdd', 'replace', 'close'] as const) expect(ICON_NAMES).toContain(n)
   })
 
