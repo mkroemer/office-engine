@@ -89,6 +89,16 @@ describe('controller and headless mode', () => {
     await until(v, "s.format.bold && /255, 255, 0|ffff00/i.test(s.format.highlight ?? '')")
     // lists are not a cell format: nothing happens
     await page.evaluate(() => window.__ctl.format({ op: 'list', list: 'bullet' }))
+
+    // viewing: undo is not offered and does not change the workbook
+    await until(v, 's.canUndo')
+    await page.evaluate(() => window.__ctl.setEditing(false))
+    await until(v, '!s.editing && !s.canUndo && s.format === null')
+    await page.evaluate(() => window.__ctl.undo())
+    await page.waitForTimeout(300)
+    await page.evaluate(() => window.__ctl.setEditing(true))
+    await v.clickCell('J10')
+    await until(v, 's.format && s.format.bold && s.canUndo')
     expect(v.errors).toEqual([])
   })
 
