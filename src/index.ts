@@ -11,6 +11,7 @@ export { injectStyles, stylesText } from './react/injectStyles'
 export type { Zoom } from './react/common/ZoomControl'
 export type { Theme } from './react/common/hooks'
 export { IconsProvider, ICON_NAMES, type IconName, type Icons } from './react/edit/Toolbar'
+export { StringsProvider, useStrings, resolveStrings, LOCALES, en, de, type Strings, type StringsOverride, type Locale } from './react/strings'
 
 export { DocumentClient, setDefaultWorker, type OpenOptions } from './core/worker/client'
 export type { DocSource } from './core/source'

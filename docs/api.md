@@ -12,6 +12,7 @@ import { DocViewer } from '@p10node/office-engine'
 <DocViewer src={file} allowSave={false} allowDownload={false} />  // no Save/Download, no image download
 <DocViewer src={file} fileMenu={false} />                         // no File menu
 <DocViewer src={file} theme="dark" />                             // dark chrome; "auto" follows the OS setting
+<DocViewer src={file} locale="de" />                              // German texts
 ```
 
 ### File menu
@@ -61,6 +62,8 @@ CSS is auto-injected, no import needed. Container must have a height.
 | `worker`           | `() => Worker \| false`                        | inline    | Custom worker (CSP), `false` = main thread                                                                               |
 | `styleTarget`      | `Document \| ShadowRoot`                       | document  | Where CSS is injected                                                                                                    |
 | `theme`            | `'light' \| 'dark' \| 'auto'`                  | `'light'` | Color scheme of the chrome; `'auto'` follows `prefers-color-scheme`. Documents keep their own colors                     |
+| `locale`           | `'en' \| 'de'`                                 | `'en'`    | Language of the texts (bars, menus, dialogs, messages); numbers and dates follow it. See [UI texts](#ui-texts)            |
+| `strings`          | `StringsOverride`                              | –         | Texts replacing the locale's, key by key (a group may be given in part)                                                  |
 | `editable`         | `boolean`                                      | `false`   | Open in edit mode (Pages, Keynote and Numbers files stay view only)                                                      |
 | `allowEdit`        | `boolean`                                      | `true`    | Show Edit/View button                                                                                                    |
 | `allowSave`        | `boolean`                                      | `true`    | Show Save/Download button, enable Ctrl+S                                                                                 |
@@ -128,6 +131,46 @@ if (client?.kind === 'xlsx') return <div className="de-root"><XlsxView client={c
 ```
 
 The views style themselves from CSS variables on `.de-root` (`--de-bg`, `--de-chrome`, `--de-accent`…): override them to match your app. Add `de-dark` to the root element for the dark theme.
+
+### UI texts
+
+Every text the viewer shows (titles, labels, menu entries, placeholders, dialogs, toasts, status lines such as "Page 1 of 5") comes from one typed table, `Strings`. English (`en`) is the default and German (`de`) ships with the package; `locale` picks one, and numbers and dates in the UI (zoom, counts, file sizes, comment times) are formatted with its `Intl` locale (`en-US`, `de-CH`).
+
+`strings` replaces single texts and is merged over the locale key by key, so a group can be given in part. A value is a string, or a function where the text takes numbers or names:
+
+```tsx
+<DocViewer
+  src={file}
+  locale="de"
+  strings={{
+    file: { menu: 'Ablage' },
+    docx: { status: (page, pages, words) => `${page}/${pages} · ${words} Wörter` },
+  }}
+/>
+```
+
+Views used on their own get their texts from a `StringsProvider` (English without one); `useStrings()` reads them in your own components:
+
+```tsx
+import { StringsProvider, useStrings, XlsxView } from '@p10node/office-engine'
+
+<StringsProvider locale="de" strings={{ xlsx: { addSheet: 'Neues Blatt' } }}>
+  <div className="de-root"><XlsxView client={client} /></div>
+</StringsProvider>
+```
+
+A locale of your own is a complete table: start from a copy of `en` (or `de`) and type it as `Strings`, so the compiler names every missing key, then pass it whole as `strings` (with `locale` set to the closest shipped one for number formats, or with its own `locale` value inside the table, a BCP 47 tag such as `'fr-CH'`):
+
+```ts
+import { en, type Strings } from '@p10node/office-engine'
+
+export const fr: Strings = { ...en, locale: 'fr-CH', common: { ...en.common, cancel: 'Annuler' /* … */ } }
+// <DocViewer src={file} strings={fr} />
+```
+
+To ship a locale with the engine, add `src/react/strings/<code>.ts` with a `Strings` table, list it in `LOCALES` and the `Locale` type (`src/react/strings/index.tsx`) and in `LOCALE_NAMES` (`src/embed.ts`); `test/strings.test.ts` checks that it has every key and no empty text.
+
+Not translated: texts that end up in the saved document (a new sheet's name, the author "Me", the text of a new text box), font names, number format previews, and messages from the parsing worker that the UI shows as they are.
 
 ### Icons
 
@@ -198,7 +241,7 @@ import { IconsProvider, XlsxView } from '@p10node/office-engine'
 </script>
 ```
 
-`<office-viewer>`: attributes `src`, `name`, `editable`, `toolbar="false"`, `thumbnails="false"`, `save="false"`, `download="false"`, `file-menu="false"`, `open="false"`, `capture-select-all="false"`, `theme="dark"` (or `"auto"`), `collab` / `room` / `user` / `base` (real-time collaboration; `user` also writes the comments), `comments="false"`; properties `.file = File` and `.icons` (map or resolver, as `icons` above); events `load`, `error`, `comment` (`detail`: a `CommentEvent`).
+`<office-viewer>`: attributes `src`, `name`, `editable`, `toolbar="false"`, `thumbnails="false"`, `save="false"`, `download="false"`, `file-menu="false"`, `open="false"`, `capture-select-all="false"`, `theme="dark"` (or `"auto"`), `locale="de"`, `collab` / `room` / `user` / `base` (real-time collaboration; `user` also writes the comments), `comments="false"`; properties `.file = File`, `.icons` (map or resolver, as `icons` above) and `.strings = { … }` (see [UI texts](#ui-texts)); events `load`, `error`, `comment` (`detail`: a `CommentEvent`).
 
 ## Core API (no React)
 

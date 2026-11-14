@@ -2,6 +2,7 @@ import { useMemo, useRef, type KeyboardEvent } from 'react'
 import type { PlainFormat } from '../../core/plain'
 import { Icon } from '../edit/Toolbar'
 import { highlight } from './highlight'
+import { useStrings } from '../strings'
 
 const LABEL: Partial<Record<PlainFormat, string>> = { markdown: 'Markdown', html: 'HTML', svg: 'SVG', mermaid: 'Mermaid', plantuml: 'PlantUML', graphviz: 'Graphviz' }
 
@@ -21,6 +22,7 @@ export interface SourceEditorProps {
  * textarea over the colored text, both sized by their content in one grid cell (they scroll together).
  */
 export function SourceEditor({ text, format, onChange, readOnly, notice, onCopy, onDownload }: SourceEditorProps) {
+  const t = useStrings()
   const tokens = useMemo(() => highlight(format, text), [format, text])
   const lines = useMemo(() => {
     let n = 1
@@ -63,19 +65,19 @@ export function SourceEditor({ text, format, onChange, readOnly, notice, onCopy,
       <div className="de-src-head">
         <span className="de-src-title">
           <Icon name="code" size={15} />
-          {LABEL[format] ?? 'Source'}
+          {LABEL[format] ?? t.source.source}
         </span>
         <span className="de-src-lines">
-          {lines} {lines === 1 ? 'line' : 'lines'}
+          {lines} {t.source.lines(lines)}
         </span>
         <span style={{ flex: 1 }} />
         {onCopy && (
-          <button type="button" className="de-src-btn" onClick={onCopy} title="Copy the source">
+          <button type="button" className="de-src-btn" onClick={onCopy} title={t.source.copy}>
             <Icon name="copy" size={15} />
           </button>
         )}
         {onDownload && (
-          <button type="button" className="de-src-btn" onClick={onDownload} title="Download the source">
+          <button type="button" className="de-src-btn" onClick={onDownload} title={t.source.download}>
             <Icon name="save" size={15} />
           </button>
         )}
@@ -103,7 +105,7 @@ export function SourceEditor({ text, format, onChange, readOnly, notice, onCopy,
             wrap="off"
             rows={1}
             cols={1}
-            aria-label={`${LABEL[format] ?? 'Source'} source`}
+            aria-label={t.source.input(LABEL[format] ?? t.source.source)}
             data-testid="de-source-input"
           />
         </div>

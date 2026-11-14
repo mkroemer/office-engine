@@ -3,10 +3,12 @@ import { createRoot, type Root } from 'react-dom/client'
 import './core/default-worker'
 import { DocViewer, type DocViewerProps } from './react/DocViewer'
 import type { Icons } from './react/edit/Toolbar'
+import type { StringsOverride } from './react/strings'
 
 export type MountOptions = Omit<DocViewerProps, 'styleTarget'>
 
 const THEMES = ['light', 'dark', 'auto'] as const
+const LOCALE_NAMES = ['en', 'de'] as const
 
 export interface MountedViewer {
   update(next: Partial<MountOptions>): void
@@ -36,15 +38,17 @@ export function mount(el: HTMLElement, options: MountOptions): MountedViewer {
  * `<office-viewer src="/file.xlsx" style="height:600px"></office-viewer>`
  * Rendered inside a shadow root so host page CSS cannot leak in.
  * Attributes: src, name, editable, toolbar / thumbnails / save / download / file-menu / open / capture-select-all ("false" to turn off),
- * theme ("light" | "dark" | "auto");
+ * theme ("light" | "dark" | "auto"), locale ("en" | "de");
  * real-time collaboration: collab (hub WebSocket URL), room, user (display name), base (snapshot seq `src` was opened at).
- * Properties: `file` (File/Blob/ArrayBuffer) for local data; `icons` (map or resolver, as DocViewer's `icons`).
+ * Properties: `file` (File/Blob/ArrayBuffer) for local data; `icons` (map or resolver, as DocViewer's `icons`);
+ * `strings` (texts replacing the locale's).
  */
 export class OfficeViewerElement extends HTMLElement {
-  static observedAttributes = ['src', 'name', 'toolbar', 'thumbnails', 'editable', 'save', 'download', 'file-menu', 'open', 'capture-select-all', 'theme', 'collab', 'room', 'user', 'base', 'comments']
+  static observedAttributes = ['src', 'name', 'toolbar', 'thumbnails', 'editable', 'save', 'download', 'file-menu', 'open', 'capture-select-all', 'theme', 'collab', 'room', 'user', 'base', 'comments', 'locale']
   private viewer?: MountedViewer
   private _file?: Blob | ArrayBuffer
   private _icons?: Icons
+  private _strings?: StringsOverride
 
   get file() {
     return this._file
@@ -59,6 +63,14 @@ export class OfficeViewerElement extends HTMLElement {
   }
   set icons(v: Icons | undefined) {
     this._icons = v
+    this.sync()
+  }
+
+  get strings() {
+    return this._strings
+  }
+  set strings(v: StringsOverride | undefined) {
+    this._strings = v
     this.sync()
   }
 
@@ -96,6 +108,8 @@ export class OfficeViewerElement extends HTMLElement {
       captureSelectAll: this.getAttribute('capture-select-all') !== 'false',
       theme: THEMES.find((t) => t === this.getAttribute('theme')),
       icons: this._icons,
+      locale: LOCALE_NAMES.find((l) => l === this.getAttribute('locale')),
+      strings: this._strings,
       collab:
         this.getAttribute('collab') && this.getAttribute('room')
           ? {
