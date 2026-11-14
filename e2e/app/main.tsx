@@ -2,6 +2,7 @@
  * Fixture for the browser tests: DocViewer configured from the query string, callbacks recorded on window.
  *   ?src=samples/sample.docx&editable=1&allowSave=0&onSave=1&items=1&close=1&collab=ws://…&room=r
  *   comments: &me=Ann&meId=u1 (author), &people=1 (mentions: Ann, Bob Stone, Cid), &comments=0 (hidden), &cmOpen=1
+ *   texts: &locale=de, &fileLabel=… (a partial `strings` override of the File menu's label)
  */
 import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -46,6 +47,8 @@ const initial: DocViewerProps = {
   thumbnails: flag('thumbnails'),
   captureSelectAll: flag('captureSelectAll'),
   theme: (q.get('theme') as DocViewerProps['theme']) ?? undefined,
+  locale: (q.get('locale') as DocViewerProps['locale']) ?? undefined,
+  strings: q.has('fileLabel') ? { file: { menu: q.get('fileLabel')! } } : undefined,
   onSave: q.has('onSave') ? async (blob, name) => void log({ type: 'save', name, b64: await b64(blob) }) : undefined,
   onDirtyChange: (dirty) => log({ type: 'dirty', dirty }),
   onRename: (name) => log({ type: 'rename', name }),
