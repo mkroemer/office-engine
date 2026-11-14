@@ -234,6 +234,9 @@
   cursor: pointer;
 }
 .de-zoom button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 32px;
   height: 30px;
   font-size: 16px;
@@ -612,6 +615,18 @@
   padding: 6px;
   background: var(--de-ebar);
 }
+/* a host's icon (`icons` prop / IconsProvider), sized by font-size */
+.de-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.de-icon > svg {
+  width: 1em;
+  height: 1em;
+}
 .de-tb {
   appearance: none;
   position: relative;
@@ -686,7 +701,7 @@
 }
 .de-dd:hover:not(:disabled), .de-dd-open { background: var(--de-hover); }
 .de-dd:disabled { opacity: 0.38; cursor: default; }
-.de-dd > svg { flex: none; color: var(--de-ink); }
+.de-dd > svg, .de-dd > .de-icon { flex: none; color: var(--de-ink); }
 .de-dd-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
 .de-dd-ph { color: var(--de-muted); }
 .de-dd-pop {
@@ -714,7 +729,7 @@
   cursor: pointer;
   user-select: none;
 }
-.de-dd-opt > svg { flex: none; color: var(--de-ink); }
+.de-dd-opt > svg, .de-dd-opt > .de-icon { flex: none; color: var(--de-ink); }
 .de-dd-hi { background: var(--de-hover-solid); }
 .de-dd-dis { opacity: 0.4; cursor: default; }
 .de-dd-check { display: inline-flex; width: 16px; flex: none; color: var(--de-on-ink); }
@@ -929,7 +944,7 @@
 .de-ctx-sub { min-width: 200px; max-height: calc(100vh - 8px); overflow-y: auto; }
 .de-ctx-sep { height: 1px; margin: 6px 0; background: var(--de-sep); }
 .de-ctx-head { padding: 6px 16px 2px 38px; color: var(--de-muted); font-size: 11px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
-.de-tab-add { font-size: 18px; padding: 0 10px; }
+.de-tab-add { display: inline-flex; align-items: center; padding: 0 10px; }
 .de-tab-input { width: 120px; margin: 4px 2px; padding: 0 6px; border: 1px solid var(--de-accent); border-radius: 4px; background: var(--de-input-bg); color: var(--de-text); font: inherit; }
 /* formula editing: reference boxes, colored references, autocomplete */
 .de-fx { position: relative; }
@@ -1035,6 +1050,9 @@
   top: 12px;
   left: 12px;
   z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 34px;
   height: 34px;
   border: 1px solid var(--de-border);
