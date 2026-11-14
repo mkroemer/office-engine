@@ -3,67 +3,70 @@ import type { BorderKind, FmtPatch } from '../../core/xlsx/types'
 import { MOD } from '../common/ContextMenu'
 import { EditorBar } from '../common/Slots'
 import { Btn, ColorBtn, Dropdown, fontName, fontOptions, Icon, Menu, Pop, Select, Sep, SizeBox } from '../edit/Toolbar'
+import { useStrings, type Strings } from '../strings'
 
-const FORMATS = [
-  { value: 'General', label: 'Automatic', hint: '1000.12' },
-  { value: '@', label: 'Plain text', hint: 'abc' },
-  { value: '0', label: 'Number', hint: '1000', sep: true },
-  { value: '0.00', label: 'Number', hint: '1000.12' },
-  { value: '#,##0', label: 'Number', hint: '1,000' },
-  { value: '#,##0.00', label: 'Number', hint: '1,000.12' },
-  { value: '0.00E+00', label: 'Scientific', hint: '1.01E+03' },
-  { value: '0%', label: 'Percent', hint: '10%', sep: true },
-  { value: '0.00%', label: 'Percent', hint: '10.12%' },
-  { value: '"$"#,##0.00', label: 'Currency', hint: '$1,000.12', sep: true },
-  { value: '"$"#,##0', label: 'Currency rounded', hint: '$1,000' },
-  { value: '_("$"* #,##0.00_);_("$"* (#,##0.00);_("$"* "-"??_);_(@_)', label: 'Accounting', hint: '$ (1,000.12)' },
-  { value: '#,##0 "₫"', label: 'Currency', hint: '1,000 ₫' },
-  { value: '# ?/?', label: 'Fraction', hint: '1000 1/8' },
-  { value: 'yyyy-mm-dd', label: 'Date', hint: '2026-09-26', sep: true },
-  { value: 'dd/mm/yyyy', label: 'Date', hint: '26/09/2026' },
-  { value: 'd mmmm yyyy', label: 'Long date', hint: '26 September 2026' },
-  { value: 'h:mm', label: 'Time', hint: '15:59' },
-  { value: 'h:mm:ss AM/PM', label: 'Time', hint: '3:59:00 PM' },
-  { value: 'yyyy-mm-dd h:mm', label: 'Date time', hint: '2026-09-26 15:59' },
-  { value: '[h]:mm:ss', label: 'Duration', hint: '24:01:00' },
+type FormatName = keyof Strings['xlsx']['formats']
+/** number formats offered; the hints show them on a sample value */
+const FORMATS: { value: string; k: FormatName; hint: string; sep?: boolean }[] = [
+  { value: 'General', k: 'automatic', hint: '1000.12' },
+  { value: '@', k: 'text', hint: 'abc' },
+  { value: '0', k: 'number', hint: '1000', sep: true },
+  { value: '0.00', k: 'number', hint: '1000.12' },
+  { value: '#,##0', k: 'number', hint: '1,000' },
+  { value: '#,##0.00', k: 'number', hint: '1,000.12' },
+  { value: '0.00E+00', k: 'scientific', hint: '1.01E+03' },
+  { value: '0%', k: 'percent', hint: '10%', sep: true },
+  { value: '0.00%', k: 'percent', hint: '10.12%' },
+  { value: '"$"#,##0.00', k: 'currency', hint: '$1,000.12', sep: true },
+  { value: '"$"#,##0', k: 'currencyRounded', hint: '$1,000' },
+  { value: '_("$"* #,##0.00_);_("$"* (#,##0.00);_("$"* "-"??_);_(@_)', k: 'accounting', hint: '$ (1,000.12)' },
+  { value: '#,##0 "₫"', k: 'currency', hint: '1,000 ₫' },
+  { value: '# ?/?', k: 'fraction', hint: '1000 1/8' },
+  { value: 'yyyy-mm-dd', k: 'date', hint: '2026-09-26', sep: true },
+  { value: 'dd/mm/yyyy', k: 'date', hint: '26/09/2026' },
+  { value: 'd mmmm yyyy', k: 'longDate', hint: '26 September 2026' },
+  { value: 'h:mm', k: 'time', hint: '15:59' },
+  { value: 'h:mm:ss AM/PM', k: 'time', hint: '3:59:00 PM' },
+  { value: 'yyyy-mm-dd h:mm', k: 'dateTime', hint: '2026-09-26 15:59' },
+  { value: '[h]:mm:ss', k: 'duration', hint: '24:01:00' },
 ]
 const SIZES = [6, 7, 8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36, 48]
-const BORDERS: { k: BorderKind; icon: string; title: string }[] = [
-  { k: 'all', icon: 'bAll', title: 'All borders' },
-  { k: 'inner', icon: 'bInner', title: 'Inner borders' },
-  { k: 'outer', icon: 'bOuter', title: 'Outer borders' },
-  { k: 'none', icon: 'bNone', title: 'Clear borders' },
-  { k: 'top', icon: 'bTop', title: 'Top border' },
-  { k: 'bottom', icon: 'bBottom', title: 'Bottom border' },
-  { k: 'left', icon: 'bLeft', title: 'Left border' },
-  { k: 'right', icon: 'bRight', title: 'Right border' },
+const BORDERS: { k: BorderKind; icon: string }[] = [
+  { k: 'all', icon: 'bAll' },
+  { k: 'inner', icon: 'bInner' },
+  { k: 'outer', icon: 'bOuter' },
+  { k: 'none', icon: 'bNone' },
+  { k: 'top', icon: 'bTop' },
+  { k: 'bottom', icon: 'bBottom' },
+  { k: 'left', icon: 'bLeft' },
+  { k: 'right', icon: 'bRight' },
 ]
 const BORDER_STYLES = [
-  { value: 'thin', label: 'Thin', hint: '───' },
-  { value: 'medium', label: 'Medium', hint: '━━━' },
-  { value: 'thick', label: 'Thick', hint: '▬▬▬' },
-  { value: 'dashed', label: 'Dashed', hint: '- - -' },
-  { value: 'dotted', label: 'Dotted', hint: '·····' },
-  { value: 'double', label: 'Double', hint: '═══' },
+  { value: 'thin', hint: '───' },
+  { value: 'medium', hint: '━━━' },
+  { value: 'thick', hint: '▬▬▬' },
+  { value: 'dashed', hint: '- - -' },
+  { value: 'dotted', hint: '·····' },
+  { value: 'double', hint: '═══' },
 ] as const
 const HALIGN = [
-  { value: 'left', label: 'Left', icon: 'alignLeft' },
-  { value: 'center', label: 'Center', icon: 'alignCenter' },
-  { value: 'right', label: 'Right', icon: 'alignRight' },
+  { value: 'left', icon: 'alignLeft' },
+  { value: 'center', icon: 'alignCenter' },
+  { value: 'right', icon: 'alignRight' },
 ] as const
 const VALIGN = [
-  { value: 'top', label: 'Top', icon: 'vTop' },
-  { value: 'center', label: 'Middle', icon: 'vMiddle' },
-  { value: 'bottom', label: 'Bottom', icon: 'vBottom' },
+  { value: 'top', k: 'top', icon: 'vTop' },
+  { value: 'center', k: 'middle', icon: 'vMiddle' },
+  { value: 'bottom', k: 'bottom', icon: 'vBottom' },
 ] as const
 const ROTATE = [
-  { value: 0, label: 'None', icon: 'rotNone' },
-  { value: 45, label: 'Tilt up', icon: 'rotUp' },
-  { value: -45, label: 'Tilt down', icon: 'rotDown' },
-  { value: 255, label: 'Stack vertically', icon: 'rotStack' },
-  { value: 90, label: 'Rotate up', icon: 'rotUp90' },
-  { value: -90, label: 'Rotate down', icon: 'rotDown90' },
-]
+  { value: 0, k: 'none', icon: 'rotNone' },
+  { value: 45, k: 'tiltUp', icon: 'rotUp' },
+  { value: -45, k: 'tiltDown', icon: 'rotDown' },
+  { value: 255, k: 'stack', icon: 'rotStack' },
+  { value: 90, k: 'up', icon: 'rotUp90' },
+  { value: -90, k: 'down', icon: 'rotDown90' },
+] as const
 const FUNCS = ['SUM', 'AVERAGE', 'COUNT', 'MAX', 'MIN']
 
 export type MergeMode = 'all' | 'across' | 'down' | 'unmerge'
@@ -109,42 +112,46 @@ export function XlsxToolbar(props: {
   const pt = (v: unknown) => (typeof v === 'string' && v.endsWith('pt') ? parseFloat(v) : typeof v === 'number' ? Math.round(v * 0.75 * 2) / 2 : undefined)
   const sz = pt(css.fontSize) ?? pt(props.base.fontSize)
   const font = fontName((css.fontFamily ?? props.base.fontFamily) as string | undefined)
+  const t = useStrings()
+  const kb = (label: string, keys: string) => t.edit.keyed(label, keys)
   const known = FORMATS.find((x) => x.value === props.format)
-  const formats = known ? FORMATS : [{ value: props.format, label: 'Custom', hint: props.format }, ...FORMATS]
+  const options = FORMATS.map(({ k, ...x }) => ({ ...x, label: t.xlsx.formats[k] }))
+  const formats = known ? options : [{ value: props.format, label: t.xlsx.formats.custom, hint: props.format }, ...options]
+  const borderTitle = (k: BorderKind) => (k === 'none' ? t.xlsx.clearBorders : t.docx.borders[k])
   return (
     <EditorBar>
-      <Btn icon="undo" title={`Undo (${MOD}Z)`} onClick={props.onUndo} />
-      <Btn icon="redo" title={`Redo (${MOD}Y)`} onClick={props.onRedo} />
-      <Btn icon="paint" title="Paint format (click, then select cells)" active={props.painter} onClick={props.onPaint} />
+      <Btn icon="undo" title={kb(t.edit.undo, `${MOD}Z`)} onClick={props.onUndo} />
+      <Btn icon="redo" title={kb(t.edit.redo, `${MOD}Y`)} onClick={props.onRedo} />
+      <Btn icon="paint" title={t.xlsx.paint} active={props.painter} onClick={props.onPaint} />
       <Sep />
-      <Btn icon="currency" title="Format as currency" onClick={() => f({ numFmt: '"$"#,##0.00' })} />
-      <Btn icon="percent" title="Format as percent" onClick={() => f({ numFmt: '0%' })} />
-      <Btn icon="decLess" title="Decrease decimal places" onClick={() => f({ numFmt: decimals(props.format, -1) })} />
-      <Btn icon="decMore" title="Increase decimal places" onClick={() => f({ numFmt: decimals(props.format, 1) })} />
-      <Select title={`Number format: ${known?.label ?? 'Custom'}`} width={96} menuWidth={270} value={props.format} options={formats} onChange={(v) => f({ numFmt: v })} />
+      <Btn icon="currency" title={t.xlsx.currency} onClick={() => f({ numFmt: '"$"#,##0.00' })} />
+      <Btn icon="percent" title={t.xlsx.percent} onClick={() => f({ numFmt: '0%' })} />
+      <Btn icon="decLess" title={t.xlsx.decLess} onClick={() => f({ numFmt: decimals(props.format, -1) })} />
+      <Btn icon="decMore" title={t.xlsx.decMore} onClick={() => f({ numFmt: decimals(props.format, 1) })} />
+      <Select title={t.xlsx.numberFormat(t.xlsx.formats[known?.k ?? 'custom'])} width={96} menuWidth={270} value={props.format} options={formats} onChange={(v) => f({ numFmt: v })} />
       <Sep />
-      <Select title="Font" width={112} menuWidth={200} value={font} placeholder="Font" options={fontOptions(font)} onChange={(v) => f({ font: v })} />
+      <Select title={t.edit.font} width={112} menuWidth={200} value={font} placeholder={t.edit.font} options={fontOptions(font)} onChange={(v) => f({ font: v })} />
       <Sep />
       <SizeBox value={sz} sizes={SIZES} onChange={(v) => f({ sz: v })} />
       <Sep />
-      <Btn icon="bold" title={`Bold (${MOD}B)`} active={css.fontWeight === 700} onClick={() => props.onToggle('b')} />
-      <Btn icon="italic" title={`Italic (${MOD}I)`} active={css.fontStyle === 'italic'} onClick={() => props.onToggle('i')} />
-      <Btn icon="underline" title={`Underline (${MOD}U)`} active={deco.includes('underline')} onClick={() => props.onToggle('u')} />
-      <Btn icon="strike" title={`Strikethrough (${MOD}⇧X)`} active={deco.includes('line-through')} onClick={() => props.onToggle('strike')} />
-      <ColorBtn icon="color" title="Text color" value={css.color as string | undefined} onPick={(c) => f({ color: c })} noneLabel="Automatic" />
+      <Btn icon="bold" title={kb(t.edit.bold, `${MOD}B`)} active={css.fontWeight === 700} onClick={() => props.onToggle('b')} />
+      <Btn icon="italic" title={kb(t.edit.italic, `${MOD}I`)} active={css.fontStyle === 'italic'} onClick={() => props.onToggle('i')} />
+      <Btn icon="underline" title={kb(t.edit.underline, `${MOD}U`)} active={deco.includes('underline')} onClick={() => props.onToggle('u')} />
+      <Btn icon="strike" title={kb(t.edit.strike, `${MOD}⇧X`)} active={deco.includes('line-through')} onClick={() => props.onToggle('strike')} />
+      <ColorBtn icon="color" title={t.edit.textColor} value={css.color as string | undefined} onPick={(c) => f({ color: c })} noneLabel={t.edit.automatic} />
       <Sep />
-      <ColorBtn icon="fill" title="Fill color" value={typeof css.background === 'string' && !css.background.includes('gradient') ? css.background : undefined} onPick={(c) => f({ fill: c })} noneLabel="No fill" />
-      <Pop icon="borders" title="Borders" chevron>
+      <ColorBtn icon="fill" title={t.xlsx.fillColor} value={typeof css.background === 'string' && !css.background.includes('gradient') ? css.background : undefined} onPick={(c) => f({ fill: c })} noneLabel={t.docx.noFill} />
+      <Pop icon="borders" title={t.xlsx.borders} chevron>
         {(close) => (
           <div className="de-borders-pop">
-            <div className="de-borders" role="group" aria-label="Borders">
+            <div className="de-borders" role="group" aria-label={t.xlsx.borders}>
               {BORDERS.map((x) => (
                 <button
                   key={x.k}
                   type="button"
                   className="de-tb"
-                  title={x.title}
-                  aria-label={x.title}
+                  title={borderTitle(x.k)}
+                  aria-label={borderTitle(x.k)}
                   onClick={() => {
                     close()
                     f({ border: x.k, borderColor: bColor, borderStyle: bStyle })
@@ -155,92 +162,92 @@ export function XlsxToolbar(props: {
               ))}
             </div>
             <div className="de-borders-side">
-              <ColorBtn icon="color" title="Border color" value={bColor} onPick={(c) => setBColor(c ?? '#000000')} noneLabel="Black" />
-              <Dropdown title="Border style" icon="lineStyle" label={null} menuWidth={150} value={bStyle} options={[...BORDER_STYLES]} onChange={(v) => setBStyle(v)} />
+              <ColorBtn icon="color" title={t.docx.borderColor} value={bColor} onPick={(c) => setBColor(c ?? '#000000')} noneLabel={t.docx.black} />
+              <Dropdown title={t.docx.borderStyle} icon="lineStyle" label={null} menuWidth={150} value={bStyle} options={BORDER_STYLES.map((x) => ({ ...x, label: t.docx.lines[x.value] }))} onChange={(v) => setBStyle(v)} />
             </div>
           </div>
         )}
       </Pop>
       <Dropdown
-        title="Merge cells"
+        title={t.xlsx.merge}
         icon="merge"
         label={null}
         menuWidth={190}
         options={[
-          { value: 'all', label: 'Merge all' },
-          { value: 'across', label: 'Merge horizontally' },
-          { value: 'down', label: 'Merge vertically' },
-          { value: 'unmerge', label: 'Unmerge', disabled: !props.merged, sep: true },
+          { value: 'all', label: t.xlsx.mergeAll },
+          { value: 'across', label: t.xlsx.mergeAcross },
+          { value: 'down', label: t.xlsx.mergeDown },
+          { value: 'unmerge', label: t.xlsx.unmerge, disabled: !props.merged, sep: true },
         ]}
         onChange={(v) => props.onMerge(v as MergeMode)}
       />
       <Sep />
       <Dropdown
-        title="Horizontal align"
+        title={t.xlsx.hAlign}
         icon={HALIGN.find((x) => x.value === align)?.icon ?? 'alignLeft'}
         label={null}
         menuWidth={140}
         value={align}
-        options={HALIGN.map((x) => ({ ...x }))}
+        options={HALIGN.map((x) => ({ ...x, label: t.xlsx.hAligns[x.value] }))}
         onChange={(v) => f({ align: v === align ? null : (v as 'left') })}
       />
-      <Dropdown title="Vertical align" icon={VALIGN.find((x) => x.value === valign)!.icon} label={null} menuWidth={140} value={valign} options={VALIGN.map((x) => ({ ...x }))} onChange={(v) => f({ valign: v })} />
-      <Btn icon="wrap" title="Wrap text" active={css.whiteSpace === 'pre-wrap'} onClick={() => f({ wrap: css.whiteSpace !== 'pre-wrap' })} />
-      <Dropdown title="Text rotation" icon={ROTATE.find((x) => x.value === rot)?.icon ?? 'rotNone'} label={null} menuWidth={180} value={rot} options={ROTATE} onChange={(v) => f({ rotate: v || null })} />
+      <Dropdown title={t.docx.vAlign} icon={VALIGN.find((x) => x.value === valign)!.icon} label={null} menuWidth={140} value={valign} options={VALIGN.map(({ k, ...x }) => ({ ...x, label: t.docx.vAligns[k] }))} onChange={(v) => f({ valign: v })} />
+      <Btn icon="wrap" title={t.xlsx.wrap} active={css.whiteSpace === 'pre-wrap'} onClick={() => f({ wrap: css.whiteSpace !== 'pre-wrap' })} />
+      <Dropdown title={t.xlsx.rotation} icon={ROTATE.find((x) => x.value === rot)?.icon ?? 'rotNone'} label={null} menuWidth={180} value={rot} options={ROTATE.map(({ k, ...x }) => ({ ...x, value: x.value as number, label: t.xlsx.rotations[k] }))} onChange={(v) => f({ rotate: v || null })} />
       <Sep />
       <Menu
-        title="Insert, delete or hide rows & columns"
-        label="Rows"
+        title={t.xlsx.rowsMenuTitle}
+        label={t.xlsx.rowsMenu}
         icon="rowAdd"
         items={[
-          { value: 'rowAbove', label: 'Insert row above', icon: 'rowAbove' },
-          { value: 'rowBelow', label: 'Insert row below', icon: 'rowBelow' },
-          { value: 'colLeft', label: 'Insert column left', icon: 'colLeft' },
-          { value: 'colRight', label: 'Insert column right', icon: 'colRight' },
-          { value: 'delRow', label: 'Delete row(s)', icon: 'delRow', sep: true },
-          { value: 'delCol', label: 'Delete column(s)', icon: 'delCol' },
-          { value: 'hideRows', label: 'Hide row(s)', icon: 'hide', sep: true },
-          { value: 'hideCols', label: 'Hide column(s)', icon: 'hide' },
-          { value: 'unhideRows', label: 'Unhide rows', icon: 'view' },
-          { value: 'unhideCols', label: 'Unhide columns', icon: 'view' },
+          { value: 'rowAbove', label: t.table.rowAbove, icon: 'rowAbove' },
+          { value: 'rowBelow', label: t.table.rowBelow, icon: 'rowBelow' },
+          { value: 'colLeft', label: t.table.colLeft, icon: 'colLeft' },
+          { value: 'colRight', label: t.table.colRight, icon: 'colRight' },
+          { value: 'delRow', label: t.xlsx.delRows, icon: 'delRow', sep: true },
+          { value: 'delCol', label: t.xlsx.delCols, icon: 'delCol' },
+          { value: 'hideRows', label: t.xlsx.hideRows, icon: 'hide', sep: true },
+          { value: 'hideCols', label: t.xlsx.hideCols, icon: 'hide' },
+          { value: 'unhideRows', label: t.xlsx.unhideRows, icon: 'view' },
+          { value: 'unhideCols', label: t.xlsx.unhideCols, icon: 'view' },
         ]}
         onPick={(v) => props.onRows(v as 'rowAbove')}
       />
       <Dropdown
-        title="Functions"
+        title={t.xlsx.functions}
         icon="sum"
         label={null}
         menuWidth={170}
-        options={[...FUNCS.map((x) => ({ value: x, label: x })), { value: '', label: 'More functions…', sep: true }]}
+        options={[...FUNCS.map((x) => ({ value: x, label: x })), { value: '', label: t.xlsx.moreFunctions, sep: true }]}
         onChange={(v) => props.onFunc(v || null)}
       />
       <Dropdown
-        title="Sort range"
+        title={t.xlsx.sort}
         icon="sort"
         label={null}
         menuWidth={200}
         options={[
-          { value: 'asc', label: 'Sort range A → Z', icon: 'sortAZ' },
-          { value: 'desc', label: 'Sort range Z → A', icon: 'sortZA' },
+          { value: 'asc', label: t.xlsx.sortAsc, icon: 'sortAZ' },
+          { value: 'desc', label: t.xlsx.sortDesc, icon: 'sortZA' },
         ]}
         onChange={(v) => props.onSort(v === 'desc')}
       />
       <Menu
-        title="View: freeze, gridlines"
-        label="View"
+        title={t.xlsx.viewMenuTitle}
+        label={t.xlsx.viewMenu}
         icon="freeze"
         items={[
-          { value: 'row', label: 'Freeze 1 row' },
-          { value: 'col', label: 'Freeze 1 column' },
-          { value: 'sel', label: 'Freeze up to current cell' },
-          { value: 'none', label: 'Unfreeze', disabled: !props.frozen },
-          { value: 'grid', label: props.gridlines ? 'Hide gridlines' : 'Show gridlines', icon: 'gridlines', sep: true },
+          { value: 'row', label: t.xlsx.freezeRow },
+          { value: 'col', label: t.xlsx.freezeCol },
+          { value: 'sel', label: t.xlsx.freezeSel },
+          { value: 'none', label: t.xlsx.unfreeze, disabled: !props.frozen },
+          { value: 'grid', label: props.gridlines ? t.xlsx.hideGridlines : t.xlsx.showGridlines, icon: 'gridlines', sep: true },
         ]}
         onPick={(v) => (v === 'grid' ? props.onGridlines() : props.onFreeze(v as 'row'))}
       />
       <Sep />
-      <Btn icon="clear" title={`Clear formatting (${MOD}\\)`} onClick={() => f({ clear: true })} />
-      <Btn icon="search" title={`Find & replace (${MOD}F)`} onClick={props.onFind} />
+      <Btn icon="clear" title={kb(t.edit.clearFormat, `${MOD}\\`)} onClick={() => f({ clear: true })} />
+      <Btn icon="search" title={kb(t.edit.findReplace, `${MOD}F`)} onClick={props.onFind} />
     </EditorBar>
   )
 }
