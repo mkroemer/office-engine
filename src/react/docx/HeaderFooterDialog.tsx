@@ -1,21 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Block, DocxMeta, HFKind, HFLine, HFSet } from '../../core/docx/types'
+import { useStrings, type Strings } from '../strings'
 
-const KINDS: { k: HFKind; label: string }[] = [
-  { k: 'header', label: 'Header' },
-  { k: 'footer', label: 'Footer' },
-  { k: 'firstHeader', label: 'First page header' },
-  { k: 'firstFooter', label: 'First page footer' },
-]
+const KINDS: { k: HFKind }[] = [{ k: 'header' }, { k: 'footer' }, { k: 'firstHeader' }, { k: 'firstFooter' }]
 
-/** quick page numbers: where, and how */
-const NUMBERS: { label: string; k: HFKind; line: HFLine }[] = [
-  { label: 'Bottom center: 1', k: 'footer', line: { text: '{PAGE}', align: 'center' } },
-  { label: 'Bottom right: 1', k: 'footer', line: { text: '{PAGE}', align: 'right' } },
-  { label: 'Bottom center: Page 1 of 5', k: 'footer', line: { text: 'Page {PAGE} of {NUMPAGES}', align: 'center' } },
+/** quick page numbers: where, and how (the "Page 1 of 5" text in the UI's language) */
+const numbers = (t: Strings): { label: string; k: HFKind; line: HFLine }[] => [
+  { label: t.headerFooter.bottomCenter, k: 'footer', line: { text: '{PAGE}', align: 'center' } },
+  { label: t.headerFooter.bottomRight, k: 'footer', line: { text: '{PAGE}', align: 'right' } },
+  { label: t.headerFooter.bottomPageOf, k: 'footer', line: { text: t.headerFooter.pageOfText, align: 'center' } },
   // Vietnamese documents: "Trang" is "Page"
-  { label: 'Bottom center: Trang 1/5 (Vietnamese)', k: 'footer', line: { text: 'Trang {PAGE}/{NUMPAGES}', align: 'center' } },
-  { label: 'Top right: 1', k: 'header', line: { text: '{PAGE}', align: 'right' } },
+  { label: t.headerFooter.bottomVietnamese, k: 'footer', line: { text: 'Trang {PAGE}/{NUMPAGES}', align: 'center' } },
+  { label: t.headerFooter.topRight, k: 'header', line: { text: '{PAGE}', align: 'right' } },
 ]
 
 interface Part {
@@ -51,6 +47,8 @@ const linesOf = (p: Part): HFLine[] =>
  * a different first page. `onOk` gets only the parts that changed.
  */
 export function HeaderFooterDialog({ meta, focus, onOk, onClose }: { meta: DocxMeta; focus?: HFKind; onOk: (set: HFSet) => void; onClose: () => void }) {
+  const t = useStrings()
+  const NUMBERS = numbers(t)
   const init = useRef(Object.fromEntries(KINDS.map(({ k }) => [k, partOf(meta[k])])) as Record<HFKind, Part>)
   const [parts, setParts] = useState(init.current)
   const [first, setFirst] = useState(!!meta.titlePg)
@@ -98,55 +96,55 @@ export function HeaderFooterDialog({ meta, focus, onOk, onClose }: { meta: DocxM
       <form
         className="de-dialog de-hfd"
         role="dialog"
-        aria-label="Header and footer"
+        aria-label={t.headerFooter.label}
         noValidate
         onSubmit={(e) => {
           e.preventDefault()
           submit()
         }}
       >
-        <div className="de-dialog-title">Header &amp; footer</div>
+        <div className="de-dialog-title">{t.headerFooter.title}</div>
         <div className="de-hfd-tabs" role="tablist">
-          {shown.map(({ k, label }) => (
+          {shown.map(({ k }) => (
             <button key={k} type="button" role="tab" aria-selected={active === k} className={active === k ? 'on' : undefined} onClick={() => setActive(k)}>
-              {label}
+              {t.headerFooter.kinds[k]}
             </button>
           ))}
         </div>
         <textarea
           ref={area}
           rows={3}
-          aria-label={`${KINDS.find((x) => x.k === active)!.label} text`}
-          placeholder="Type the text; one line per paragraph"
+          aria-label={t.headerFooter.text(t.headerFooter.kinds[active])}
+          placeholder={t.headerFooter.placeholder}
           value={cur.text}
           style={{ textAlign: cur.align, fontWeight: cur.b ? 700 : undefined }}
           onChange={(e) => put({ text: e.target.value })}
         />
-        {cur.rich && <div className="de-dialog-note de-ps-bad">This part also holds pictures, tables or shapes: changing it here removes them.</div>}
+        {cur.rich && <div className="de-dialog-note de-ps-bad">{t.headerFooter.rich}</div>}
         <div className="de-ps-row">
           {(['left', 'center', 'right'] as const).map((a) => (
             <label key={a} className="de-ps-radio">
-              <input type="radio" name="de-hfd-align" checked={cur.align === a} onChange={() => put({ align: a })} /> {a[0].toUpperCase() + a.slice(1)}
+              <input type="radio" name="de-hfd-align" checked={cur.align === a} onChange={() => put({ align: a })} /> {t.headerFooter.aligns[a]}
             </label>
           ))}
           <label className="de-ps-radio">
-            <input type="checkbox" checked={cur.b} onChange={(e) => put({ b: e.target.checked })} /> Bold
+            <input type="checkbox" checked={cur.b} onChange={(e) => put({ b: e.target.checked })} /> {t.headerFooter.bold}
           </label>
           <label className="de-ps-field">
-            <span>Size</span>
-            <input type="number" step="any" min="4" aria-label="Font size (pt)" placeholder="auto" value={cur.sz} onChange={(e) => put({ sz: e.target.value })} />
+            <span>{t.headerFooter.size}</span>
+            <input type="number" step="any" min="4" aria-label={t.headerFooter.sizeLabel} placeholder={t.headerFooter.sizeAuto} value={cur.sz} onChange={(e) => put({ sz: e.target.value })} />
           </label>
         </div>
         <div className="de-ps-row">
           <button type="button" className="de-btn" onClick={() => insert('{PAGE}')}>
-            + Page number
+            {t.headerFooter.pageNumber}
           </button>
           <button type="button" className="de-btn" onClick={() => insert('{NUMPAGES}')}>
-            + Page count
+            {t.headerFooter.pageCount}
           </button>
           <select
             className="de-ps-preset"
-            aria-label="Page number preset"
+            aria-label={t.headerFooter.preset}
             value=""
             onChange={(e) => {
               const n = NUMBERS[Number(e.target.value)]
@@ -155,7 +153,7 @@ export function HeaderFooterDialog({ meta, focus, onOk, onClose }: { meta: DocxM
               setActive(n.k)
             }}
           >
-            <option value="">Page numbers…</option>
+            <option value="">{t.headerFooter.presets}</option>
             {NUMBERS.map((n, i) => (
               <option key={n.label} value={i}>
                 {n.label}
@@ -172,14 +170,14 @@ export function HeaderFooterDialog({ meta, focus, onOk, onClose }: { meta: DocxM
               if (!e.target.checked && active.startsWith('first')) setActive(active === 'firstFooter' ? 'footer' : 'header')
             }}
           />{' '}
-          Different first page
+          {t.headerFooter.firstPage}
         </label>
         <div className="de-dialog-btns">
           <button type="button" className="de-btn" onClick={onClose}>
-            Cancel
+            {t.common.cancel}
           </button>
           <button type="submit" className="de-btn de-btn-primary">
-            Apply
+            {t.common.apply}
           </button>
         </div>
       </form>

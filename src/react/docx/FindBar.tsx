@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Btn } from '../edit/Toolbar'
+import { useStrings } from '../strings'
 
 export interface Match {
   pa: string
@@ -24,6 +25,7 @@ export function FindBar(props: {
   replace?: boolean
 }) {
   const ref = useRef<HTMLInputElement>(null)
+  const t = useStrings()
   const [rep, setRep] = useState('')
   const [showRep, setShowRep] = useState(!!props.replace)
   useEffect(() => {
@@ -36,8 +38,8 @@ export function FindBar(props: {
         <input
           ref={ref}
           value={props.query}
-          placeholder={props.placeholder ?? 'Find in document'}
-          aria-label="Find"
+          placeholder={props.placeholder ?? t.find.placeholder}
+          aria-label={t.find.label}
           onChange={(e) => props.onQuery(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
@@ -47,20 +49,20 @@ export function FindBar(props: {
           }}
         />
         <span className="de-find-count">{props.query ? (props.count ? `${Math.min(props.index + 1, props.count)} / ${props.count}` : '0 / 0') : ''}</span>
-        <Btn icon="up" title="Previous (Shift+Enter)" onClick={() => props.onNav(-1)} disabled={!props.count} />
-        <Btn icon="down" title="Next (Enter)" onClick={() => props.onNav(1)} disabled={!props.count} />
-        {props.editable && <Btn label="⇄" title="Replace" active={showRep} onClick={() => setShowRep((v) => !v)} />}
-        <Btn icon="close" title="Close (Esc)" onClick={props.onClose} />
+        <Btn icon="up" title={t.find.prev} onClick={() => props.onNav(-1)} disabled={!props.count} />
+        <Btn icon="down" title={t.find.next} onClick={() => props.onNav(1)} disabled={!props.count} />
+        {props.editable && <Btn label="⇄" title={t.find.replace} active={showRep} onClick={() => setShowRep((v) => !v)} />}
+        <Btn icon="close" title={t.find.close} onClick={props.onClose} />
       </div>
       {props.options && <div className="de-find-row de-find-opts">{props.options}</div>}
       {props.editable && showRep && (
         <div className="de-find-row">
-          <input value={rep} placeholder="Replace with" aria-label="Replace with" onChange={(e) => setRep(e.target.value)} />
+          <input value={rep} placeholder={t.find.replaceWith} aria-label={t.find.replaceWith} onChange={(e) => setRep(e.target.value)} />
           <button type="button" className="de-btn" disabled={!props.count} onClick={() => props.onReplace(rep, false)}>
-            Replace
+            {t.find.replace}
           </button>
           <button type="button" className="de-btn" disabled={!props.count} onClick={() => props.onReplace(rep, true)}>
-            All
+            {t.find.replaceAll}
           </button>
         </div>
       )}
