@@ -2,57 +2,58 @@ import { useEffect, useState } from 'react'
 import type { ShapeKind } from '../../core/pptx/types'
 import { MOD } from '../common/ContextMenu'
 import { EditorBar } from '../common/Slots'
-import { Btn, ColorBtn, Dropdown, fontName, fontOptions, Menu, Select, Sep, SizeBox, type DropOption } from '../edit/Toolbar'
+import { Btn, ColorBtn, Dropdown, fontName, fontOptions, Menu, Select, Sep, SizeBox } from '../edit/Toolbar'
 import type { PptxEditor, PptxFormat } from './PptxEditor'
+import { formatNumber, useStrings, type Strings } from '../strings'
 
 const HIGHLIGHTS = ['#ffff00', '#00ff00', '#00ffff', '#ff00ff', '#ff0000', '#0000ff', '#ffc000', '#92d050', '#c0c0c0', '#000000']
 
-export const SHAPES: DropOption<string>[] = [
-  { value: 'text', label: 'Text box', icon: 'textbox' },
-  { value: 'image', label: 'Image…', icon: 'image' },
-  { value: 'line', label: 'Line', icon: 'line' },
-  { value: 'rect', label: 'Rectangle', icon: 'rect', sep: true },
-  { value: 'roundRect', label: 'Rounded rectangle', icon: 'roundRect' },
-  { value: 'ellipse', label: 'Ellipse', icon: 'ellipse' },
-  { value: 'triangle', label: 'Triangle', icon: 'triangle' },
-  { value: 'rtTriangle', label: 'Right triangle' },
-  { value: 'diamond', label: 'Diamond' },
-  { value: 'parallelogram', label: 'Parallelogram' },
-  { value: 'trapezoid', label: 'Trapezoid' },
-  { value: 'pentagon', label: 'Pentagon' },
-  { value: 'hexagon', label: 'Hexagon' },
-  { value: 'octagon', label: 'Octagon' },
-  { value: 'donut', label: 'Donut' },
-  { value: 'can', label: 'Cylinder' },
-  { value: 'heart', label: 'Heart' },
-  { value: 'plus', label: 'Plus' },
-  { value: 'rightArrow', label: 'Arrow right', icon: 'arrow', sep: true },
-  { value: 'leftArrow', label: 'Arrow left' },
-  { value: 'upArrow', label: 'Arrow up' },
-  { value: 'downArrow', label: 'Arrow down' },
-  { value: 'leftRightArrow', label: 'Double arrow' },
-  { value: 'chevron', label: 'Chevron' },
-  { value: 'homePlate', label: 'Pentagon arrow' },
-  { value: 'star4', label: '4-point star', sep: true },
-  { value: 'star5', label: '5-point star', icon: 'star' },
-  { value: 'star6', label: '6-point star' },
-  { value: 'wedgeRectCallout', label: 'Callout', sep: true },
-  { value: 'wedgeRoundRectCallout', label: 'Rounded callout' },
+const SHAPES: { value: keyof Strings['pptx']['shapes']; icon?: string; sep?: boolean }[] = [
+  { value: 'text', icon: 'textbox' },
+  { value: 'image', icon: 'image' },
+  { value: 'line', icon: 'line' },
+  { value: 'rect', icon: 'rect', sep: true },
+  { value: 'roundRect', icon: 'roundRect' },
+  { value: 'ellipse', icon: 'ellipse' },
+  { value: 'triangle', icon: 'triangle' },
+  { value: 'rtTriangle' },
+  { value: 'diamond' },
+  { value: 'parallelogram' },
+  { value: 'trapezoid' },
+  { value: 'pentagon' },
+  { value: 'hexagon' },
+  { value: 'octagon' },
+  { value: 'donut' },
+  { value: 'can' },
+  { value: 'heart' },
+  { value: 'plus' },
+  { value: 'rightArrow', icon: 'arrow', sep: true },
+  { value: 'leftArrow' },
+  { value: 'upArrow' },
+  { value: 'downArrow' },
+  { value: 'leftRightArrow' },
+  { value: 'chevron' },
+  { value: 'homePlate' },
+  { value: 'star4', sep: true },
+  { value: 'star5', icon: 'star' },
+  { value: 'star6' },
+  { value: 'wedgeRectCallout', sep: true },
+  { value: 'wedgeRoundRectCallout' },
 ]
 
-const LINE_W = [0.75, 1, 1.5, 2.25, 3, 4.5, 6].map((w) => ({ value: w, label: `${w} pt` }))
+const LINE_W = [0.75, 1, 1.5, 2.25, 3, 4.5, 6]
 const DASHES = [
-  { value: 'solid', label: 'Solid', hint: '────' },
-  { value: 'sysDot', label: 'Dotted', hint: '········' },
-  { value: 'dash', label: 'Dashed', hint: '- - - -' },
-  { value: 'lgDash', label: 'Long dash', hint: '— — —' },
-  { value: 'dashDot', label: 'Dash dot', hint: '-·-·-·' },
-]
-const SPACING = [1, 1.15, 1.5, 2].map((v) => ({ value: v, label: v === 1 ? 'Single' : v === 2 ? 'Double' : String(v) }))
+  { value: 'solid', hint: '────' },
+  { value: 'sysDot', hint: '········' },
+  { value: 'dash', hint: '- - - -' },
+  { value: 'lgDash', hint: '— — —' },
+  { value: 'dashDot', hint: '-·-·-·' },
+] as const
+const SPACING = [1, 1.15, 1.5, 2]
 const VALIGN = [
-  { value: 't', label: 'Top', icon: 'vTop' },
-  { value: 'ctr', label: 'Middle', icon: 'vMiddle' },
-  { value: 'b', label: 'Bottom', icon: 'vBottom' },
+  { value: 't', k: 'top', icon: 'vTop' },
+  { value: 'ctr', k: 'middle', icon: 'vMiddle' },
+  { value: 'b', k: 'bottom', icon: 'vBottom' },
 ] as const
 
 export type Arrange = 'front' | 'forward' | 'backward' | 'back'
@@ -93,132 +94,135 @@ export function PptxToolbar(props: {
   const font = fontName(st?.font)
   const sz = st?.sz ? Math.round(st.sz * 2) / 2 : undefined
   const anchor = text ? props.textAnchor : props.shape?.anchor
+  const t = useStrings()
+  const kb = (label: string, keys: string) => t.edit.keyed(label, keys)
+  const valign = VALIGN.map(({ k, ...x }) => ({ ...x, label: t.docx.vAligns[k] }))
   return (
     <EditorBar>
-      <Btn icon="undo" title={`Undo (${MOD}Z)`} disabled={!text && !props.canUndo} onClick={() => (text ? editor.undo() : props.onUndo(false))} />
-      <Btn icon="redo" title={`Redo (${MOD}Y)`} onClick={() => (text ? editor.redo() : props.onUndo(true))} />
+      <Btn icon="undo" title={kb(t.edit.undo, `${MOD}Z`)} disabled={!text && !props.canUndo} onClick={() => (text ? editor.undo() : props.onUndo(false))} />
+      <Btn icon="redo" title={kb(t.edit.redo, `${MOD}Y`)} onClick={() => (text ? editor.redo() : props.onUndo(true))} />
       <Sep />
-      <Menu title="Insert" label="Insert" icon="plus" items={SHAPES as { value: string; label: string; icon?: string; sep?: boolean }[]} onPick={(v) => props.onInsert(v)} />
+      <Menu title={t.pptx.insert} label={t.pptx.insert} icon="plus" items={SHAPES.map((x) => ({ ...x, label: t.pptx.shapes[x.value] }))} onPick={(v) => props.onInsert(v as ShapeKind)} />
       <Menu
-        title="Slide"
-        label="Slide"
+        title={t.pptx.slide}
+        label={t.pptx.slide}
         icon="slideAdd"
         items={[
-          { value: 'add', label: 'New slide', icon: 'slideAdd', hint: `${MOD}M` },
-          { value: 'duplicate', label: 'Duplicate slide', icon: 'copy' },
-          { value: 'delete', label: 'Delete slide', icon: 'trash' },
-          { value: 'up', label: 'Move slide up', icon: 'up', sep: true },
-          { value: 'down', label: 'Move slide down', icon: 'down' },
-          { value: 'hide', label: 'Hide / show slide', icon: 'hide', sep: true },
+          { value: 'add', label: t.pptx.newSlide, icon: 'slideAdd', hint: `${MOD}M` },
+          { value: 'duplicate', label: t.pptx.duplicateSlide, icon: 'copy' },
+          { value: 'delete', label: t.pptx.deleteSlide, icon: 'trash' },
+          { value: 'up', label: t.pptx.moveUp, icon: 'up', sep: true },
+          { value: 'down', label: t.pptx.moveDown, icon: 'down' },
+          { value: 'hide', label: t.pptx.hideShow, icon: 'hide', sep: true },
         ]}
         onPick={(v) => props.onSlide(v as SlideCmd)}
       />
       <Sep />
       {text ? (
         <>
-          <Select title="Font" width={112} menuWidth={200} value={font} placeholder="Font" options={fontOptions(font)} onChange={(v) => editor.setFont(v)} />
+          <Select title={t.edit.font} width={112} menuWidth={200} value={font} placeholder={t.edit.font} options={fontOptions(font)} onChange={(v) => editor.setFont(v)} />
           <Sep />
           <SizeBox value={sz} onChange={(v) => editor.setSize(v)} />
           <Sep />
-          <Btn icon="bold" title={`Bold (${MOD}B)`} active={st?.b} onClick={() => editor.toggle('b')} />
-          <Btn icon="italic" title={`Italic (${MOD}I)`} active={st?.i} onClick={() => editor.toggle('i')} />
-          <Btn icon="underline" title={`Underline (${MOD}U)`} active={st?.u} onClick={() => editor.toggle('u')} />
-          <Btn icon="strike" title="Strikethrough" active={st?.strike} onClick={() => editor.toggle('strike')} />
-          <ColorBtn icon="color" title="Text color" value={st?.color} onPick={(c) => editor.setColor(c)} noneLabel="Automatic" />
-          <ColorBtn icon="highlight" title="Highlight color" value={st?.hl} palette={HIGHLIGHTS} onPick={(c) => editor.setHighlight(c)} />
-          <Btn icon="sup" title="Superscript" active={(st?.baseline ?? 0) > 0} onClick={() => editor.toggleBaseline('sup')} />
-          <Btn icon="sub" title="Subscript" active={(st?.baseline ?? 0) < 0} onClick={() => editor.toggleBaseline('sub')} />
+          <Btn icon="bold" title={kb(t.edit.bold, `${MOD}B`)} active={st?.b} onClick={() => editor.toggle('b')} />
+          <Btn icon="italic" title={kb(t.edit.italic, `${MOD}I`)} active={st?.i} onClick={() => editor.toggle('i')} />
+          <Btn icon="underline" title={kb(t.edit.underline, `${MOD}U`)} active={st?.u} onClick={() => editor.toggle('u')} />
+          <Btn icon="strike" title={t.edit.strike} active={st?.strike} onClick={() => editor.toggle('strike')} />
+          <ColorBtn icon="color" title={t.edit.textColor} value={st?.color} onPick={(c) => editor.setColor(c)} noneLabel={t.edit.automatic} />
+          <ColorBtn icon="highlight" title={t.edit.highlight} value={st?.hl} palette={HIGHLIGHTS} onPick={(c) => editor.setHighlight(c)} />
+          <Btn icon="sup" title={t.edit.sup} active={(st?.baseline ?? 0) > 0} onClick={() => editor.toggleBaseline('sup')} />
+          <Btn icon="sub" title={t.edit.sub} active={(st?.baseline ?? 0) < 0} onClick={() => editor.toggleBaseline('sub')} />
           <Sep />
-          <Btn icon="alignLeft" title="Align left" active={st?.algn === 'left'} onClick={() => editor.setAlign('left')} />
-          <Btn icon="alignCenter" title="Center" active={st?.algn === 'center'} onClick={() => editor.setAlign('center')} />
-          <Btn icon="alignRight" title="Align right" active={st?.algn === 'right'} onClick={() => editor.setAlign('right')} />
-          <Btn icon="justify" title="Justify" active={st?.algn === 'justify'} onClick={() => editor.setAlign('justify')} />
-          <Dropdown title="Vertical align" icon={VALIGN.find((x) => x.value === anchor)?.icon ?? 'vTop'} label={null} menuWidth={140} value={anchor ?? 't'} options={VALIGN.map((x) => ({ ...x }))} onChange={props.onAnchor} />
+          <Btn icon="alignLeft" title={t.edit.alignLeft} active={st?.algn === 'left'} onClick={() => editor.setAlign('left')} />
+          <Btn icon="alignCenter" title={t.edit.center} active={st?.algn === 'center'} onClick={() => editor.setAlign('center')} />
+          <Btn icon="alignRight" title={t.edit.alignRight} active={st?.algn === 'right'} onClick={() => editor.setAlign('right')} />
+          <Btn icon="justify" title={t.edit.justify} active={st?.algn === 'justify'} onClick={() => editor.setAlign('justify')} />
+          <Dropdown title={t.docx.vAlign} icon={VALIGN.find((x) => x.value === anchor)?.icon ?? 'vTop'} label={null} menuWidth={140} value={anchor ?? 't'} options={valign} onChange={props.onAnchor} />
           <Dropdown
-            title="Line spacing"
+            title={t.pptx.lineSpacing}
             icon="lineSpacing"
             label={null}
             menuWidth={140}
             value={st?.lnPct ? Math.round(st.lnPct * 100) / 100 : ''}
-            options={SPACING}
+            options={SPACING.map((v) => ({ value: v, label: v === 1 ? t.docx.spacings.single : v === 2 ? t.docx.spacings.double : formatNumber(t, v) }))}
             onChange={(v) => editor.setLineSpacing(v)}
           />
           <Sep />
-          <Btn icon="bullets" title="Bulleted list" active={st?.bullet === 'bullet'} onClick={() => editor.toggleBullet('bullet')} />
-          <Btn icon="numbers" title="Numbered list" active={st?.bullet === 'number'} onClick={() => editor.toggleBullet('number')} />
-          <Btn icon="outdent" title="Decrease indent (Shift+Tab)" disabled={!st?.lvl} onClick={() => editor.indentLevel(-1)} />
-          <Btn icon="indent" title="Increase indent" onClick={() => editor.indentLevel(1)} />
-          <Btn icon="clear" title="Clear formatting" onClick={() => editor.clearFormat()} />
+          <Btn icon="bullets" title={t.edit.bullets} active={st?.bullet === 'bullet'} onClick={() => editor.toggleBullet('bullet')} />
+          <Btn icon="numbers" title={t.edit.numbers} active={st?.bullet === 'number'} onClick={() => editor.toggleBullet('number')} />
+          <Btn icon="outdent" title={kb(t.edit.indentLess, 'Shift+Tab')} disabled={!st?.lvl} onClick={() => editor.indentLevel(-1)} />
+          <Btn icon="indent" title={t.edit.indentMore} onClick={() => editor.indentLevel(1)} />
+          <Btn icon="clear" title={t.edit.clearFormat} onClick={() => editor.clearFormat()} />
         </>
       ) : props.shape ? (
         <>
-          <ColorBtn icon="fill" title="Fill color" onPick={props.onFill} noneLabel="Transparent" />
-          <ColorBtn icon="borders" title="Border color" onPick={(c) => props.onLine({ color: c })} noneLabel="Transparent" />
-          <Dropdown title="Border weight" icon="lineWeight" label={null} menuWidth={120} options={LINE_W} onChange={(w) => props.onLine({ w })} />
-          <Dropdown title="Border dash" icon="lineStyle" label={null} menuWidth={170} options={DASHES} onChange={(dash) => props.onLine({ dash })} />
+          <ColorBtn icon="fill" title={t.pptx.fillColor} onPick={props.onFill} noneLabel={t.pptx.transparent} />
+          <ColorBtn icon="borders" title={t.pptx.borderColor} onPick={(c) => props.onLine({ color: c })} noneLabel={t.pptx.transparent} />
+          <Dropdown title={t.pptx.borderWeight} icon="lineWeight" label={null} menuWidth={120} options={LINE_W.map((w) => ({ value: w, label: t.pptx.points(formatNumber(t, w)) }))} onChange={(w) => props.onLine({ w })} />
+          <Dropdown title={t.pptx.borderDash} icon="lineStyle" label={null} menuWidth={170} options={DASHES.map((x) => ({ ...x, label: t.pptx.dashes[x.value] }))} onChange={(dash) => props.onLine({ dash })} />
           <Sep />
           <Menu
-            title="Arrange"
-            label="Arrange"
+            title={t.pptx.arrange}
+            label={t.pptx.arrange}
             icon="front"
             items={[
-              { value: 'front', label: 'Bring to front', icon: 'front', hint: `${MOD}⇧↑` },
-              { value: 'forward', label: 'Bring forward', hint: `${MOD}↑` },
-              { value: 'backward', label: 'Send backward', hint: `${MOD}↓` },
-              { value: 'back', label: 'Send to back', icon: 'back', hint: `${MOD}⇧↓` },
+              { value: 'front', label: t.pptx.front, icon: 'front', hint: `${MOD}⇧↑` },
+              { value: 'forward', label: t.pptx.forward, hint: `${MOD}↑` },
+              { value: 'backward', label: t.pptx.backward, hint: `${MOD}↓` },
+              { value: 'back', label: t.pptx.back, icon: 'back', hint: `${MOD}⇧↓` },
             ]}
             onPick={(v) => props.onArrange(v as Arrange)}
           />
           <Dropdown
-            title="Rotate"
+            title={t.pptx.rotate}
             icon="rotate"
             label={null}
             menuWidth={220}
             options={[
-              { value: 'cw', label: 'Rotate 90° clockwise', icon: 'rotate' },
-              { value: 'ccw', label: 'Rotate 90° counter-clockwise', icon: 'rotateCcw' },
-              { value: 'flipH', label: 'Flip horizontally', icon: 'flipH', sep: true },
-              { value: 'flipV', label: 'Flip vertically', icon: 'flipV' },
+              { value: 'cw', label: t.pptx.cw, icon: 'rotate' },
+              { value: 'ccw', label: t.pptx.ccw, icon: 'rotateCcw' },
+              { value: 'flipH', label: t.pptx.flipH, icon: 'flipH', sep: true },
+              { value: 'flipV', label: t.pptx.flipV, icon: 'flipV' },
             ]}
             onChange={(v) => props.onRotate(v as Rotate)}
           />
           <Dropdown
-            title="Align on slide"
+            title={t.pptx.alignOnSlide}
             icon="alignObj"
             label={null}
             menuWidth={150}
             options={[
-              { value: 'left', label: 'Left', icon: 'alignLeft' },
-              { value: 'center', label: 'Center', icon: 'alignCenter' },
-              { value: 'right', label: 'Right', icon: 'alignRight' },
-              { value: 'top', label: 'Top', icon: 'vTop', sep: true },
-              { value: 'middle', label: 'Middle', icon: 'vMiddle' },
-              { value: 'bottom', label: 'Bottom', icon: 'vBottom' },
+              { value: 'left', label: t.pptx.aligns.left, icon: 'alignLeft' },
+              { value: 'center', label: t.pptx.aligns.center, icon: 'alignCenter' },
+              { value: 'right', label: t.pptx.aligns.right, icon: 'alignRight' },
+              { value: 'top', label: t.pptx.aligns.top, icon: 'vTop', sep: true },
+              { value: 'middle', label: t.pptx.aligns.middle, icon: 'vMiddle' },
+              { value: 'bottom', label: t.pptx.aligns.bottom, icon: 'vBottom' },
             ]}
             onChange={(v) => props.onAlign(v as AlignTo)}
           />
           {props.shape.canText && (
-            <Dropdown title="Vertical text align" icon={VALIGN.find((x) => x.value === anchor)?.icon ?? 'vTop'} label={null} menuWidth={140} value={anchor ?? 't'} options={VALIGN.map((x) => ({ ...x }))} onChange={props.onAnchor} />
+            <Dropdown title={t.pptx.textAlign} icon={VALIGN.find((x) => x.value === anchor)?.icon ?? 'vTop'} label={null} menuWidth={140} value={anchor ?? 't'} options={valign} onChange={props.onAnchor} />
           )}
           <Sep />
-          <Btn icon="copy" title={`Duplicate (${MOD}D)`} onClick={props.onDuplicate} />
-          <Btn icon="trash" title="Delete (Del)" onClick={props.onDelete} />
+          <Btn icon="copy" title={kb(t.pptx.duplicate, `${MOD}D`)} onClick={props.onDuplicate} />
+          <Btn icon="trash" title={t.pptx.deleteTitle} onClick={props.onDelete} />
         </>
       ) : (
         <>
-          <ColorBtn icon="fill" title="Slide background" onPick={props.onBackground} noneLabel="Layout default" />
-          <span className="de-tb-hint">Click a shape or text to edit it</span>
+          <ColorBtn icon="fill" title={t.pptx.background} onPick={props.onBackground} noneLabel={t.pptx.layoutDefault} />
+          <span className="de-tb-hint">{t.pptx.clickToEdit}</span>
         </>
       )}
       <Sep />
       <Dropdown
-        title="Present"
+        title={t.pptx.present}
         icon="play"
-        label="Present"
+        label={t.pptx.present}
         menuWidth={200}
         options={[
-          { value: 'cur', label: 'From current slide', hint: 'F5' },
-          { value: 'start', label: 'From beginning', hint: '⇧F5' },
+          { value: 'cur', label: t.pptx.fromCurrent, hint: 'F5' },
+          { value: 'start', label: t.pptx.fromStart, hint: '⇧F5' },
         ]}
         onChange={(v) => props.onPresent(v === 'start')}
       />
