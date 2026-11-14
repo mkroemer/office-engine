@@ -954,8 +954,8 @@ function PageView({ index, count, slice, blocks, meta, page, top, left, height, 
       <div className="de-page-inner de-doc" style={{ ...docStyle, width: `${page.w}pt`, height: height / zoom, zoom }}>
         {onHF && (
           <>
-            <div className="de-hf-zone" contentEditable={false} title={str.docx.editHeader}style={{ top: 0, height: `${page.mt}pt` }} onDoubleClick={() => onHF(hk)} />
-            <div className="de-hf-zone" contentEditable={false} title={str.docx.editFooter}style={{ bottom: 0, height: `${page.mb}pt` }} onDoubleClick={() => onHF(fk)} />
+            <div className="de-hf-zone" contentEditable={false} title={str.docx.editHeader} style={{ top: 0, height: `${page.mt}pt` }} onDoubleClick={() => onHF(hk)} />
+            <div className="de-hf-zone" contentEditable={false} title={str.docx.editFooter} style={{ bottom: 0, height: `${page.mb}pt` }} onDoubleClick={() => onHF(fk)} />
           </>
         )}
         {header && (
