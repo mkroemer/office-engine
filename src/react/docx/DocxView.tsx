@@ -11,7 +11,7 @@ import { ZoomControl, type Zoom } from '../common/ZoomControl'
 import { ContextMenu, MOD, type MenuItem } from '../common/ContextMenu'
 import { PromptDialog, Toast, type PromptSpec } from '../common/Dialog'
 import { domFromPos, getSel, opInsert, posFromDom } from '../edit/input'
-import { download, pickFiles } from '../edit/Toolbar'
+import { download, Icon, pickFiles } from '../edit/Toolbar'
 import { runsText, type RRun } from '../edit/rich'
 import { DocxEditor, type CommentRange, type DocState, type FormatState } from './DocxEditor'
 import { markCss, useCommentsCtl, useCommentsState, type CommentHost, type PlacedThread } from '../comments/Comments'
@@ -839,7 +839,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
           <div className="de-outline-head">
             <span>Outline</span>
             <button type="button" className="de-tb" title="Close outline" aria-label="Close outline" onClick={() => setOutline(false)}>
-              ×
+              <Icon name="close" size={16} />
             </button>
           </div>
           {headings.length ? (
@@ -886,7 +886,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
       )}
       {!isEditing && done && (
         <button type="button" className={outline ? 'de-outline-toggle on' : 'de-outline-toggle'} title="Document outline" onClick={() => setOutline((o) => !o)}>
-          ☰
+          <Icon name="outline" />
         </button>
       )}
       {pageDlg && <PageSetupDialog page={page} onClose={() => setPageDlg(false)} onOk={(set) => void editor.setPage(set).catch((e) => console.error('[office-engine] page setup failed', e))} />}

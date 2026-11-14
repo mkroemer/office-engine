@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { BorderKind, FmtPatch } from '../../core/xlsx/types'
 import { MOD } from '../common/ContextMenu'
 import { EditorBar } from '../common/Slots'
-import { Btn, ColorBtn, Dropdown, fontName, fontOptions, Icon, Menu, Pop, Select, Sep, SizeBox } from '../edit/Toolbar'
+import { Btn, ColorBtn, Dropdown, fontName, fontOptions, Icon, Menu, Pop, Select, Sep, SizeBox, type DropOption, type IconName } from '../edit/Toolbar'
 
 const FORMATS = [
   { value: 'General', label: 'Automatic', hint: '1000.12' },
@@ -28,7 +28,7 @@ const FORMATS = [
   { value: '[h]:mm:ss', label: 'Duration', hint: '24:01:00' },
 ]
 const SIZES = [6, 7, 8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36, 48]
-const BORDERS: { k: BorderKind; icon: string; title: string }[] = [
+const BORDERS: { k: BorderKind; icon: IconName; title: string }[] = [
   { k: 'all', icon: 'bAll', title: 'All borders' },
   { k: 'inner', icon: 'bInner', title: 'Inner borders' },
   { k: 'outer', icon: 'bOuter', title: 'Outer borders' },
@@ -63,7 +63,7 @@ const ROTATE = [
   { value: 255, label: 'Stack vertically', icon: 'rotStack' },
   { value: 90, label: 'Rotate up', icon: 'rotUp90' },
   { value: -90, label: 'Rotate down', icon: 'rotDown90' },
-]
+] satisfies DropOption<number>[]
 const FUNCS = ['SUM', 'AVERAGE', 'COUNT', 'MAX', 'MIN']
 
 export type MergeMode = 'all' | 'across' | 'down' | 'unmerge'

@@ -2,13 +2,13 @@ import { useEffect, useState, type CSSProperties } from 'react'
 import type { CanonStyle, StyleInfo } from '../../core/docx/types'
 import { MOD } from '../common/ContextMenu'
 import { EditorBar } from '../common/Slots'
-import { Btn, ColorBtn, Dropdown, fontName, fontOptions, GridPicker, Icon, Menu, pickFiles, Pop, Select, Sep, SizeBox, type DropOption } from '../edit/Toolbar'
+import { Btn, ColorBtn, Dropdown, fontName, fontOptions, GridPicker, Icon, Menu, pickFiles, Pop, Select, Sep, SizeBox, type DropOption, type IconName } from '../edit/Toolbar'
 import type { BorderPreset } from './tables'
 import type { DocxEditor, FormatState } from './DocxEditor'
 
 const HIGHLIGHTS = ['#ffff00', '#00ff00', '#00ffff', '#ff00ff', '#0000ff', '#ff0000', '#000080', '#008080', '#008000', '#800080', '#800000', '#808000', '#808080', '#c0c0c0', '#000000']
 
-const CELL_BORDERS: { k: BorderPreset; icon: string; title: string }[] = [
+const CELL_BORDERS: { k: BorderPreset; icon: IconName; title: string }[] = [
   { k: 'all', icon: 'bAll', title: 'All borders' },
   { k: 'inner', icon: 'bInner', title: 'Inner borders' },
   { k: 'outer', icon: 'bOuter', title: 'Outer borders' },
@@ -27,7 +27,7 @@ export const CELL_LINES = [
   { value: '0.5pt dotted', label: 'Dotted', hint: '·····' },
   { value: '2.25pt double', label: 'Double', hint: '═══' },
 ]
-const VALIGN = [
+const VALIGN: DropOption<string>[] = [
   { value: 'top', label: 'Top', icon: 'vTop' },
   { value: 'middle', label: 'Middle', icon: 'vMiddle' },
   { value: 'bottom', label: 'Bottom', icon: 'vBottom' },
