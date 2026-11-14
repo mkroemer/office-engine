@@ -1,5 +1,7 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import type { DocumentClient } from '../../core/worker/client'
+import type { ChartModel } from '../../core/xlsx/chart'
+import { renderChart } from '../../core/xlsx/chart-svg'
 import type { SheetDrawing } from '../../core/xlsx/drawings'
 import { Icon } from '../edit/Toolbar'
 import type { Axis } from './axis'
@@ -9,22 +11,69 @@ export interface ShownDrawing extends SheetDrawing {
   url?: string
 }
 
-/** The pictures and charts of the sheet (`xlsx.drawings`), read again when another sheet is shown */
-export function useSheetDrawings(client: DocumentClient, sheet: number): ShownDrawing[] {
+/** Edits re-read the charts this long after they rest: the values come from the edited cells. */
+const REREAD_MS = 300
+
+/**
+ * The pictures and charts of the sheet (`xlsx.drawings`), read again when another sheet is shown and after edits
+ * (`edits` counts them), so charts follow the cells; the charts' pictures of the list replaced are released.
+ */
+export function useSheetDrawings(client: DocumentClient, sheet: number, edits = 0): ShownDrawing[] {
   const [list, setList] = useState<ShownDrawing[]>([])
-  useEffect(() => {
-    let live = true
-    setList([])
+  const shown = useRef<ShownDrawing[]>([])
+  const read = (live: () => boolean) =>
     client
       .call('xlsx.drawings', sheet)
       .then((drawings) => Promise.all(drawings.map(async (d) => ({ ...d, url: d.target ? await client.mediaUrl(d.target).catch(() => undefined) : undefined }))))
-      .then((shown) => live && setList(shown))
+      .then((next) => {
+        if (!live()) return
+        releaseCharts(shown.current)
+        shown.current = next
+        setList(next)
+      })
       .catch((e: Error) => console.warn('[office-engine] drawings not read:', e.message))
+  useEffect(() => {
+    let live = true
+    setList([])
+    void read(() => live)
     return () => {
       live = false
     }
-  }, [client, sheet])
+  }, [client, sheet]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!edits) return
+    let live = true
+    const timer = setTimeout(() => void read(() => live), REREAD_MS)
+    return () => {
+      live = false
+      clearTimeout(timer)
+    }
+  }, [edits]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => releaseCharts(shown.current), [])
   return list
+}
+
+/** each chart's picture, drawn for the size it was last shown at */
+const chartUrls = new WeakMap<ChartModel, { key: string; url: string }>()
+
+/** the chart drawn at `w` × `h` as an SVG picture's object URL (in an img: nothing in it runs) */
+function chartUrl(m: ChartModel, w: number, h: number): string {
+  const key = `${Math.round(w)}x${Math.round(h)}`
+  const had = chartUrls.get(m)
+  if (had?.key === key) return had.url
+  if (had) URL.revokeObjectURL(had.url)
+  const url = URL.createObjectURL(new Blob([renderChart(m, Math.round(w), Math.round(h))], { type: 'image/svg+xml' }))
+  chartUrls.set(m, { key, url })
+  return url
+}
+
+function releaseCharts(list: ShownDrawing[]) {
+  for (const d of list) {
+    const had = d.model && chartUrls.get(d.model)
+    if (!had) continue
+    URL.revokeObjectURL(had.url)
+    chartUrls.delete(d.model!)
+  }
 }
 
 /**
@@ -67,9 +116,13 @@ const CHART_NAMES: Record<string, string> = {
   scatter: 'Scatter chart', bubble: 'Bubble chart', radar: 'Radar chart', stock: 'Stock chart', surface: 'Surface chart',
 }
 
-/** A drawing as shown: the picture itself, or a box of its size saying what is there (a chart, a picture the browser cannot draw) */
-export function drawingEl(key: string, d: ShownDrawing, style: CSSProperties): ReactNode {
+/**
+ * A drawing as shown: the picture itself, a chart drawn at its size, or a box of its size saying what is there (a chart
+ * of a kind not drawn, a picture the browser cannot draw).
+ */
+export function drawingEl(key: string, d: ShownDrawing, style: CSSProperties & { width: number; height: number }): ReactNode {
   if (d.url) return <img key={key} className="de-xl-pic" src={d.url} alt={d.title} style={style} draggable={false} />
+  if (d.model) return <img key={key} className="de-xl-pic de-xl-chart" src={chartUrl(d.model, style.width, style.height)} alt={d.title || 'Chart'} style={style} draggable={false} />
   const what = d.kind === 'chart' ? CHART_NAMES[d.chart ?? ''] ?? 'Chart' : 'Picture'
   return (
     <div key={key} className="de-xl-drawing" style={style} title={[what, d.title].filter(Boolean).join(': ')}>
