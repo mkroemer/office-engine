@@ -47,7 +47,41 @@ export interface ViewerState {
   outline: ViewerOutline | null
   /** the view's status line ("Page 2 of 7 · 1,204 words") */
   status: string
+  /** the formatting at the selection while editing (document text, the active cell, slide text being edited), else null */
+  format: TextFormat | null
 }
+
+/** Formatting at the selection, the same for documents, cells and slide text. */
+export interface TextFormat {
+  bold: boolean
+  italic: boolean
+  underline: boolean
+  strike: boolean
+  font?: string
+  /** points */
+  size?: number
+  /** CSS color of the text */
+  color?: string
+  /** text highlight; in a spreadsheet, the cell's fill */
+  highlight?: string
+  align?: 'left' | 'center' | 'right' | 'justify'
+  /** the paragraph's list; undefined where there are no lists (cells) */
+  list?: 'bullet' | 'number' | null
+}
+
+/** A formatting command for the selection (`ViewerController.format`); one a view does not support does nothing. */
+export type FormatCommand =
+  | { op: 'toggle'; mark: 'bold' | 'italic' | 'underline' | 'strike' }
+  | { op: 'font'; name: string }
+  | { op: 'size'; pt: number }
+  | { op: 'color'; color: string | null }
+  | { op: 'highlight'; color: string | null }
+  | { op: 'align'; align: 'left' | 'center' | 'right' | 'justify' }
+  | { op: 'list'; list: 'bullet' | 'number' }
+  | { op: 'clear' }
+
+/** the editors' names for the marks */
+export const MARK_KEY = { bold: 'b', italic: 'i', underline: 'u', strike: 'strike' } as const
 
 /** commands a mounted view runs (each optional: a spreadsheet has no zoom) */
 export interface ViewCommands {
@@ -57,6 +91,7 @@ export interface ViewCommands {
   undo?(): void
   redo?(): void
   present?(): void
+  format?(cmd: FormatCommand): void
 }
 
 /** commands the viewer runs */
@@ -68,7 +103,7 @@ export interface ViewerCommands {
 }
 
 /** the view's part of the state, cleared when a view goes */
-const VIEW_STATE = { canUndo: false, canRedo: false, zoom: null, page: null, outline: null, status: '' } as const
+const VIEW_STATE = { canUndo: false, canRedo: false, zoom: null, page: null, outline: null, status: '', format: null } as const
 
 const EMPTY: ViewerState = { rev: 0, kind: null, loading: false, editing: false, canEdit: false, dirty: false, saving: false, ...VIEW_STATE }
 
@@ -156,6 +191,11 @@ export class ViewerController {
     this.view?.present?.()
   }
 
+  /** formats the selection while editing: `format({ op: 'toggle', mark: 'bold' })`, `format({ op: 'size', pt: 14 })` */
+  format(cmd: FormatCommand) {
+    this.view?.format?.(cmd)
+  }
+
   print() {
     this.fileAction('print')
   }
@@ -217,7 +257,7 @@ export function useViewCommands(ctl: ViewerController | null, commands: ViewComm
   useEffect(() => {
     if (!ctl) return
     const call = <K extends keyof ViewCommands>(k: K) => ((...a: unknown[]) => (latest.current[k] as ((...x: unknown[]) => void) | undefined)?.(...a)) as ViewCommands[K]
-    ctl.attachView({ setZoom: call('setZoom'), goto: call('goto'), gotoPage: call('gotoPage'), undo: call('undo'), redo: call('redo'), present: call('present') })
+    ctl.attachView({ setZoom: call('setZoom'), goto: call('goto'), gotoPage: call('gotoPage'), undo: call('undo'), redo: call('redo'), present: call('present'), format: call('format') })
     return () => ctl.attachView(null)
   }, [ctl, latest])
 }
