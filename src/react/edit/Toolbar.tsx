@@ -476,7 +476,7 @@ export function SizeBox(props: { value?: number; placeholder?: number; sizes?: n
   const title = props.title ?? t.toolbar.fontSize
   return (
     <span ref={ref} className="de-size">
-      <button type="button" className="de-tb de-size-step" title={t.toolbar.fontSizeDown} aria-label={t.toolbar.fontSizeDown}disabled={props.disabled} onMouseDown={keep} onClick={() => set(Math.max(1, Math.ceil(base) - 1))}>
+      <button type="button" className="de-tb de-size-step" title={t.toolbar.fontSizeDown} aria-label={t.toolbar.fontSizeDown} disabled={props.disabled} onMouseDown={keep} onClick={() => set(Math.max(1, Math.ceil(base) - 1))}>
         <Icon name="minus" size={16} />
       </button>
       <input
@@ -514,7 +514,7 @@ export function SizeBox(props: { value?: number; placeholder?: number; sizes?: n
           setOpen(false)
         }}
       />
-      <button type="button" className="de-tb de-size-step" title={t.toolbar.fontSizeUp} aria-label={t.toolbar.fontSizeUp}disabled={props.disabled} onMouseDown={keep} onClick={() => set(Math.floor(base) + 1)}>
+      <button type="button" className="de-tb de-size-step" title={t.toolbar.fontSizeUp} aria-label={t.toolbar.fontSizeUp} disabled={props.disabled} onMouseDown={keep} onClick={() => set(Math.floor(base) + 1)}>
         <Icon name="plus" size={16} />
       </button>
       {open && (
@@ -735,7 +735,7 @@ export function ColorBtn(props: { icon: IconName; title: string; value?: string;
           <div className="de-tb-custom">{t.toolbar.custom}</div>
           <div className="de-tb-grid">
             {custom.map(swatch)}
-            <button type="button" className="de-tb-add" title={t.toolbar.customColorTitle} aria-label={t.toolbar.customColor}onClick={openPicker}>
+            <button type="button" className="de-tb-add" title={t.toolbar.customColorTitle} aria-label={t.toolbar.customColor} onClick={openPicker}>
               <Icon name="plus" size={14} />
             </button>
           </div>
