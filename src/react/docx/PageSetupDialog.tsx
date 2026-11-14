@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PageSet, PageSetup } from '../../core/docx/types'
+import { formatNumber, useStrings, type Strings } from '../strings'
 
 /** paper sizes in pt (portrait) */
-export const PAPERS: { k: string; label: string; w: number; h: number }[] = [
-  { k: 'a4', label: 'A4 (21 × 29.7 cm)', w: 595.3, h: 841.9 },
-  { k: 'letter', label: 'Letter (8.5 × 11 in)', w: 612, h: 792 },
-  { k: 'legal', label: 'Legal (8.5 × 14 in)', w: 612, h: 1008 },
-  { k: 'a3', label: 'A3 (29.7 × 42 cm)', w: 841.9, h: 1190.6 },
-  { k: 'a5', label: 'A5 (14.8 × 21 cm)', w: 419.5, h: 595.3 },
-  { k: 'b5', label: 'B5 (17.6 × 25 cm)', w: 498.9, h: 708.7 },
+export const PAPERS: { k: keyof Strings['pageSetup']['papers']; w: number; h: number }[] = [
+  { k: 'a4', w: 595.3, h: 841.9 },
+  { k: 'letter', w: 612, h: 792 },
+  { k: 'legal', w: 612, h: 1008 },
+  { k: 'a3', w: 841.9, h: 1190.6 },
+  { k: 'a5', w: 419.5, h: 595.3 },
+  { k: 'b5', w: 498.9, h: 708.7 },
 ]
 
 const CM = 72 / 2.54
@@ -23,12 +24,12 @@ export function paperOf(page: { w: number; h: number }): string {
   return PAPERS.find((p) => near(p.w, lo) && near(p.h, hi))?.k ?? 'custom'
 }
 
-const MARGIN_PRESETS: { label: string; cm: [number, number, number, number] }[] = [
-  { label: 'Normal', cm: [2.54, 2.54, 2.54, 2.54] },
-  { label: 'Narrow', cm: [1.27, 1.27, 1.27, 1.27] },
-  { label: 'Moderate', cm: [2.54, 1.91, 2.54, 1.91] },
-  { label: 'Wide', cm: [2.54, 5.08, 2.54, 5.08] },
-  { label: 'Vietnam (TT 01/2011)', cm: [2, 1.5, 2, 3] },
+const MARGIN_PRESETS: { k: keyof Strings['pageSetup']['marginPresets']; cm: [number, number, number, number] }[] = [
+  { k: 'normal', cm: [2.54, 2.54, 2.54, 2.54] },
+  { k: 'narrow', cm: [1.27, 1.27, 1.27, 1.27] },
+  { k: 'moderate', cm: [2.54, 1.91, 2.54, 1.91] },
+  { k: 'wide', cm: [2.54, 5.08, 2.54, 5.08] },
+  { k: 'vietnam', cm: [2, 1.5, 2, 3] },
 ]
 
 /**
@@ -36,6 +37,7 @@ const MARGIN_PRESETS: { label: string; cm: [number, number, number, number] }[] 
  * `onOk` gets only what changed.
  */
 export function PageSetupDialog({ page, onOk, onClose }: { page: PageSetup; onOk: (set: PageSet) => void; onClose: () => void }) {
+  const t = useStrings()
   const [paper, setPaper] = useState(paperOf(page))
   const [land, setLand] = useState(page.w > page.h)
   // margins as typed (cm): top, right, bottom, left
@@ -83,7 +85,7 @@ export function PageSetupDialog({ page, onOk, onClose }: { page: PageSetup; onOk
         type="number"
         step="any"
         min="0"
-        aria-label={`${label} margin (cm)`}
+        aria-label={t.pageSetup.marginLabel(label)}
         value={mar[i]}
         onChange={(e) => setMar((m) => m.map((x, k) => (k === i ? e.target.value : x)))}
       />
@@ -106,67 +108,67 @@ export function PageSetupDialog({ page, onOk, onClose }: { page: PageSetup; onOk
         className="de-dialog de-ps"
         role="dialog"
         noValidate
-        aria-label="Page setup"
+        aria-label={t.pageSetup.title}
         onSubmit={(e) => {
           e.preventDefault()
           submit()
         }}
       >
-        <div className="de-dialog-title">Page setup</div>
-        <div className="de-ps-note">Applies to the whole document.</div>
+        <div className="de-dialog-title">{t.pageSetup.title}</div>
+        <div className="de-ps-note">{t.pageSetup.note}</div>
 
         <div className="de-ps-row">
           <label className="de-ps-field de-ps-wide">
-            <span>Paper size</span>
-            <select ref={first} aria-label="Paper size" value={paper} onChange={(e) => setPaper(e.target.value)}>
+            <span>{t.pageSetup.paper}</span>
+            <select ref={first} aria-label={t.pageSetup.paper} value={paper} onChange={(e) => setPaper(e.target.value)}>
               {PAPERS.map((p) => (
                 <option key={p.k} value={p.k}>
-                  {p.label}
+                  {t.pageSetup.papers[p.k]}
                 </option>
               ))}
-              {paper === 'custom' && <option value="custom">Custom ({toCm(page.w)} × {toCm(page.h)} cm)</option>}
+              {paper === 'custom' && <option value="custom">{t.pageSetup.custom(formatNumber(t, toCm(page.w)), formatNumber(t, toCm(page.h)))}</option>}
             </select>
           </label>
         </div>
 
-        <div className="de-ps-row" role="radiogroup" aria-label="Orientation">
-          <span className="de-ps-head">Orientation</span>
+        <div className="de-ps-row" role="radiogroup" aria-label={t.pageSetup.orientation}>
+          <span className="de-ps-head">{t.pageSetup.orientation}</span>
           <label className="de-ps-radio">
-            <input type="radio" name="de-ps-orient" checked={!land} onChange={() => setLand(false)} /> Portrait
+            <input type="radio" name="de-ps-orient" checked={!land} onChange={() => setLand(false)} /> {t.pageSetup.portrait}
           </label>
           <label className="de-ps-radio">
-            <input type="radio" name="de-ps-orient" checked={land} onChange={() => setLand(true)} /> Landscape
+            <input type="radio" name="de-ps-orient" checked={land} onChange={() => setLand(true)} /> {t.pageSetup.landscape}
           </label>
         </div>
 
         <div className="de-ps-head">
-          Margins
+          {t.pageSetup.margins}
           <select
             className="de-ps-preset"
-            aria-label="Margin preset"
+            aria-label={t.pageSetup.marginPreset}
             value=""
             onChange={(e) => {
               const p = MARGIN_PRESETS[Number(e.target.value)]
               if (p) setMar(p.cm.map(String))
             }}
           >
-            <option value="">Presets…</option>
+            <option value="">{t.pageSetup.presets}</option>
             {MARGIN_PRESETS.map((p, i) => (
-              <option key={p.label} value={i}>
-                {p.label}
+              <option key={p.k} value={i}>
+                {t.pageSetup.marginPresets[p.k]}
               </option>
             ))}
           </select>
         </div>
         <div className="de-ps-grid">
-          {field(0, 'Top')}
-          {field(2, 'Bottom')}
-          {field(3, 'Left')}
-          {field(1, 'Right')}
+          {field(0, t.pageSetup.top)}
+          {field(2, t.pageSetup.bottom)}
+          {field(3, t.pageSetup.left)}
+          {field(1, t.pageSetup.right)}
         </div>
 
         <div className="de-ps-row">
-          <span className="de-ps-head">Columns</span>
+          <span className="de-ps-head">{t.pageSetup.columns}</span>
           {[1, 2, 3].map((n) => (
             <label key={n} className="de-ps-radio">
               <input type="radio" name="de-ps-cols" checked={cols === n} onChange={() => setCols(n)} /> {n}
@@ -174,20 +176,20 @@ export function PageSetupDialog({ page, onOk, onClose }: { page: PageSetup; onOk
           ))}
           {cols > 1 && (
             <label className="de-ps-field">
-              <span>Spacing</span>
-              <input type="number" step="any" min="0" aria-label="Column spacing (cm)" value={gap} onChange={(e) => setGap(e.target.value)} />
+              <span>{t.pageSetup.spacing}</span>
+              <input type="number" step="any" min="0" aria-label={t.pageSetup.spacingLabel} value={gap} onChange={(e) => setGap(e.target.value)} />
               <em>cm</em>
             </label>
           )}
         </div>
 
-        {bad && <div className="de-dialog-note de-ps-bad">The margins leave no room for text.</div>}
+        {bad && <div className="de-dialog-note de-ps-bad">{t.pageSetup.noRoom}</div>}
         <div className="de-dialog-btns">
           <button type="button" className="de-btn" onClick={onClose}>
-            Cancel
+            {t.common.cancel}
           </button>
           <button type="submit" className="de-btn de-btn-primary" disabled={bad}>
-            Apply
+            {t.common.apply}
           </button>
         </div>
       </form>
