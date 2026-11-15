@@ -1,21 +1,21 @@
 /**
  * An Excel chart part (`xl/charts/chartN.xml`) read into what the SVG renderer (chart-svg.ts) draws: its plot groups
- * (bar / column, line, area, pie, doughnut, scatter; 3D ones as their flat form; several groups make a combo chart, each
- * on its own axes), series with their values, axes, title, legend and the plot area's manual layout, and the looks the
- * file gives them: fills (a color, a gradient, a pattern), lines, text colors and sizes, and the built-in chart style
- * (`c:style`) for what it leaves to that.
+ * (bar / column, line, area, pie, doughnut, scatter, bubble, radar, stock, surface; 3D ones as their flat form; several
+ * groups make a combo chart, each on its own axes), series with their values, axes, title, legend and the plot area's
+ * manual layout, and the looks the file gives them: fills (a color, a gradient, a pattern), lines, text colors and sizes,
+ * and the built-in chart style (`c:style`) for what it leaves to that.
  *
  * Series values are read from the workbook's cells (`RangeReader`), so a chart follows edited cells; where a reference
  * cannot be read there (a defined name, another workbook, an unknown sheet) the values the file saved with the chart
  * (`numCache` / `strCache`) stand in. Colors are resolved here against the workbook's theme: the view gets CSS colors.
- * A chart of another kind (radar, bubble, stock, surface, the newer chartex kinds) has no model: it stays a placeholder.
+ * A chart of the newer chartex kinds (waterfall, treemap, ...) is in another part and has no model: it stays a placeholder.
  */
 import { colorOf, cssColor, drawingColor, type ColorCtx } from '../color'
 import type { Theme } from '../theme'
 import { kid, kids, num, textOf, type XEl } from '../xml'
 import { formatValue } from './numfmt'
 
-export type ChartType = 'bar' | 'line' | 'area' | 'pie' | 'doughnut' | 'scatter'
+export type ChartType = 'bar' | 'line' | 'area' | 'pie' | 'doughnut' | 'scatter' | 'bubble' | 'radar' | 'stock' | 'surface'
 export type Grouping = 'clustered' | 'stacked' | 'percentStacked' | 'standard'
 
 export interface ChartText {
@@ -52,6 +52,12 @@ export interface LineLook {
   dash?: string
 }
 
+/** a fill with its look: a color (null: none) and a gradient or pattern over it */
+export interface Fill {
+  fill: string | null
+  look?: FillLook
+}
+
 export interface DataLabels {
   value: boolean
   percent: boolean
@@ -75,12 +81,14 @@ export interface ChartSeries {
   name: string
   /** category labels (bar, line, area, pie) */
   cats: string[]
-  /** x values (scatter) */
+  /** x values (scatter, bubble) */
   xs?: (number | null)[]
   values: (number | null)[]
+  /** bubble sizes */
+  sizes?: (number | null)[]
   /** the values' number format */
   format?: string
-  /** fill (bars, areas, slices); null: none */
+  /** fill (bars, areas, slices, bubbles); null: none */
   fill: string | null
   /** a gradient or pattern over the fill */
   look?: FillLook
@@ -108,6 +116,23 @@ export interface ChartGroup {
   /** pie: degrees clockwise from 12 o'clock */
   firstSliceAng: number
   scatterStyle?: string
+  /** radar: 'standard' (lines), 'marker' (lines with markers), 'filled' */
+  radarStyle?: string
+  /** bubble: the largest bubble's size, % of Excel's default (a quarter of the plot's smaller side) */
+  bubbleScale?: number
+  /** bubble: a size gives the bubble's area ('area') or its width ('w') */
+  sizeRepresents?: 'area' | 'w'
+  showNegBubbles?: boolean
+  /** stock: lines from each category's highest to its lowest value; null: none */
+  hiLow?: LineLook | null
+  /** stock: bars from the first series (open) to the last (close), rising and falling */
+  upDown?: { gapWidth: number; up: Fill & { line?: LineLook | null }; down: Fill & { line?: LineLook | null } }
+  /** surface: drawn as a mesh of lines without fills */
+  wireframe?: boolean
+  /** surface: the bands' own fills, by band */
+  bands?: Record<number, Fill>
+  /** surface: the built-in style's color for each band without a fill of its own */
+  bandColors?: string[]
   /** the ids of its category (x) and value (y) axes */
   axIds: string[]
   series: ChartSeries[]
@@ -115,7 +140,8 @@ export interface ChartGroup {
 
 export interface ChartAxis {
   id: string
-  kind: 'cat' | 'val' | 'date'
+  /** 'ser': a surface chart's series axis */
+  kind: 'cat' | 'val' | 'date' | 'ser'
   /** where it is drawn: l, r, t, b */
   pos: string
   deleted: boolean
@@ -187,6 +213,7 @@ export type RangeReader = (ref: string) => Promise<RangeValues | null>
 const GROUPS: Record<string, ChartType> = {
   barChart: 'bar', bar3DChart: 'bar', lineChart: 'line', line3DChart: 'line', areaChart: 'area', area3DChart: 'area',
   pieChart: 'pie', pie3DChart: 'pie', ofPieChart: 'pie', doughnutChart: 'doughnut', scatterChart: 'scatter',
+  bubbleChart: 'bubble', radarChart: 'radar', stockChart: 'stock', surfaceChart: 'surface', surface3DChart: 'surface',
 }
 
 const val = (el: XEl | undefined, def?: string) => el?.a.val ?? def
@@ -326,6 +353,13 @@ function lookOf(spPr: XEl | undefined, ctx: ColorCtx): FillLook | undefined {
   return undefined
 }
 
+/** a shape's fill and its look together */
+function fullFill(spPr: XEl | undefined, ctx: ColorCtx, def: string | null): Fill {
+  const f = fillOf(spPr, ctx)
+  const look = lookOf(spPr, ctx)
+  return { fill: f === undefined ? def : f, ...(look ? { look } : {}) }
+}
+
 function lineOf(spPr: XEl | undefined, ctx: ColorCtx): { color?: string; width?: number; dash?: string } | null | undefined {
   const ln = kid(spPr, 'ln')
   if (!ln) return undefined
@@ -418,16 +452,20 @@ interface SeriesCtx {
   style: ChartStyle
   /** the series in the chart, for a style's spread of shades */
   count: number
+  /** radar: 'standard', 'marker' or 'filled' */
+  radarStyle?: string
 }
 
 async function seriesOf(ser: XEl, i: number, type: ChartType, varyColors: boolean, sc: SeriesCtx): Promise<ChartSeries> {
   const { ctx, read, plotVisOnly, date1904, style } = sc
   const tx = await source(kid(ser, 'tx'), read)
   const name = tx?.values.filter((x) => x !== null && x !== '').join(' ') || textOf(kid(kid(ser, 'tx'), 'v')) || `Series${num(val(kid(ser, 'idx')), i)! + 1}`
-  const scatter = type === 'scatter'
+  const scatter = type === 'scatter' || type === 'bubble'
   const catSrc = await source(kid(ser, scatter ? 'xVal' : 'cat'), read)
   const valSrc = await source(kid(ser, scatter ? 'yVal' : 'val'), read)
+  const sizeSrc = type === 'bubble' ? await source(kid(ser, 'bubbleSize'), read) : null
   let values = (valSrc?.values ?? []).map(toNum)
+  let sizes = sizeSrc ? sizeSrc.values.map(toNum) : undefined
   // categories that are numbers or dates are shown in their format, text as it is
   const catText = (v: number | string | null) => {
     if (v === null) return ''
@@ -443,6 +481,7 @@ async function seriesOf(ser: XEl, i: number, type: ChartType, varyColors: boolea
     values = values.filter(keep)
     cats = cats.filter(keep)
     xs = xs?.filter(keep)
+    sizes = sizes?.filter(keep)
   }
   if (!cats.length) cats = values.map((_, k) => String(k + 1))
   const spPr = kid(ser, 'spPr')
@@ -450,7 +489,8 @@ async function seriesOf(ser: XEl, i: number, type: ChartType, varyColors: boolea
   const ownFill = fillOf(spPr, ctx)
   const look = lookOf(spPr, ctx)
   const lineOwn = lineOf(spPr, ctx)
-  const lined = type === 'line' || type === 'scatter'
+  // lines, scatter, stock and radar draw lines; a filled radar draws areas as bars and areas do
+  const lined = type === 'line' || type === 'scatter' || type === 'stock' || (type === 'radar' && sc.radarStyle !== 'filled')
   const fill = lined ? null : ownFill === undefined ? color : ownFill
   const line =
     lineOwn === null
@@ -461,10 +501,12 @@ async function seriesOf(ser: XEl, i: number, type: ChartType, varyColors: boolea
           ? { color: lineOwn.color, width: lineOwn.width ?? 0.75, dash: lineOwn.dash }
           : null
   const mk = kid(ser, 'marker')
-  const symbol = val(kid(mk, 'symbol'), lined ? 'auto' : 'none')!
+  // a radar of style 'standard' has no markers; one of style 'marker' has them unless a series says none
+  const markable = lined && !(type === 'radar' && sc.radarStyle === 'standard')
+  const symbol = val(kid(mk, 'symbol'), markable ? 'auto' : 'none')!
   const markerSpPr = kid(mk, 'spPr')
   const marker =
-    symbol === 'none' || !lined
+    symbol === 'none' || !markable
       ? null
       : {
           symbol: symbol === 'auto' ? ['diamond', 'square', 'triangle', 'x', 'star', 'circle'][i % 6] : symbol,
@@ -494,6 +536,7 @@ async function seriesOf(ser: XEl, i: number, type: ChartType, varyColors: boolea
     cats,
     xs,
     values,
+    ...(sizes ? { sizes } : {}),
     format: valSrc?.format,
     fill,
     ...(look && fill !== null ? { look } : {}),
@@ -519,7 +562,7 @@ function axisOf(el: XEl, ctx: ColorCtx, defSize: number): ChartAxis {
     ...(axLine !== undefined ? { line: axLine } : {}),
     ...(text ? { text } : {}),
     id: val(kid(el, 'axId'), '')!,
-    kind: el.n === 'catAx' ? 'cat' : el.n === 'dateAx' ? 'date' : 'val',
+    kind: el.n === 'catAx' ? 'cat' : el.n === 'dateAx' ? 'date' : el.n === 'serAx' ? 'ser' : 'val',
     pos: val(kid(el, 'axPos'), 'b')!,
     deleted: on(kid(el, 'delete')),
     reverse: val(kid(scaling, 'orientation')) === 'maxMin',
@@ -568,17 +611,14 @@ export async function readChart(root: XEl | undefined, opts: { theme: Theme; dat
   const count = plot.c.reduce((a, g) => a + (GROUPS[g.n] ? kids(g, 'ser').length : 0), 0)
   for (const g of plot.c) {
     const type = GROUPS[g.n]
-    if (!type) {
-      // a kind this cannot draw (radar, bubble, stock, surface): the whole chart stays a placeholder
-      if (g.n.endsWith('Chart')) return null
-      continue
-    }
+    if (!type) continue
     const grouping = val(kid(g, 'grouping'), type === 'bar' ? 'clustered' : 'standard') as Grouping
     const varyColors = on(kid(g, 'varyColors'), type === 'pie' || type === 'doughnut')
+    const radarStyle = type === 'radar' ? val(kid(g, 'radarStyle'), 'marker') : undefined
     const series: ChartSeries[] = []
     // a pie shows its first series, a slice per point in its own color; other kinds vary colors for a lone series only
-    const vary = varyColors && (type === 'pie' || type === 'doughnut' || kids(g, 'ser').length === 1)
-    const sc: SeriesCtx = { ctx, read: opts.read, plotVisOnly, date1904: opts.date1904, style, count }
+    const vary = varyColors && type !== 'surface' && type !== 'stock' && (type === 'pie' || type === 'doughnut' || kids(g, 'ser').length === 1)
+    const sc: SeriesCtx = { ctx, read: opts.read, plotVisOnly, date1904: opts.date1904, style, count, radarStyle }
     for (const ser of kids(g, 'ser')) series.push(await seriesOf(ser, seriesIndex++, type, vary, sc))
     const groupLabels = labelsOf(kid(g, 'dLbls'), ctx)
     if (groupLabels) for (const s of series) s.labels ??= groupLabels
@@ -592,12 +632,22 @@ export async function readChart(root: XEl | undefined, opts: { theme: Theme; dat
       holeSize: num(val(kid(g, 'holeSize')), 50)!,
       firstSliceAng: num(val(kid(g, 'firstSliceAng')), 0)!,
       scatterStyle: val(kid(g, 'scatterStyle')),
+      ...(radarStyle ? { radarStyle } : {}),
+      ...(type === 'bubble'
+        ? {
+            bubbleScale: num(val(kid(g, 'bubbleScale')), 100)!,
+            sizeRepresents: val(kid(g, 'sizeRepresents')) === 'w' ? ('w' as const) : ('area' as const),
+            showNegBubbles: on(kid(g, 'showNegBubbles')),
+          }
+        : {}),
+      ...(type === 'stock' ? stockParts(g, ctx, textColor) : {}),
+      ...(type === 'surface' ? surfaceParts(g, ctx, style) : {}),
       axIds: kids(g, 'axId').map((a) => a.a.val ?? ''),
       series,
     })
   }
   if (!groups.length || !groups.some((g) => g.series.length)) return null
-  const axes = plot.c.filter((a) => a.n === 'catAx' || a.n === 'valAx' || a.n === 'dateAx').map((a) => axisOf(a, ctx, fontSize))
+  const axes = plot.c.filter((a) => a.n === 'catAx' || a.n === 'valAx' || a.n === 'dateAx' || a.n === 'serAx').map((a) => axisOf(a, ctx, fontSize))
   // a title without text of its own is Excel's automatic one: the series' name for one series, else "Chart Title"; a chart
   // of one series without a title element has that automatic title too unless it was deleted
   const single = groups.length === 1 && groups[0].series.length === 1
@@ -660,3 +710,29 @@ function styleOf(root: XEl | undefined): number | undefined {
   }
   return undefined
 }
+
+/** a stock group's high-low lines and up-down bars */
+function stockParts(g: XEl, ctx: ColorCtx, textColor: string): Pick<ChartGroup, 'hiLow' | 'upDown'> {
+  const hl = kid(g, 'hiLowLines')
+  const ud = kid(g, 'upDownBars')
+  const bar = (el: XEl | undefined, def: string) => ({ ...fullFill(kid(el, 'spPr'), ctx, def), line: ownLine(kid(el, 'spPr'), ctx, 0.75) ?? { color: textColor, width: 0.75 } })
+  return {
+    hiLow: hl ? (ownLine(kid(hl, 'spPr'), ctx, 0.75) ?? { color: textColor, width: 0.75 }) : null,
+    ...(ud ? { upDown: { gapWidth: num(val(kid(ud, 'gapWidth')), 150)!, up: bar(kid(ud, 'upBars'), '#ffffff'), down: bar(kid(ud, 'downBars'), '#000000') } } : {}),
+  }
+}
+
+/** a surface group's wireframe flag and its bands' own fills (`c:bandFmts`) */
+function surfaceParts(g: XEl, ctx: ColorCtx, style: ChartStyle): Pick<ChartGroup, 'wireframe' | 'bands' | 'bandColors'> {
+  const bands: Record<number, Fill> = {}
+  for (const b of kids(kid(g, 'bandFmts'), 'bandFmt')) {
+    const k = num(val(kid(b, 'idx')), -1)!
+    const f = fillOf(kid(b, 'spPr'), ctx)
+    if (k >= 0 && f !== undefined) bands[k] = fullFill(kid(b, 'spPr'), ctx, null)
+  }
+  // how many bands there are depends on the axis drawn, so the style's colors are given for as many as can be
+  return { wireframe: on(kid(g, 'wireframe')), bands, bandColors: Array.from({ length: SURFACE_BANDS }, (_, k) => style.color(k, SURFACE_BANDS)) }
+}
+
+/** the most value bands a surface chart is drawn with */
+export const SURFACE_BANDS = 12

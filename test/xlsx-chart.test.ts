@@ -117,11 +117,54 @@ describe('xlsx charts: model', () => {
     expect(model!.title?.text).toBe('Sales')
   })
 
-  test('a kind not drawn (radar) keeps the placeholder', async () => {
+  test('radar: read and drawn, a spoke per category, markers for style "marker"', async () => {
     const plot = `<c:radarChart><c:radarStyle val="marker"/>${ser(0, 'B', numRef('Data!$B$2:$B$4', [1, 1, 1]))}<c:axId val="1"/><c:axId val="2"/></c:radarChart>${AXES}`
     const { model, drawing } = await modelOf(await withChart(plot))
-    expect(model).toBeUndefined()
     expect(drawing.chart).toBe('radar')
+    expect(model!.groups[0]).toMatchObject({ type: 'radar', radarStyle: 'marker' })
+    expect(model!.groups[0].series[0].marker).not.toBeNull()
+    const svg = renderChart(model!, 400, 300)
+    for (const t of ['Q1', 'Q2', 'Q3']) expect(svg).toContain(`>${t}<`)
+    expect(svg).toContain('<polygon')
+    expect(svg).not.toContain('NaN')
+  })
+
+  test('bubble: sizes read from the cells, larger values drawn as larger bubbles', async () => {
+    const bub = `<c:ser><c:idx val="0"/><c:order val="0"/><c:tx>${strRef('Data!$B$1', ['x'])}</c:tx><c:xVal>${numRef('Data!$B$2:$B$4', [0, 0, 0])}</c:xVal><c:yVal>${numRef('Data!$C$2:$C$4', [0, 0, 0])}</c:yVal><c:bubbleSize>${numRef('Data!$B$2:$B$4', [1, 1, 1])}</c:bubbleSize></c:ser>`
+    const plot = `<c:bubbleChart><c:varyColors val="0"/>${bub}<c:bubbleScale val="100"/><c:axId val="1"/><c:axId val="2"/></c:bubbleChart><c:valAx><c:axId val="1"/><c:axPos val="b"/><c:crossAx val="2"/></c:valAx><c:valAx><c:axId val="2"/><c:axPos val="l"/><c:majorGridlines/><c:crossAx val="1"/></c:valAx>`
+    const { model } = await modelOf(await withChart(plot))
+    const s = model!.groups[0].series[0]
+    expect(s.sizes).toEqual([10, 20, 15])
+    expect(s.xs).toEqual([10, 20, 15])
+    const svg = renderChart(model!, 400, 300)
+    const radii = [...svg.matchAll(/<circle [^>]*r="([\d.]+)"[^>]*fill="(?!none)/g)].map((m) => Number(m[1]))
+    expect(radii.length).toBe(3)
+    // drawn largest first: 20, 15, 10
+    expect(radii[0]).toBeGreaterThan(radii[1])
+    expect(radii[1]).toBeGreaterThan(radii[2])
+  })
+
+  test('stock: high-low lines and up-down bars between the first and last series', async () => {
+    const plot = `<c:stockChart>${ser(0, 'B', numRef('Data!$B$2:$B$4', [1, 1, 1]))}${ser(1, 'C', numRef('Data!$C$2:$C$4', [1, 1, 1]))}<c:hiLowLines><c:spPr><a:ln w="12700"><a:solidFill><a:srgbClr val="112233"/></a:solidFill></a:ln></c:spPr></c:hiLowLines><c:upDownBars><c:gapWidth val="100"/><c:upBars><c:spPr><a:solidFill><a:srgbClr val="00AA00"/></a:solidFill></c:spPr></c:upBars><c:downBars><c:spPr><a:solidFill><a:srgbClr val="AA0000"/></a:solidFill></c:spPr></c:downBars></c:upDownBars><c:axId val="1"/><c:axId val="2"/></c:stockChart>${AXES}`
+    const { model } = await modelOf(await withChart(plot))
+    expect(model!.groups[0].hiLow).toMatchObject({ color: '#112233' })
+    const svg = renderChart(model!, 400, 300)
+    // every quarter falls (Sales to Cost): three falling bars, three high-low lines
+    expect(svg.match(/fill="#aa0000"/gi)?.length).toBe(3)
+    expect(svg.match(/stroke="#112233"/gi)?.length).toBe(3)
+  })
+
+  test('surface: value bands in the legend and the plot filled by band', async () => {
+    const plot = `<c:surfaceChart><c:wireframe val="0"/>${ser(0, 'B', numRef('Data!$B$2:$B$4', [1, 1, 1]))}${ser(1, 'C', numRef('Data!$C$2:$C$4', [1, 1, 1]))}<c:axId val="1"/><c:axId val="2"/><c:axId val="3"/></c:surfaceChart>${AXES}<c:serAx><c:axId val="3"/><c:axPos val="b"/><c:crossAx val="2"/></c:serAx>`
+    const { model } = await modelOf(await withChart(plot))
+    expect(model!.groups[0].type).toBe('surface')
+    expect(model!.axes.some((a) => a.kind === 'ser')).toBe(true)
+    const svg = renderChart(model!, 400, 300)
+    expect(svg).toContain('>0-5<')
+    expect(svg).toContain('>20-25<')
+    const colors = new Set([...svg.matchAll(/<rect [^>]*fill="(#[0-9a-f]{6})"/gi)].map((m) => m[1].toLowerCase()))
+    expect(colors.size).toBeGreaterThanOrEqual(4)
+    expect(svg).not.toContain('NaN')
   })
 })
 

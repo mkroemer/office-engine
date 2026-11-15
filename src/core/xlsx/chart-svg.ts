@@ -1,7 +1,8 @@
 /**
  * An Excel chart (chart.ts `ChartModel`) drawn as a self-contained SVG picture of `w` × `h` CSS pixels, DOM-free (it
- * runs anywhere): bars and columns (clustered, stacked, 100%), lines (markers, smoothing), areas, scatter, pie and
- * doughnut, combined on primary and secondary axes; axis bounds chosen the way Excel does when the file fixes none
+ * runs anywhere): bars and columns (clustered, stacked, 100%), lines (markers, smoothing), areas, scatter, bubbles,
+ * stock (high-low lines, up-down bars), pie and doughnut, radar, and surface (seen from above, as Excel's contour
+ * chart), combined on primary and secondary axes; axis bounds chosen the way Excel does when the file fixes none
  * (zero included, steps of 1, 2 or 5), major gridlines, tick and data labels in the series' number formats, title and
  * legend, in the colors, lines, fills (gradients and patterns too) and text looks the file gives. Text is measured
  * with the diagram renderers' widths (diagram/svg.ts), so labels are placed without a browser.
@@ -10,6 +11,7 @@
  */
 import { lineHeight, pathData, Svg, textWidth, wrap, type Paint, type Pt } from '../diagram/svg'
 import type { ChartAxis, ChartGroup, ChartModel, ChartSeries, ChartText, FillLook, LineLook, TextLook } from './chart'
+import { SURFACE_BANDS } from './chart'
 import { formatValue } from './numfmt'
 
 const PX = 96 / 72
@@ -235,7 +237,7 @@ function linePath(pts: Pt[], smooth: boolean): string {
 }
 
 /** a group drawn as lines (its legend entries show a line and a marker) */
-const lined = (g: ChartGroup) => g.type === 'line' || g.type === 'scatter'
+const lined = (g: ChartGroup) => g.type === 'line' || g.type === 'scatter' || g.type === 'stock' || (g.type === 'radar' && g.radarStyle !== 'filled')
 
 // ---------------------------------------------------------------- legend
 
@@ -249,6 +251,7 @@ interface LegendEntry {
 
 function legendEntries(m: ChartModel): LegendEntry[] {
   const g0 = m.groups[0]
+  if (g0.type === 'surface') return surfaceBands(g0, m).map((b) => ({ label: b.label, fill: b.fill, look: b.look }))
   // a pie (or one series of varied colors): the points of its first series are the entries
   const pie = g0.type === 'pie' || g0.type === 'doughnut'
   if (m.groups.length === 1 && g0.varyColors && (pie || g0.series.length === 1)) {
@@ -375,7 +378,7 @@ interface AxisPlan {
 }
 
 const isStacked = (g: ChartGroup) => g.grouping === 'stacked' || g.grouping === 'percentStacked'
-const xValued = (g: ChartGroup) => g.type === 'scatter'
+const xValued = (g: ChartGroup) => g.type === 'scatter' || g.type === 'bubble'
 
 /** the extent of a group's values on its value axis (sums when stacked, 0…1 when 100%) */
 function extent(g: ChartGroup): [number, number] {
@@ -404,7 +407,13 @@ function extent(g: ChartGroup): [number, number] {
   if (!all.length) return [0, 1]
   const lo = Math.min(...all)
   const hi = Math.max(...all)
-  return [lo, hi]
+  return g.type === 'bubble' ? bubbleRoom(lo, hi) : [lo, hi]
+}
+
+/** bubbles reach past their centers: the axes leave them room, as Excel's do, without crossing zero for it */
+function bubbleRoom(lo: number, hi: number): [number, number] {
+  const pad = (hi - lo || Math.abs(hi) || 1) * 0.15
+  return [lo >= 0 ? Math.max(0, lo - pad) : lo - pad, hi <= 0 ? Math.min(0, hi + pad) : hi + pad]
 }
 
 /** a stacked line's points: each series on top of those before it */
@@ -463,7 +472,11 @@ export function renderChart(m: ChartModel, W: number, H: number): string {
   const bg = m.bgLook || m.bg === null ? '' : (m.bg ?? '#ffffff')
 
   const pie = m.groups.find((g) => g.type === 'pie' || g.type === 'doughnut')
+  const radar = m.groups.find((g) => g.type === 'radar')
+  const surface = m.groups.find((g) => g.type === 'surface')
   if (pie) drawPie(svg, m, pie, inner ?? area)
+  else if (radar) drawRadar(svg, m, radar, inner ?? area, size)
+  else if (surface) drawSurface(svg, m, surface, area, inner, size)
   else drawCartesian(svg, m, area, inner, size)
   return svg.toString(W, H, bg)
 }
@@ -508,14 +521,15 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
     const f = a?.format ?? (pct ? '0%' : on[0]?.series.find((s) => s.format)?.format)
     plans.set(id, { axis: a ?? fallbackAxis(id, horizontal ? 'b' : 'l'), scale: { ...scale, format: f }, labels: scale.ticks.map((t) => fmt(t, f, m.date1904)) })
   }
-  // scatter: its x axis is a value axis too
+  // scatter and bubbles: their x axis is a value axis too
   const scatter = groups.find(xValued)
   let xPlan: AxisPlan | null = null
   if (scatter) {
     const xs = scatter.series.flatMap((s) => (s.xs ?? []).filter((v): v is number => v !== null))
     const a = axis(scatter.axIds[0])
     const known = xs.length ? xs : scatter.series[0].values.map((_, k) => k + 1)
-    const sc = niceScale(Math.min(...known), Math.max(...known), { min: a?.min, max: a?.max, major: a?.major, ticks: Math.round(area.w / 70) })
+    const [lo, hi] = scatter.type === 'bubble' ? bubbleRoom(Math.min(...known), Math.max(...known)) : [Math.min(...known), Math.max(...known)]
+    const sc = niceScale(lo, hi, { min: a?.min, max: a?.max, major: a?.major, ticks: Math.round(area.w / 70) })
     const f = a?.format ?? scatter.series[0]?.format
     xPlan = { axis: a ?? fallbackAxis(scatter.axIds[0], 'b'), scale: { ...sc, format: f }, labels: sc.ticks.map((t) => fmt(t, f, m.date1904)) }
   }
@@ -650,7 +664,7 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
   }
 
   // the series: areas first, then bars, then lines and points on top
-  const order = (g: ChartGroup) => (g.type === 'area' ? 0 : g.type === 'bar' ? 1 : 2)
+  const order = (g: ChartGroup) => (g.type === 'area' ? 0 : g.type === 'bar' ? 1 : g.type === 'bubble' ? 2 : 3)
   // values outside a fixed axis range stop at the plot area; the margin keeps markers on its edge whole
   const c = CLIP_MARGIN
   svg.raw(`<defs><clipPath id="de-plot"><rect x="${Math.round(inner.x - c)}" y="${Math.round(inner.y - c)}" width="${Math.round(inner.w + 2 * c)}" height="${Math.round(inner.h + 2 * c)}"/></clipPath></defs><g clip-path="url(#de-plot)">`)
@@ -660,7 +674,9 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
     if (g.type === 'bar') drawBars(svg, m, g, p, { valPos, catMid, band, horizontal, size })
     else if (g.type === 'area') drawArea(svg, g, p, { valPos, catMid })
     else if (g.type === 'line') drawLines(svg, m, g, p, { valPos, catMid, size })
+    else if (g.type === 'stock') drawStock(svg, m, g, p, { valPos, catMid, band, size })
     else if (g.type === 'scatter' && xPlan) drawScatter(svg, m, g, p, { valPos, xPos, size })
+    else if (g.type === 'bubble' && xPlan) drawBubbles(svg, m, g, p, { valPos, xPos, size, plot: inner })
   }
   svg.raw('</g>')
 }
@@ -768,6 +784,28 @@ function drawLines(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo
   }
 }
 
+/** a stock chart: each category's high-low line, its up-down bar from the first series to the last, then the series */
+function drawStock(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo & { band: number; size: number }) {
+  const { valPos, catMid, band } = geo
+  const n = Math.max(0, ...g.series.map((s) => s.values.length))
+  for (let k = 0; k < n; k++) {
+    const vs = g.series.map((s) => s.values[k]).filter((v): v is number => v !== null && v !== undefined)
+    if (!vs.length) continue
+    const x = catMid(k)
+    if (g.hiLow) svg.line(x, valPos(p, Math.max(...vs)), x, valPos(p, Math.min(...vs)), linePaint(g.hiLow))
+    const open = g.series[0]?.values[k]
+    const close = g.series.at(-1)?.values[k]
+    if (g.upDown && g.series.length > 1 && open !== null && open !== undefined && close !== null && close !== undefined) {
+      const bar = close >= open ? g.upDown.up : g.upDown.down
+      const w = band / (1 + g.upDown.gapWidth / 100)
+      const a = valPos(p, open)
+      const b = valPos(p, close)
+      svg.rect(x - w / 2, Math.min(a, b), w, Math.max(1, Math.abs(b - a)), { fill: fillPaint(svg, bar.fill, bar.look), ...(bar.line ? linePaint(bar.line) : {}) })
+    }
+  }
+  drawLines(svg, m, g, p, geo)
+}
+
 function drawScatter(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: { valPos: Geo['valPos']; xPos: (v: number) => number; size: number }) {
   const { valPos, xPos } = geo
   const lines = g.scatterStyle !== 'marker' && g.scatterStyle !== 'none'
@@ -786,4 +824,196 @@ function drawScatter(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: {
       if (s.labels) label(svg, m, s, pt.k, s.values[pt.k]!, pt.x, pt.y - lh * 0.8)
     })
   }
+}
+
+/**
+ * Bubbles: the largest of the chart a quarter of the plot's smaller side across at a scale of 100 %, the others by area
+ * (or width) in proportion; larger ones drawn first so smaller ones stay in view. A negative size is drawn as an
+ * outline where the chart shows negative bubbles, else not at all.
+ */
+function drawBubbles(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: { valPos: Geo['valPos']; xPos: (v: number) => number; size: number; plot: Box }) {
+  const { valPos, xPos, plot } = geo
+  const biggest = Math.max(0, ...g.series.flatMap((s) => (s.sizes ?? []).map((z) => Math.abs(z ?? 0))))
+  if (!biggest) return
+  const maxR = ((Math.min(plot.w, plot.h) / 4) * ((g.bubbleScale ?? 100) / 100)) / 2
+  const radius = (z: number) => (g.sizeRepresents === 'w' ? (maxR * Math.abs(z)) / biggest : maxR * Math.sqrt(Math.abs(z) / biggest))
+  for (const s of g.series) {
+    const paint = fillPaint(svg, s.fill, s.look)
+    const pts: { x: number; y: number; r: number; k: number; neg: boolean }[] = []
+    s.values.forEach((v, k) => {
+      const xv = s.xs ? s.xs[k] : k + 1
+      const z = s.sizes?.[k]
+      if (v === null || xv === null || xv === undefined || z === null || z === undefined || z === 0) return
+      if (z < 0 && !g.showNegBubbles) return
+      pts.push({ x: xPos(xv), y: valPos(p, v), r: Math.max(1, radius(z)), k, neg: z < 0 })
+    })
+    pts.sort((a, b) => b.r - a.r)
+    const lh = lineHeight(textOf(m, s.labels?.text).size)
+    for (const pt of pts) {
+      const own = s.points[pt.k]
+      const fill = pt.neg ? 'none' : own?.color || own?.look ? fillPaint(svg, own.color ?? s.fill, own.look) : paint
+      svg.circle(pt.x, pt.y, pt.r, { fill, stroke: pt.neg ? (s.fill ?? m.textColor) : s.line?.color, sw: s.line ? Math.max(0.75, s.line.width * PX) : 1 })
+      if (s.labels) label(svg, m, s, pt.k, s.values[pt.k]!, pt.x, pt.y - (s.labels.pos === 'ctr' ? 0 : pt.r + lh / 2))
+    }
+  }
+}
+
+// ---------------------------------------------------------------- radar
+
+/** a radar: a spoke per category from 12 o'clock clockwise, the value axis along the spokes and rings at its ticks */
+function drawRadar(svg: Svg, m: ChartModel, g: ChartGroup, box: Box, size: number) {
+  const a = m.axes.find((x) => x.id === g.axIds[1])
+  const catAxis = m.axes.find((x) => x.id === g.axIds[0])
+  const cats = g.series[0]?.cats ?? []
+  const n = Math.max(3, ...g.series.map((s) => s.values.length))
+  const catT = textOf(m, catAxis?.text)
+  const valT = textOf(m, a?.text)
+  const showCats = !(catAxis?.deleted ?? false) && (catAxis?.labels ?? true)
+  const labelW = showCats ? Math.max(0, ...cats.map((c) => textWidth(c, catT.size, catT.bold))) : 0
+  const R = Math.max(10, Math.min(box.w / 2 - labelW - 8, box.h / 2 - lineHeight(catT.size) - 6))
+  const cx = box.x + box.w / 2
+  const cy = box.y + box.h / 2
+  const all = g.series.flatMap((s) => s.values).filter((v): v is number => v !== null)
+  const scale = niceScale(all.length ? Math.min(...all) : 0, all.length ? Math.max(...all) : 1, { min: a?.min, max: a?.max, major: a?.major, ticks: Math.max(2, Math.round(R / 30)) })
+  const f = a?.format ?? g.series.find((s) => s.format)?.format
+  const ang = (k: number) => -Math.PI / 2 + (2 * Math.PI * k) / n
+  const at = (k: number, v: number): [number, number] => {
+    const r = Math.max(0, Math.min(1, frac(scale, v))) * R
+    return [cx + r * Math.cos(ang(k)), cy + r * Math.sin(ang(k))]
+  }
+  if (m.plotFill) svg.poly(Array.from({ length: n }, (_, k) => at(k, scale.max)), { fill: fillPaint(svg, m.plotFill, m.plotLook) })
+  const grid = a ? gridPaint(m, a) : { stroke: m.gridColor }
+  if (grid) for (const t of scale.ticks) if (t !== scale.min) svg.poly(Array.from({ length: n }, (_, k) => at(k, t)), { ...grid, fill: 'none' })
+  const spoke = catAxis?.line === null ? null : catAxis?.line ? linePaint(catAxis.line) : { stroke: m.axisColor }
+  if (spoke) for (let k = 0; k < n; k++) svg.line(cx, cy, ...at(k, scale.max), spoke)
+  if (showCats)
+    cats.forEach((c, k) => {
+      const x = cx + (R + 6) * Math.cos(ang(k))
+      const y = cy + (R + 6) * Math.sin(ang(k))
+      const cos = Math.cos(ang(k))
+      svg.text(x, y + Math.sin(ang(k)) * lineHeight(catT.size) * 0.4, c, { size: catT.size, color: catT.color, bold: catT.bold, anchor: Math.abs(cos) < 0.2 ? 'middle' : cos > 0 ? 'start' : 'end' })
+    })
+  if (!(a?.deleted ?? false) && (a?.labels ?? true))
+    for (const t of scale.ticks) svg.text(cx - 4, at(0, t)[1], fmt(t, f, m.date1904), { size: valT.size, color: valT.color, bold: valT.bold, anchor: 'end' })
+  const filled = g.radarStyle === 'filled'
+  for (const s of g.series) {
+    const pts = s.values.map((v, k) => (v === null ? null : { ...ptOf(at(k, v)), k })).filter((p): p is Pt & { k: number } => p !== null)
+    if (pts.length < 2) continue
+    const poly = pts.map((p) => [p.x, p.y] as [number, number])
+    if (filled) svg.poly(poly, { fill: fillPaint(svg, s.fill, s.look), ...(s.line ? linePaint(s.line) : {}) })
+    else if (s.line) svg.poly(poly, { fill: 'none', ...linePaint(s.line) })
+    const lh = lineHeight(textOf(m, s.labels?.text).size)
+    for (const p of pts) {
+      if (s.marker && !filled) marker(svg, p.x, p.y, s.marker)
+      if (s.labels) label(svg, m, s, p.k, s.values[p.k]!, p.x, p.y - lh * 0.8)
+    }
+  }
+  void size
+}
+
+const ptOf = ([x, y]: [number, number]): Pt => ({ x, y })
+
+// ---------------------------------------------------------------- surface
+
+interface Band {
+  lo: number
+  hi: number
+  label: string
+  fill: string | null
+  look?: FillLook
+}
+
+/** a surface's value bands: one per step of its value axis, in the style's colors unless the file gives a band its own */
+function surfaceBands(g: ChartGroup, m: ChartModel): Band[] {
+  const a = m.axes.find((x) => x.kind === 'val' && g.axIds.includes(x.id))
+  const all = g.series.flatMap((s) => s.values).filter((v): v is number => v !== null)
+  const s = niceScale(all.length ? Math.min(...all) : 0, all.length ? Math.max(...all) : 1, { min: a?.min, max: a?.max, major: a?.major, ticks: 6 })
+  const f = a?.format ?? g.series.find((x) => x.format)?.format
+  const out: Band[] = []
+  for (let k = 0; k + 1 < s.ticks.length && out.length < SURFACE_BANDS; k++) {
+    const own = g.bands?.[k]
+    out.push({ lo: s.ticks[k], hi: s.ticks[k + 1], label: `${fmt(s.ticks[k], f, m.date1904)}-${fmt(s.ticks[k + 1], f, m.date1904)}`, fill: own?.fill ?? g.bandColors?.[k] ?? '#4472c4', ...(own?.look ? { look: own.look } : {}) })
+  }
+  return out
+}
+
+/**
+ * A surface seen from above, as Excel's contour chart: categories across, series up, each point of the grid between
+ * the values colored by the band its value (interpolated between the four around it) falls in. A wireframe draws the
+ * grid's lines in their bands' colors instead. A 3D surface is drawn the same way, flat.
+ */
+function drawSurface(svg: Svg, m: ChartModel, g: ChartGroup, area: Box, fixed: Box | null, size: number) {
+  const bands = surfaceBands(g, m)
+  if (!bands.length) return
+  const rows = g.series.map((s) => s.values.map((v) => v ?? 0))
+  const cols = Math.max(1, ...rows.map((r) => r.length))
+  // a single row or column is stretched into a strip
+  const grid = rows.length > 1 ? rows : [rows[0] ?? [], rows[0] ?? []]
+  const z = grid.map((r) => (cols > 1 ? Array.from({ length: cols }, (_, c) => r[c] ?? 0) : [r[0] ?? 0, r[0] ?? 0]))
+  const ny = z.length
+  const nx = z[0].length
+  const catAxis = m.axes.find((x) => x.id === g.axIds[0])
+  const serAxis = m.axes.find((x) => x.kind === 'ser' && g.axIds.includes(x.id))
+  const catT = textOf(m, catAxis?.text)
+  const serT = textOf(m, serAxis?.text)
+  const showCats = !(catAxis?.deleted ?? false) && (catAxis?.labels ?? true)
+  const showSer = !(serAxis?.deleted ?? false) && (serAxis?.labels ?? true)
+  const names = g.series.map((s) => s.name)
+  const cats = g.series[0]?.cats ?? []
+  const left = showSer ? Math.max(0, ...names.map((x) => textWidth(x, serT.size, serT.bold))) + 8 : 0
+  const bottom = showCats ? lineHeight(catT.size) + 6 : 0
+  const inner = fixed ?? { x: area.x + left, y: area.y + lineHeight(size) / 2, w: Math.max(10, area.w - left - 8), h: Math.max(10, area.h - bottom - lineHeight(size) / 2) }
+  plotArea(svg, m, inner)
+  const X = (i: number) => inner.x + (i / (nx - 1)) * inner.w
+  const Y = (j: number) => inner.y + inner.h - (j / (ny - 1)) * inner.h
+  const bandOf = (v: number) => {
+    for (let k = 0; k < bands.length; k++) if (v < bands[k].hi || k === bands.length - 1) return k
+    return bands.length - 1
+  }
+  const paints = bands.map((b) => fillPaint(svg, b.fill, b.look))
+  if (g.wireframe) {
+    for (let j = 0; j < ny; j++)
+      for (let i = 0; i < nx; i++) {
+        if (i + 1 < nx) svg.line(X(i), Y(j), X(i + 1), Y(j), { stroke: bands[bandOf((z[j][i] + z[j][i + 1]) / 2)].fill ?? m.textColor, sw: 1.5 })
+        if (j + 1 < ny) svg.line(X(i), Y(j), X(i), Y(j + 1), { stroke: bands[bandOf((z[j][i] + z[j + 1][i]) / 2)].fill ?? m.textColor, sw: 1.5 })
+      }
+  } else {
+    // each cell of the grid split into parts about 2 px across, so band edges look smooth; runs of one band in a row of
+    // parts are one rect, and crisp edges keep neighboring rects from showing a seam between them
+    const sub = Math.max(1, Math.min(60, Math.ceil(Math.min(inner.w / (nx - 1), inner.h / (ny - 1)) / 2)))
+    const W = (nx - 1) * sub
+    const H = (ny - 1) * sub
+    const cw = inner.w / W
+    const ch = inner.h / H
+    svg.raw('<g shape-rendering="crispEdges">')
+    for (let y = 0; y < H; y++) {
+      const fy = (y + 0.5) / sub
+      const j = Math.min(ny - 2, Math.floor(fy))
+      const ty = fy - j
+      let start = 0
+      let cur = -1
+      for (let x = 0; x <= W; x++) {
+        let b = -1
+        if (x < W) {
+          const fx = (x + 0.5) / sub
+          const i = Math.min(nx - 2, Math.floor(fx))
+          const tx = fx - i
+          const v = (z[j][i] * (1 - tx) + z[j][i + 1] * tx) * (1 - ty) + (z[j + 1][i] * (1 - tx) + z[j + 1][i + 1] * tx) * ty
+          b = bandOf(v)
+        }
+        if (b !== cur) {
+          if (cur >= 0 && paints[cur] !== 'none') svg.rect(inner.x + start * cw, inner.y + inner.h - (y + 1) * ch, (x - start) * cw + 0.5, ch + 0.5, { fill: paints[cur] })
+          start = x
+          cur = b
+        }
+      }
+    }
+    svg.raw('</g>')
+  }
+  const o = (t: { size: number; color: string; bold?: boolean }) => ({ size: t.size, color: t.color, bold: t.bold })
+  if (showCats) {
+    const every = Math.max(1, Math.ceil((Math.max(0, ...cats.map((c) => textWidth(c, catT.size))) + 6) / (inner.w / Math.max(1, nx - 1))))
+    cats.forEach((c, i) => i % every || i >= nx || svg.text(X(i), inner.y + inner.h + 4 + lineHeight(catT.size) / 2, c, { ...o(catT), anchor: 'middle' }))
+  }
+  if (showSer && rows.length > 1) names.forEach((s, j) => svg.text(inner.x - 4, Y(j), s, { ...o(serT), anchor: 'end' }))
 }
