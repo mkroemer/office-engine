@@ -3,15 +3,16 @@
  * runs anywhere): bars and columns (clustered, stacked, 100%), lines (markers, smoothing), areas, scatter, pie and
  * doughnut, combined on primary and secondary axes; axis bounds chosen the way Excel does when the file fixes none
  * (zero included, steps of 1, 2 or 5), major gridlines, tick and data labels in the series' number formats, title and
- * legend. Text is measured with the diagram renderers' widths (diagram/svg.ts), so labels are placed without a browser.
+ * legend, in the colors, lines, fills (gradients and patterns too) and text looks the file gives. Text is measured
+ * with the diagram renderers' widths (diagram/svg.ts), so labels are placed without a browser.
+ *
+ * Every chart is its own picture, so the ids of its gradients, patterns and clip path need only be unique within it.
  */
 import { lineHeight, pathData, Svg, textWidth, wrap, type Paint, type Pt } from '../diagram/svg'
-import type { ChartAxis, ChartGroup, ChartModel, ChartSeries, ChartText } from './chart'
+import type { ChartAxis, ChartGroup, ChartModel, ChartSeries, ChartText, FillLook, LineLook, TextLook } from './chart'
 import { formatValue } from './numfmt'
 
 const PX = 96 / 72
-const GRID = '#d9d9d9'
-const AXIS = '#bfbfbf'
 const PAD = 8
 
 interface Box {
@@ -35,6 +36,9 @@ const DASH: Record<string, number[]> = {
   lgDash: [8, 3], lgDashDot: [8, 3, 1, 3], lgDashDotDot: [8, 3, 1, 3, 1, 3], sysDashDotDot: [3, 1, 1, 1, 1, 1],
 }
 const dashOf = (d: string | undefined, w: number) => (d && DASH[d] ? DASH[d].map((x) => x * Math.max(1, w)).join(' ') : undefined)
+
+/** a line's paint: its color, width and dash */
+const linePaint = (l: LineLook): Paint => ({ stroke: l.color, sw: Math.max(0.75, l.width * PX), dash: dashOf(l.dash, l.width) })
 
 const fmt = (v: number, f: string | undefined, date1904: boolean) => formatValue(v, f || 'General', date1904).text
 
@@ -91,6 +95,86 @@ function textBlock(svg: Svg, t: ChartText, x: number, y: number, maxW: number, a
   const h = lines.length * lineHeight(size)
   svg.text(x, y + h / 2, lines, { size, bold: t.bold, color: t.color, anchor })
   return h
+}
+
+/** a text's size in px and color: its own look over the chart's */
+const textOf = (m: ChartModel, look: TextLook | undefined) => ({ size: (look?.size ?? m.fontSize) * PX, color: look?.color ?? m.textColor, bold: look?.bold })
+
+// ---------------------------------------------------------------- fills: gradients and patterns
+
+const defIds = new WeakMap<Svg, number>()
+
+/** the paint for a fill: its color, or a gradient or pattern defined in the picture */
+function fillPaint(svg: Svg, fill: string | null | undefined, look?: FillLook): string {
+  if (!look || fill === null) return fill ?? 'none'
+  const k = (defIds.get(svg) ?? 0) + 1
+  defIds.set(svg, k)
+  const id = `de-fill${k}`
+  if (look.kind === 'gradient') {
+    const stops = look.stops.map((s) => `<stop offset="${Math.round(s.pos * 1000) / 10}%" stop-color="${s.color}"/>`).join('')
+    if (look.radial) svg.raw(`<defs><radialGradient id="${id}" cx="50%" cy="50%" r="70%">${stops}</radialGradient></defs>`)
+    else {
+      const a = (look.angle * Math.PI) / 180
+      const r = (v: number) => Math.round(v * 1000) / 10
+      const [x1, y1, x2, y2] = [0.5 - Math.cos(a) / 2, 0.5 - Math.sin(a) / 2, 0.5 + Math.cos(a) / 2, 0.5 + Math.sin(a) / 2]
+      svg.raw(`<defs><linearGradient id="${id}" x1="${r(x1)}%" y1="${r(y1)}%" x2="${r(x2)}%" y2="${r(y2)}%">${stops}</linearGradient></defs>`)
+    }
+  } else {
+    svg.raw(`<defs><pattern id="${id}" width="8" height="8" patternUnits="userSpaceOnUse"><rect width="8" height="8" fill="${look.bg}"/>${patternTile(look.preset, look.fg)}</pattern></defs>`)
+  }
+  return `url(#${id})`
+}
+
+/** an 8 × 8 Bayer matrix: a pattern of n % fills the cells below n % of 64, spread evenly */
+const BAYER = [0, 32, 8, 40, 2, 34, 10, 42, 48, 16, 56, 24, 50, 18, 58, 26, 12, 44, 4, 36, 14, 46, 6, 38, 60, 28, 52, 20, 62, 30, 54, 22, 3, 35, 11, 43, 1, 33, 9, 41, 51, 19, 59, 27, 49, 17, 57, 25, 15, 47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21]
+
+/** a preset pattern's foreground in an 8 × 8 tile (DrawingML's `prst` names); one not drawn here is shown at 50 % */
+function patternTile(preset: string, fg: string): string {
+  const cells = (on: (x: number, y: number) => boolean) => {
+    let s = ''
+    for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) if (on(x, y)) s += `M${x} ${y}h1v1h-1z`
+    return s ? `<path d="${s}" fill="${fg}"/>` : ''
+  }
+  const lines = (d: string, w: number) => `<path d="${d}" stroke="${fg}" stroke-width="${w}" fill="none"/>`
+  const horz = (gap: number, w: number, dash = false) => lines(Array.from({ length: 8 / gap }, (_, k) => `M0 ${k * gap + w / 2}H${dash ? 4 : 8}`).join(''), w)
+  const vert = (gap: number, w: number, dash = false) => lines(Array.from({ length: 8 / gap }, (_, k) => `M${k * gap + w / 2} 0V${dash ? 4 : 8}`).join(''), w)
+  const down = (gap: number, w: number) => lines([-8, ...Array.from({ length: 8 / gap }, (_, k) => k * gap)].map((o) => `M${o} 0L${o + 8} 8`).join(''), w)
+  const up = (gap: number, w: number) => lines([16, ...Array.from({ length: 8 / gap }, (_, k) => 8 + k * gap)].map((o) => `M${o} 0L${o - 8} 8`).join(''), w)
+  const pct = /^pct(\d+)$/.exec(preset)
+  if (pct) return cells((x, y) => BAYER[y * 8 + x] < Math.round((Number(pct[1]) / 100) * 64))
+  switch (preset) {
+    case 'horz': return horz(4, 1)
+    case 'ltHorz': return horz(4, 1)
+    case 'narHorz': return horz(2, 1)
+    case 'dkHorz': return horz(4, 2)
+    case 'dashHorz': return horz(4, 1, true)
+    case 'vert': return vert(4, 1)
+    case 'ltVert': return vert(4, 1)
+    case 'narVert': return vert(2, 1)
+    case 'dkVert': return vert(4, 2)
+    case 'dashVert': return vert(4, 1, true)
+    case 'dnDiag': return down(4, 1)
+    case 'ltDnDiag': return down(4, 1)
+    case 'dkDnDiag': return down(4, 2)
+    case 'wdDnDiag': return down(8, 3)
+    case 'dashDnDiag': return down(8, 1)
+    case 'upDiag': return up(4, 1)
+    case 'ltUpDiag': return up(4, 1)
+    case 'dkUpDiag': return up(4, 2)
+    case 'wdUpDiag': return up(8, 3)
+    case 'dashUpDiag': return up(8, 1)
+    case 'cross':
+    case 'smGrid': return horz(4, 1) + vert(4, 1)
+    case 'lgGrid': return horz(8, 1) + vert(8, 1)
+    case 'diagCross':
+    case 'openDmnd': return down(8, 1) + up(8, 1)
+    case 'smCheck': return cells((x, y) => ((x >> 1) + (y >> 1)) % 2 === 0)
+    case 'lgCheck': return cells((x, y) => ((x >> 2) + (y >> 2)) % 2 === 0)
+    case 'solidDmnd': return `<path d="M4 0L8 4L4 8L0 4z" fill="${fg}"/>`
+    case 'dotGrid': return cells((x, y) => x % 4 === 0 && y % 4 === 0)
+    case 'dotDmnd': return cells((x, y) => (x % 4 === 0 && y % 4 === 0) || (x % 4 === 2 && y % 4 === 2))
+    default: return cells((x, y) => BAYER[y * 8 + x] < 32)
+  }
 }
 
 // ---------------------------------------------------------------- markers and lines
@@ -150,11 +234,15 @@ function linePath(pts: Pt[], smooth: boolean): string {
   return pathData(cmds)
 }
 
+/** a group drawn as lines (its legend entries show a line and a marker) */
+const lined = (g: ChartGroup) => g.type === 'line' || g.type === 'scatter'
+
 // ---------------------------------------------------------------- legend
 
 interface LegendEntry {
   label: string
   fill?: string | null
+  look?: FillLook
   line?: ChartSeries['line']
   marker?: ChartSeries['marker']
 }
@@ -165,25 +253,26 @@ function legendEntries(m: ChartModel): LegendEntry[] {
   const pie = g0.type === 'pie' || g0.type === 'doughnut'
   if (m.groups.length === 1 && g0.varyColors && (pie || g0.series.length === 1)) {
     const s = g0.series[0]
-    return s.cats.map((c, k) => ({ label: c, fill: s.points[k]?.color ?? s.fill })).filter((_, k) => !m.legend?.deleted.includes(k))
+    return s.cats.map((c, k) => ({ label: c, fill: s.points[k]?.color ?? s.fill, look: s.points[k]?.look ?? (s.points[k]?.color ? undefined : s.look) })).filter((_, k) => !m.legend?.deleted.includes(k))
   }
   const out: LegendEntry[] = []
   let k = 0
   for (const g of m.groups)
     for (const s of g.series) {
-      if (!m.legend?.deleted.includes(k++)) out.push({ label: s.name, fill: g.type === 'line' || g.type === 'scatter' ? undefined : s.fill, line: g.type === 'line' || g.type === 'scatter' ? s.line : undefined, marker: s.marker })
+      if (m.legend?.deleted.includes(k++)) continue
+      out.push(lined(g) ? { label: s.name, line: s.line, marker: s.marker } : { label: s.name, fill: s.fill, look: s.look })
     }
   return out
 }
 
-function drawLegend(svg: Svg, m: ChartModel, entries: LegendEntry[], box: Box, vertical: boolean, size: number) {
+function drawLegend(svg: Svg, entries: LegendEntry[], box: Box, vertical: boolean, size: number, color: string, bold?: boolean) {
   const sw = size * 0.8
   const lh = lineHeight(size) + 2
   let x = box.x
   let y = box.y
   const rowW = box.w
   for (const e of entries) {
-    const w = sw + 4 + textWidth(e.label, size) + 12
+    const w = sw + 4 + textWidth(e.label, size, bold) + 12
     if (!vertical && x + w > box.x + rowW + 1 && x > box.x) {
       x = box.x
       y += lh
@@ -192,11 +281,11 @@ function drawLegend(svg: Svg, m: ChartModel, entries: LegendEntry[], box: Box, v
     if (e.line || e.marker) {
       if (e.line) svg.line(x, cy, x + sw * 1.6, cy, { stroke: e.line.color, sw: Math.min(3, e.line.width * PX), dash: dashOf(e.line.dash, e.line.width) })
       if (e.marker) marker(svg, x + sw * 0.8, cy, { ...e.marker, size: Math.min(e.marker.size, 7) })
-      svg.text(x + sw * 1.6 + 4, cy, e.label, { size, color: m.textColor })
-      x += sw * 1.6 + 4 + textWidth(e.label, size) + 12
+      svg.text(x + sw * 1.6 + 4, cy, e.label, { size, color, bold })
+      x += sw * 1.6 + 4 + textWidth(e.label, size, bold) + 12
     } else {
-      svg.rect(x, cy - sw / 2, sw, sw, { fill: e.fill ?? 'none' })
-      svg.text(x + sw + 4, cy, e.label, { size, color: m.textColor })
+      svg.rect(x, cy - sw / 2, sw, sw, { fill: fillPaint(svg, e.fill, e.look) })
+      svg.text(x + sw + 4, cy, e.label, { size, color, bold })
       x += w
     }
     if (vertical) {
@@ -206,9 +295,9 @@ function drawLegend(svg: Svg, m: ChartModel, entries: LegendEntry[], box: Box, v
   }
 }
 
-function legendSize(entries: LegendEntry[], vertical: boolean, size: number, maxW: number): { w: number; h: number } {
+function legendSize(entries: LegendEntry[], vertical: boolean, size: number, maxW: number, bold?: boolean): { w: number; h: number } {
   const lh = lineHeight(size) + 2
-  const widths = entries.map((e) => size * 0.8 * (e.line || e.marker ? 1.6 : 1) + 4 + textWidth(e.label, size) + 12)
+  const widths = entries.map((e) => size * 0.8 * (e.line || e.marker ? 1.6 : 1) + 4 + textWidth(e.label, size, bold) + 12)
   if (vertical) return { w: Math.min(maxW, Math.max(0, ...widths)), h: entries.length * lh }
   let rows = 1
   let x = 0
@@ -234,7 +323,7 @@ function drawPie(svg: Svg, m: ChartModel, g: ChartGroup, box: Box) {
   const cy = box.y + box.h / 2
   const hole = g.type === 'doughnut' ? Math.min(0.9, Math.max(0.1, g.holeSize / 100)) * r : 0
   let a = ((g.firstSliceAng - 90) * Math.PI) / 180
-  const size = m.fontSize * PX
+  const lt = textOf(m, s.labels?.text)
   vals.forEach((v, k) => {
     if (!v) return
     const sweep = (v / total) * Math.PI * 2
@@ -242,12 +331,14 @@ function drawPie(svg: Svg, m: ChartModel, g: ChartGroup, box: Box) {
     const off = ((s.points[k]?.explosion ?? 0) / 100) * r
     const ox = cx + off * Math.cos(mid)
     const oy = cy + off * Math.sin(mid)
-    const fill = s.points[k]?.color ?? s.fill ?? '#4472c4'
+    const pt = s.points[k]
+    const fill = fillPaint(svg, pt?.color ?? s.fill ?? '#4472c4', pt?.look ?? (pt?.color ? undefined : s.look))
     const stroke = s.line?.color ?? '#ffffff'
+    const sw = s.line ? Math.max(0.75, s.line.width * PX) : 1
     const at = (rr: number, ang: number): Pt => ({ x: ox + rr * Math.cos(ang), y: oy + rr * Math.sin(ang) })
     const large = sweep > Math.PI ? 1 : 0
     if (sweep >= Math.PI * 2 - 1e-6) {
-      svg.circle(ox, oy, r, { fill, stroke, sw: 1 })
+      svg.circle(ox, oy, r, { fill, stroke, sw })
       if (hole) svg.circle(ox, oy, hole, { fill: m.bg ?? '#ffffff' })
     } else {
       const p1 = at(r, a)
@@ -256,7 +347,7 @@ function drawPie(svg: Svg, m: ChartModel, g: ChartGroup, box: Box) {
       const d = hole
         ? `M${n(p1.x)} ${n(p1.y)} A${n(r)} ${n(r)} 0 ${large} 1 ${n(p2.x)} ${n(p2.y)} L${n(at(hole, a + sweep).x)} ${n(at(hole, a + sweep).y)} A${n(hole)} ${n(hole)} 0 ${large} 0 ${n(at(hole, a).x)} ${n(at(hole, a).y)} Z`
         : `M${n(ox)} ${n(oy)} L${n(p1.x)} ${n(p1.y)} A${n(r)} ${n(r)} 0 ${large} 1 ${n(p2.x)} ${n(p2.y)} Z`
-      svg.path(d, { fill, stroke, sw: 1 })
+      svg.path(d, { fill, stroke, sw })
     }
     if (s.labels) {
       const parts: string[] = []
@@ -267,7 +358,8 @@ function drawPie(svg: Svg, m: ChartModel, g: ChartGroup, box: Box) {
       const lr = outside ? r * 1.15 : hole ? (r + hole) / 2 : r * 0.65
       const p = at(lr, mid)
       const anchor = outside ? (Math.cos(mid) >= 0 ? 'start' : 'end') : 'middle'
-      svg.text(p.x, p.y, parts.join(s.labels.sep ?? (outside ? '; ' : '\n')).split('\n'), { size, color: outside ? m.textColor : '#ffffff', anchor })
+      const color = s.labels.text?.color ?? (outside ? m.textColor : '#ffffff')
+      svg.text(p.x, p.y, parts.join(s.labels.sep ?? (outside ? '; ' : '\n')).split('\n'), { size: lt.size, color, bold: lt.bold, anchor })
     }
     a += sweep
   })
@@ -283,6 +375,7 @@ interface AxisPlan {
 }
 
 const isStacked = (g: ChartGroup) => g.grouping === 'stacked' || g.grouping === 'percentStacked'
+const xValued = (g: ChartGroup) => g.type === 'scatter'
 
 /** the extent of a group's values on its value axis (sums when stacked, 0…1 when 100%) */
 function extent(g: ChartGroup): [number, number] {
@@ -308,7 +401,10 @@ function extent(g: ChartGroup): [number, number] {
     return [lo, hi]
   }
   const all = g.series.flatMap((s) => (isStacked(g) ? cumulative(g, s) : s.values)).filter((v): v is number => v !== null)
-  return all.length ? [Math.min(...all), Math.max(...all)] : [0, 1]
+  if (!all.length) return [0, 1]
+  const lo = Math.min(...all)
+  const hi = Math.max(...all)
+  return [lo, hi]
 }
 
 /** a stacked line's points: each series on top of those before it */
@@ -328,7 +424,9 @@ function cumulative(g: ChartGroup, s: ChartSeries): (number | null)[] {
 
 export function renderChart(m: ChartModel, W: number, H: number): string {
   const svg = new Svg()
-  if (m.border !== null) svg.rect(0.5, 0.5, W - 1, H - 1, { stroke: m.border ?? GRID, sw: 1 })
+  // the chart area: a plain color is the picture's canvas; a gradient or pattern a rect of its own
+  if (m.bgLook && m.bg !== null) svg.rect(0, 0, W, H, { fill: fillPaint(svg, m.bg, m.bgLook) })
+  if (m.border !== null) svg.rect(0.5, 0.5, W - 1, H - 1, { stroke: m.border ?? m.gridColor, sw: 1 })
   const size = m.fontSize * PX
   let top = PAD
   if (m.title) top += textBlock(svg, m.title, W / 2, PAD, W - PAD * 2) + 6
@@ -337,16 +435,17 @@ export function renderChart(m: ChartModel, W: number, H: number): string {
   // legend: its own strip beside the plot, unless it lies over it
   const entries = m.legend ? legendEntries(m) : []
   if (m.legend && entries.length) {
+    const lt = textOf(m, m.legend.text)
     const pos = m.legend.pos
     const vertical = pos === 'r' || pos === 'l' || pos === 'tr'
-    const ls = legendSize(entries, vertical, size, vertical ? area.w * 0.4 : area.w)
+    const ls = legendSize(entries, vertical, lt.size, vertical ? area.w * 0.4 : area.w, lt.bold)
     let lb: Box
     if (pos === 't') lb = { x: area.x + (area.w - ls.w) / 2, y: area.y, w: ls.w, h: ls.h }
     else if (pos === 'b') lb = { x: area.x + (area.w - ls.w) / 2, y: area.y + area.h - ls.h, w: ls.w, h: ls.h }
     else if (pos === 'l') lb = { x: area.x, y: area.y + (area.h - ls.h) / 2, w: ls.w, h: ls.h }
     else if (pos === 'tr') lb = { x: area.x + area.w - ls.w, y: area.y, w: ls.w, h: ls.h }
     else lb = { x: area.x + area.w - ls.w, y: area.y + (area.h - ls.h) / 2, w: ls.w, h: ls.h }
-    drawLegend(svg, m, entries, lb, vertical, size)
+    drawLegend(svg, entries, lb, vertical, lt.size, lt.color, lt.bold)
     if (!m.legend.overlay) {
       if (pos === 't') area = { ...area, y: area.y + ls.h + 6, h: area.h - ls.h - 6 }
       else if (pos === 'b') area = { ...area, h: area.h - ls.h - 6 }
@@ -361,26 +460,38 @@ export function renderChart(m: ChartModel, W: number, H: number): string {
     if (m.plot.target === 'inner') inner = b
     else area = b
   }
+  const bg = m.bgLook || m.bg === null ? '' : (m.bg ?? '#ffffff')
 
   const pie = m.groups.find((g) => g.type === 'pie' || g.type === 'doughnut')
-  if (pie) {
-    drawPie(svg, m, pie, inner ?? area)
-    return svg.toString(W, H, m.bg === null ? '' : (m.bg ?? '#ffffff'))
+  if (pie) drawPie(svg, m, pie, inner ?? area)
+  else drawCartesian(svg, m, area, inner, size)
+  return svg.toString(W, H, bg)
+}
+
+/** the plot area's own fill and border, under everything drawn in it */
+function plotArea(svg: Svg, m: ChartModel, b: Box) {
+  if (m.plotFill === null || m.plotFill === undefined) {
+    if (m.plotBorder) svg.rect(b.x, b.y, b.w, b.h, { fill: 'none', ...linePaint(m.plotBorder) })
+    return
   }
-  drawCartesian(svg, m, area, inner, size)
-  return svg.toString(W, H, m.bg === null ? '' : (m.bg ?? '#ffffff'))
+  svg.rect(b.x, b.y, b.w, b.h, { fill: fillPaint(svg, m.plotFill, m.plotLook), ...(m.plotBorder ? linePaint(m.plotBorder) : {}) })
+}
+
+/** a value axis' gridline paint, or null where it has none */
+function gridPaint(m: ChartModel, a: ChartAxis): Paint | null {
+  if (!a.gridlines || a.grid === null) return null
+  return a.grid ? linePaint(a.grid) : { stroke: m.gridColor }
 }
 
 function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, size: number) {
   const axis = (id: string) => m.axes.find((a) => a.id === id)
   const groups = m.groups.filter((g) => g.series.length)
   const horizontal = groups.some((g) => g.type === 'bar' && g.dir === 'bar')
-  const lh = lineHeight(size)
   // value axes and the groups on them
   const valIds = [...new Set(groups.map((g) => g.axIds[1]).filter(Boolean))]
   const plans = new Map<string, AxisPlan>()
-  const cats = groups.find((g) => g.type !== 'scatter')?.series[0]?.cats ?? []
-  const n = Math.max(1, ...groups.filter((g) => g.type !== 'scatter').flatMap((g) => g.series.map((s) => s.values.length)))
+  const cats = groups.find((g) => !xValued(g))?.series[0]?.cats ?? []
+  const n = Math.max(1, ...groups.filter((g) => !xValued(g)).flatMap((g) => g.series.map((s) => s.values.length)))
   const valLen = horizontal ? area.w : area.h
   for (const id of valIds) {
     const a = axis(id)
@@ -398,7 +509,7 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
     plans.set(id, { axis: a ?? fallbackAxis(id, horizontal ? 'b' : 'l'), scale: { ...scale, format: f }, labels: scale.ticks.map((t) => fmt(t, f, m.date1904)) })
   }
   // scatter: its x axis is a value axis too
-  const scatter = groups.find((g) => g.type === 'scatter')
+  const scatter = groups.find(xValued)
   let xPlan: AxisPlan | null = null
   if (scatter) {
     const xs = scatter.series.flatMap((s) => (s.xs ?? []).filter((v): v is number => v !== null))
@@ -408,20 +519,25 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
     const f = a?.format ?? scatter.series[0]?.format
     xPlan = { axis: a ?? fallbackAxis(scatter.axIds[0], 'b'), scale: { ...sc, format: f }, labels: sc.ticks.map((t) => fmt(t, f, m.date1904)) }
   }
-  const catAxis = axis(groups.find((g) => g.type !== 'scatter')?.axIds[0] ?? '')
+  const catAxis = axis(groups.find((g) => !xValued(g))?.axIds[0] ?? '')
   const showCats = !!cats.length && !scatter && !(catAxis?.deleted ?? false) && (catAxis?.labels ?? true)
   const primary = valIds.find((id) => !['r', 't'].includes(plans.get(id)!.axis.pos)) ?? valIds[0]
   const secondary = valIds.find((id) => id !== primary)
 
+  // each axis' labels in their own size and color
+  const look = (a: ChartAxis | undefined) => textOf(m, a?.text)
+  const catT = look(catAxis)
+  const catLh = lineHeight(catT.size)
+
   // room for labels and axis titles
   const shows = (p: AxisPlan | undefined) => !!p && !p.axis.deleted && p.axis.labels
-  const valW = (p: AxisPlan | undefined) => (shows(p) ? Math.max(...p!.labels.map((l) => textWidth(l, size))) + 6 : 0)
-  const catW = showCats ? Math.min(area.w * 0.35, Math.max(...cats.map((c) => textWidth(c, size)))) + 6 : 0
+  const valW = (p: AxisPlan | undefined) => (shows(p) ? Math.max(...p!.labels.map((l) => textWidth(l, look(p!.axis).size, look(p!.axis).bold))) + 6 : 0)
+  const catW = showCats ? Math.min(area.w * 0.35, Math.max(...cats.map((c) => textWidth(c, catT.size, catT.bold)))) + 6 : 0
   const titleH = (a: ChartAxis | undefined) => (a?.title && !a.deleted ? lineHeight(a.title.size * PX) + 4 : 0)
   // category labels too wide to stand side by side are tilted by 45°, as Excel does
-  const catTextW = showCats ? Math.max(...cats.map((c) => textWidth(c, size))) : 0
+  const catTextW = showCats ? Math.max(...cats.map((c) => textWidth(c, catT.size, catT.bold))) : 0
   const tilt = showCats && !horizontal && catTextW + 2 > (area.w * 0.85) / n
-  const catBottom = tilt ? Math.min(area.h * 0.4, catTextW * Math.SQRT1_2 + lh) : lh + 4
+  const catBottom = tilt ? Math.min(area.h * 0.4, catTextW * Math.SQRT1_2 + catLh) : catLh + 4
   let inner: Box
   if (fixed) inner = fixed
   else {
@@ -430,18 +546,19 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
     let left = 0
     let right = 0
     let bottom = 0
-    const topPad = lh / 2
+    const topPad = lineHeight(size) / 2
     if (horizontal) {
       left = catW + titleH(catAxis)
-      bottom = (shows(pp) ? lh + 4 : 0) + titleH(pp?.axis)
+      bottom = (shows(pp) ? lineHeight(look(pp!.axis).size) + 4 : 0) + titleH(pp?.axis)
       if (sp && shows(sp)) right = 0
     } else {
       left = valW(pp) + titleH(pp?.axis)
-      right = sp ? valW(sp) + titleH(sp.axis) : textWidth(cats.at(-1) ?? '', size) / 3
-      bottom = (showCats ? catBottom : xPlan ? lh + 4 : 0) + titleH(xPlan?.axis ?? catAxis)
+      right = sp ? valW(sp) + titleH(sp.axis) : textWidth(cats.at(-1) ?? '', catT.size) / 3
+      bottom = (showCats ? catBottom : xPlan ? lineHeight(look(xPlan.axis).size) + 4 : 0) + titleH(xPlan?.axis ?? catAxis)
     }
     inner = { x: area.x + left, y: area.y + topPad, w: Math.max(10, area.w - left - right - 4), h: Math.max(10, area.h - topPad - bottom) }
   }
+  plotArea(svg, m, inner)
 
   // positions: value v of plan p, category k (its band's middle)
   const valPos = (p: AxisPlan, v: number) => {
@@ -462,41 +579,54 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
   for (const id of valIds) {
     const p = plans.get(id)!
     const right = id !== primary
+    const t = look(p.axis)
+    const grid = gridPaint(m, p.axis)
     for (let k = 0; k < p.scale.ticks.length; k++) {
       const pos = valPos(p, p.scale.ticks[k])
-      if (p.axis.gridlines) horizontal ? svg.line(pos, inner.y, pos, inner.y + inner.h, { stroke: GRID }) : svg.line(inner.x, pos, inner.x + inner.w, pos, { stroke: GRID })
+      if (grid) horizontal ? svg.line(pos, inner.y, pos, inner.y + inner.h, grid) : svg.line(inner.x, pos, inner.x + inner.w, pos, grid)
       if (!shows(p)) continue
-      if (horizontal) svg.text(pos, inner.y + inner.h + 4 + lh / 2, p.labels[k], { size, color: m.textColor, anchor: 'middle' })
-      else svg.text(right ? inner.x + inner.w + 4 : inner.x - 4, pos, p.labels[k], { size, color: m.textColor, anchor: right ? 'start' : 'end' })
+      if (horizontal) svg.text(pos, inner.y + inner.h + 4 + lineHeight(t.size) / 2, p.labels[k], { size: t.size, color: t.color, bold: t.bold, anchor: 'middle' })
+      else svg.text(right ? inner.x + inner.w + 4 : inner.x - 4, pos, p.labels[k], { size: t.size, color: t.color, bold: t.bold, anchor: right ? 'start' : 'end' })
+    }
+    // a value axis' line only where the file draws one
+    if (p.axis.line && !p.axis.deleted) {
+      const lp = linePaint(p.axis.line)
+      if (horizontal) svg.line(inner.x, inner.y + inner.h, inner.x + inner.w, inner.y + inner.h, lp)
+      else if (right) svg.line(inner.x + inner.w, inner.y, inner.x + inner.w, inner.y + inner.h, lp)
+      else svg.line(inner.x, inner.y, inner.x, inner.y + inner.h, lp)
     }
   }
   if (xPlan) {
+    const t = look(xPlan.axis)
+    const grid = gridPaint(m, xPlan.axis)
     for (let k = 0; k < xPlan.scale.ticks.length; k++) {
       const x = xPos(xPlan.scale.ticks[k])
-      if (xPlan.axis.gridlines) svg.line(x, inner.y, x, inner.y + inner.h, { stroke: GRID })
-      if (shows(xPlan)) svg.text(x, inner.y + inner.h + 4 + lh / 2, xPlan.labels[k], { size, color: m.textColor, anchor: 'middle' })
+      if (grid) svg.line(x, inner.y, x, inner.y + inner.h, grid)
+      if (shows(xPlan)) svg.text(x, inner.y + inner.h + 4 + lineHeight(t.size) / 2, xPlan.labels[k], { size: t.size, color: t.color, bold: t.bold, anchor: 'middle' })
     }
   }
   // category labels: flat, tilted where they do not fit flat, and every k-th where they overlap even so
   if (showCats) {
-    const space = horizontal || tilt ? lh * (tilt ? Math.SQRT2 : 1) : catTextW + 2
+    const space = horizontal || tilt ? catLh * (tilt ? Math.SQRT2 : 1) : catTextW + 2
     const every = Math.max(1, Math.ceil(space / Math.max(1, band)))
     const y0 = inner.y + inner.h + 4
+    const o = { size: catT.size, color: catT.color, bold: catT.bold }
     cats.forEach((c, k) => {
       if (k % every) return
-      if (horizontal) svg.text(inner.x - 4, catMid(k), c, { size, color: m.textColor, anchor: 'end' })
+      if (horizontal) svg.text(inner.x - 4, catMid(k), c, { ...o, anchor: 'end' })
       else if (tilt) {
         const x = catMid(k)
-        svg.raw(`<g transform="rotate(-45 ${Math.round(x)} ${Math.round(y0)})">`).text(x, y0, c, { size, color: m.textColor, anchor: 'end' }).raw('</g>')
-      } else svg.text(catMid(k), y0 + lh / 2, c, { size, color: m.textColor, anchor: 'middle' })
+        svg.raw(`<g transform="rotate(-45 ${Math.round(x)} ${Math.round(y0)})">`).text(x, y0, c, { ...o, anchor: 'end' }).raw('</g>')
+      } else svg.text(catMid(k), y0 + catLh / 2, c, { ...o, anchor: 'middle' })
     })
   }
   // the category axis line, where the value axis is 0 (or its minimum)
   const pp = plans.get(primary)
-  if (pp && !(catAxis?.deleted ?? false)) {
+  const catLine = catAxis?.line === null ? null : catAxis?.line ? linePaint(catAxis.line) : { stroke: m.axisColor }
+  if (pp && catLine && !(catAxis?.deleted ?? false)) {
     const at = pp.scale.min <= 0 && pp.scale.max >= 0 && !pp.scale.log ? 0 : pp.scale.min
     const pos = valPos(pp, at)
-    horizontal ? svg.line(pos, inner.y, pos, inner.y + inner.h, { stroke: AXIS }) : svg.line(inner.x, pos, inner.x + inner.w, pos, { stroke: AXIS })
+    horizontal ? svg.line(pos, inner.y, pos, inner.y + inner.h, catLine) : svg.line(inner.x, pos, inner.x + inner.w, pos, catLine)
   }
   // axis titles
   const axisTitle = (a: ChartAxis | undefined, where: 'left' | 'right' | 'bottom') => {
@@ -529,7 +659,7 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
     if (!p) continue
     if (g.type === 'bar') drawBars(svg, m, g, p, { valPos, catMid, band, horizontal, size })
     else if (g.type === 'area') drawArea(svg, g, p, { valPos, catMid })
-    else if (g.type === 'line') drawLines(svg, m, g, p, { valPos, catMid, size, horizontal })
+    else if (g.type === 'line') drawLines(svg, m, g, p, { valPos, catMid, size })
     else if (g.type === 'scatter' && xPlan) drawScatter(svg, m, g, p, { valPos, xPos, size })
   }
   svg.raw('</g>')
@@ -546,17 +676,18 @@ interface Geo {
   catMid: (k: number) => number
 }
 
-function label(svg: Svg, m: ChartModel, s: ChartSeries, k: number, v: number, x: number, y: number, size: number, anchor: 'start' | 'middle' | 'end' = 'middle', color?: string) {
+function label(svg: Svg, m: ChartModel, s: ChartSeries, k: number, v: number, x: number, y: number, anchor: 'start' | 'middle' | 'end' = 'middle', color?: string) {
   const l = s.labels!
   const parts: string[] = []
   if (l.series) parts.push(s.name)
   if (l.category) parts.push(s.cats[k] ?? '')
   if (l.value) parts.push(fmt(v, l.format ?? s.format, m.date1904))
-  if (parts.length) svg.text(x, y, parts.join(l.sep ?? ', '), { size, color: color ?? m.textColor, anchor })
+  const t = textOf(m, l.text)
+  if (parts.length) svg.text(x, y, parts.join(l.sep ?? ', '), { size: t.size, color: l.text?.color ?? color ?? m.textColor, bold: t.bold, anchor })
 }
 
 function drawBars(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo & { band: number; horizontal: boolean; size: number }) {
-  const { valPos, catMid, band, horizontal, size } = geo
+  const { valPos, catMid, band, horizontal } = geo
   const stacked = isStacked(g)
   const n = stacked ? 1 : g.series.length
   const ov = Math.max(-1, Math.min(1, g.overlap / 100))
@@ -564,6 +695,8 @@ function drawBars(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo 
   const total = n * w - (n - 1) * w * ov
   const base = p.scale.min <= 0 && p.scale.max >= 0 && !p.scale.log ? 0 : p.scale.min
   const len = Math.max(...g.series.map((s) => s.values.length))
+  // one gradient or pattern per series (and per point with its own), shared by its bars
+  const paints = g.series.map((s) => fillPaint(svg, s.fill, s.look))
   for (let k = 0; k < len; k++) {
     let posSum = 0
     let negSum = 0
@@ -584,15 +717,17 @@ function drawBars(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo 
       const c0 = catMid(k) - total / 2 + off
       const a = valPos(p, from)
       const b = valPos(p, to)
-      const fill = raw < 0 && s.invertIfNegative ? '#ffffff' : (s.points[k]?.color ?? s.fill ?? 'none')
-      const paint: Paint = { fill, stroke: s.line?.color ?? (raw < 0 && s.invertIfNegative ? (s.fill ?? undefined) : undefined), sw: s.line ? Math.max(0.75, s.line.width * PX) : 1 }
+      const pt = s.points[k]
+      const fill = raw < 0 && s.invertIfNegative ? '#ffffff' : pt?.look || pt?.color ? fillPaint(svg, pt.color ?? s.fill, pt.look) : paints[i]
+      const paint: Paint = { fill, stroke: s.line?.color ?? (raw < 0 && s.invertIfNegative ? (s.fill ?? undefined) : undefined), sw: s.line ? Math.max(0.75, s.line.width * PX) : 1, dash: s.line ? dashOf(s.line.dash, s.line.width) : undefined }
       if (horizontal) svg.rect(Math.min(a, b), c0, Math.abs(b - a), w, paint)
       else svg.rect(c0, Math.min(a, b), w, Math.abs(b - a), paint)
       if (s.labels) {
         const mid = (a + b) / 2
         const inside = stacked || s.labels.pos === 'ctr' || s.labels.pos === 'inEnd' || s.labels.pos === 'inBase'
-        if (horizontal) label(svg, m, s, k, raw, inside ? mid : Math.max(a, b) + 4, c0 + w / 2, size, inside ? 'middle' : 'start', inside ? '#ffffff' : undefined)
-        else label(svg, m, s, k, raw, c0 + w / 2, inside ? mid : Math.min(a, b) - lineHeight(size) / 2, size, 'middle', inside ? '#ffffff' : undefined)
+        const lh = lineHeight(textOf(m, s.labels.text).size)
+        if (horizontal) label(svg, m, s, k, raw, inside ? mid : Math.max(a, b) + 4, c0 + w / 2, inside ? 'middle' : 'start', inside ? '#ffffff' : undefined)
+        else label(svg, m, s, k, raw, c0 + w / 2, inside ? mid : Math.min(a, b) - lh / 2, 'middle', inside ? '#ffffff' : undefined)
       }
     })
   }
@@ -606,13 +741,13 @@ function drawArea(svg: Svg, g: ChartGroup, p: AxisPlan, geo: Geo) {
     const vals = isStacked(g) ? cumulative(g, s).map((v) => v ?? 0) : s.values.map((v) => v ?? 0)
     const top = vals.map((v, k) => [catMid(k), valPos(p, v)] as [number, number])
     const floor = (below && isStacked(g) ? below.map((v, k) => [catMid(k), valPos(p, v)] as [number, number]) : vals.map((_, k) => [catMid(k), valPos(p, base)] as [number, number])).reverse()
-    svg.poly([...top, ...floor], { fill: s.fill ?? 'none', stroke: s.line?.color, sw: s.line ? s.line.width * PX : 0 })
+    svg.poly([...top, ...floor], { fill: fillPaint(svg, s.fill, s.look), ...(s.line ? linePaint(s.line) : {}) })
     below = vals
   }
 }
 
-function drawLines(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo & { size: number; horizontal: boolean }) {
-  const { valPos, catMid, size } = geo
+function drawLines(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo & { size: number }) {
+  const { valPos, catMid } = geo
   for (const s of g.series) {
     const vals = isStacked(g) ? cumulative(g, s) : s.values
     // empty cells leave a gap in the line
@@ -621,19 +756,20 @@ function drawLines(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo
       if (v === null) runs.push([])
       else runs[runs.length - 1].push({ x: catMid(k), y: valPos(p, v) })
     })
-    if (s.line) for (const run of runs) if (run.length > 1) svg.path(linePath(run, s.smooth), { stroke: s.line.color, sw: Math.max(0.75, s.line.width * PX), dash: dashOf(s.line.dash, s.line.width) })
+    if (s.line) for (const run of runs) if (run.length > 1) svg.path(linePath(run, s.smooth), linePaint(s.line))
+    const lh = lineHeight(textOf(m, s.labels?.text).size)
     vals.forEach((v, k) => {
       if (v === null) return
       const x = catMid(k)
       const y = valPos(p, v)
       if (s.marker) marker(svg, x, y, s.marker)
-      if (s.labels) label(svg, m, s, k, s.values[k] ?? v, x, y - lineHeight(size) * 0.8, size)
+      if (s.labels) label(svg, m, s, k, s.values[k] ?? v, x, y - lh * 0.8)
     })
   }
 }
 
 function drawScatter(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: { valPos: Geo['valPos']; xPos: (v: number) => number; size: number }) {
-  const { valPos, xPos, size } = geo
+  const { valPos, xPos } = geo
   const lines = g.scatterStyle !== 'marker' && g.scatterStyle !== 'none'
   for (const s of g.series) {
     const pts: (Pt & { k: number })[] = []
@@ -643,10 +779,11 @@ function drawScatter(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: {
       if (v === null || xv === null || xv === undefined) return
       pts.push({ x: xPos(xv), y: valPos(p, v), k })
     })
-    if (lines && s.line && pts.length > 1) svg.path(linePath(pts, s.smooth || g.scatterStyle === 'smooth' || g.scatterStyle === 'smoothMarker'), { stroke: s.line.color, sw: Math.max(0.75, s.line.width * PX), dash: dashOf(s.line.dash, s.line.width) })
+    if (lines && s.line && pts.length > 1) svg.path(linePath(pts, s.smooth || g.scatterStyle === 'smooth' || g.scatterStyle === 'smoothMarker'), linePaint(s.line))
+    const lh = lineHeight(textOf(m, s.labels?.text).size)
     pts.forEach((pt) => {
       if (s.marker) marker(svg, pt.x, pt.y, s.marker)
-      if (s.labels) label(svg, m, s, pt.k, s.values[pt.k]!, pt.x, pt.y - lineHeight(size) * 0.8, size)
+      if (s.labels) label(svg, m, s, pt.k, s.values[pt.k]!, pt.x, pt.y - lh * 0.8)
     })
   }
 }

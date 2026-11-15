@@ -30,7 +30,7 @@ const ser = (i: number, name: string, val: string, extra = '') =>
 const AXES = '<c:catAx><c:axId val="1"/><c:axPos val="b"/><c:crossAx val="2"/></c:catAx><c:valAx><c:axId val="2"/><c:axPos val="l"/><c:majorGridlines/><c:crossAx val="1"/></c:valAx>'
 
 /** a workbook whose sheet "Data" holds ROWS and one chart (its `plotArea` body given); `hideRow` hides a row (1-based) */
-async function withChart(plot: string, opts: { hideRow?: number; title?: string; titleXml?: string } = {}): Promise<Blob> {
+async function withChart(plot: string, opts: { hideRow?: number; title?: string; titleXml?: string; style?: number } = {}): Promise<Blob> {
   const base = await rowsToXlsx(ROWS, 'Data')
   const zip = await ZipArchive.open(new BlobSource(base))
   const files = new Map<string, string>()
@@ -45,7 +45,7 @@ async function withChart(plot: string, opts: { hideRow?: number; title?: string;
     `${HEAD}<xdr:wsDr ${NS}><xdr:twoCellAnchor><xdr:from><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>10</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>16</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rId1"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>`,
   )
   const title = opts.titleXml ?? (opts.title ? `<c:title><c:tx><c:rich><a:p><a:r><a:t>${opts.title}</a:t></a:r></a:p></c:rich></c:tx></c:title>` : '')
-  files.set('xl/charts/chart1.xml', `${HEAD}<c:chartSpace ${NS}><c:chart>${title}<c:plotArea><c:layout/>${plot}</c:plotArea><c:legend><c:legendPos val="b"/></c:legend><c:plotVisOnly val="1"/></c:chart></c:chartSpace>`)
+  files.set('xl/charts/chart1.xml', `${HEAD}<c:chartSpace ${NS}>${opts.style ? `<c:style val="${opts.style}"/>` : ''}<c:chart>${title}<c:plotArea><c:layout/>${plot}</c:plotArea><c:legend><c:legendPos val="b"/></c:legend><c:plotVisOnly val="1"/></c:chart></c:chartSpace>`)
   const ct = (await zip.text('[Content_Types].xml')).replace(
     '</Types>',
     '<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/><Override PartName="/xl/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/></Types>',
@@ -125,6 +125,58 @@ describe('xlsx charts: model', () => {
   })
 })
 
+describe('xlsx charts: looks', () => {
+  const colored = (spPr: string) => CLUSTERED.replace('<c:tx>', `<c:spPr>${spPr}</c:spPr><c:tx>`).replace(`${ser(0, 'B', numRef('Data!$B$2:$B$4', [1, 1, 1]))}`, ser(0, 'B', numRef('Data!$B$2:$B$4', [1, 1, 1]), `<c:spPr>${spPr}</c:spPr>`))
+
+  test('a gradient fill is drawn as a gradient, a pattern fill as a pattern', async () => {
+    const grad = '<a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="1F4E79"/></a:gs><a:gs pos="100000"><a:srgbClr val="9DC3E6"/></a:gs></a:gsLst><a:lin ang="5400000"/></a:gradFill>'
+    const { model } = await modelOf(await withChart(colored(grad)))
+    const s = model!.groups[0].series[0]
+    expect(s.fill?.toLowerCase()).toBe('#1f4e79')
+    expect(s.look).toMatchObject({ kind: 'gradient', angle: 90, radial: false })
+    const svg = renderChart(model!, 400, 300)
+    expect(svg).toMatch(/<linearGradient id="de-fill\d+"[^>]*>.*stop-color="#9DC3E6"/i)
+    expect(svg).toMatch(/<rect [^>]*fill="url\(#de-fill\d+\)"/)
+
+    const patt = '<a:pattFill prst="dkDnDiag"><a:fgClr><a:srgbClr val="C55A11"/></a:fgClr><a:bgClr><a:srgbClr val="FFFFFF"/></a:bgClr></a:pattFill>'
+    const { model: pm } = await modelOf(await withChart(colored(patt)))
+    expect(pm!.groups[0].series[0].look).toMatchObject({ kind: 'pattern', preset: 'dkDnDiag', fg: '#c55a11', bg: '#ffffff' })
+    expect(renderChart(pm!, 400, 300)).toMatch(/<pattern id="de-fill\d+"[^>]*>.*stroke="#C55A11"/i)
+  })
+
+  test('axis and legend text, gridlines and the plot area in the colors the file gives', async () => {
+    const tx = (c: string) => `<c:txPr><a:bodyPr/><a:p><a:pPr><a:defRPr sz="900"><a:solidFill><a:srgbClr val="${c}"/></a:solidFill></a:defRPr></a:pPr></a:p></c:txPr>`
+    const axes = `<c:catAx><c:axId val="1"/><c:axPos val="b"/>${tx('AA0001')}<c:crossAx val="2"/></c:catAx><c:valAx><c:axId val="2"/><c:axPos val="l"/><c:majorGridlines><c:spPr><a:ln w="9525"><a:solidFill><a:srgbClr val="4B5563"/></a:solidFill><a:prstDash val="dash"/></a:ln></c:spPr></c:majorGridlines>${tx('AA0002')}<c:crossAx val="1"/></c:valAx><c:spPr><a:solidFill><a:srgbClr val="374151"/></a:solidFill></c:spPr>`
+    const plot = CLUSTERED.replace(AXES, axes)
+    const book = await withChart(plot)
+    const { model } = await modelOf(book)
+    model!.legend!.text = { color: '#aa0003' }
+    const svg = renderChart(model!, 400, 300)
+    expect(svg).toMatch(/fill="#AA0001"[^>]*>Q1</i)
+    expect(svg).toMatch(/fill="#AA0002"[^>]*>25</i)
+    expect(svg).toMatch(/fill="#aa0003"[^>]*>Sales</)
+    expect(svg).toMatch(/<line [^>]*stroke="#4B5563"[^>]*stroke-dasharray/i)
+    expect(model!.plotFill?.toLowerCase()).toBe('#374151')
+    expect(svg).toContain('fill="#374151"')
+  })
+
+  test('the theme gives the default grays; a dark built-in style a dark chart with light text', async () => {
+    const { model } = await modelOf(await withChart(CLUSTERED))
+    expect(model!.gridColor.toLowerCase()).toBe('#d9d9d9')
+    expect(model!.textColor.toLowerCase()).toBe('#595959')
+    const dark = await withChart(CLUSTERED, { style: 42 })
+    const { model: dm } = await modelOf(dark)
+    expect(dm!.bg).toBeTruthy()
+    expect(dm!.textColor.toLowerCase()).toBe('#ffffff')
+    // style 42 is the second of the dark row: the theme's accents in turn
+    expect(dm!.groups[0].series.map((s) => s.fill)).toEqual(model!.groups[0].series.map((s) => s.fill))
+    // style 3, one accent's shades: two series, two shades of accent 1
+    const { model: mono } = await modelOf(await withChart(CLUSTERED, { style: 3 }))
+    const [a, b] = mono!.groups[0].series.map((s) => s.fill)
+    expect(a).not.toBe(b)
+  })
+})
+
 describe('xlsx charts: drawing', () => {
   test('axis bounds as Excel picks them', () => {
     expect(niceScale(4, 20, { ticks: 6 })).toMatchObject({ min: 0, max: 25, ticks: [0, 5, 10, 15, 20, 25] })
@@ -137,8 +189,8 @@ describe('xlsx charts: drawing', () => {
     const { model } = await modelOf(await withChart(CLUSTERED, { title: 'Revenue' }))
     const svg = renderChart(model!, 480, 300)
     expect(svg.startsWith('<svg')).toBe(true)
-    // nothing that runs or loads: the only url() is the plot area's own clip path
-    expect(svg).not.toMatch(/<script|href=|url\((?!#de-plot\))/i)
+    // nothing that runs or loads: url() only names the picture's own clip path, gradients and patterns
+    expect(svg).not.toMatch(/<script|href=|url\((?!#de-)/i)
     const fills = new Set(model!.groups[0].series.map((s) => s.fill))
     const bars = [...svg.matchAll(/<rect [^>]*fill="([^"]+)"/g)].filter((m) => fills.has(m[1]))
     // 3 categories × 2 series, plus a legend swatch each

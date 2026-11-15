@@ -1,7 +1,9 @@
 /**
  * An Excel chart part (`xl/charts/chartN.xml`) read into what the SVG renderer (chart-svg.ts) draws: its plot groups
  * (bar / column, line, area, pie, doughnut, scatter; 3D ones as their flat form; several groups make a combo chart, each
- * on its own axes), series with their values, axes, title, legend and the plot area's manual layout.
+ * on its own axes), series with their values, axes, title, legend and the plot area's manual layout, and the looks the
+ * file gives them: fills (a color, a gradient, a pattern), lines, text colors and sizes, and the built-in chart style
+ * (`c:style`) for what it leaves to that.
  *
  * Series values are read from the workbook's cells (`RangeReader`), so a chart follows edited cells; where a reference
  * cannot be read there (a defined name, another workbook, an unknown sheet) the values the file saved with the chart
@@ -24,6 +26,32 @@ export interface ChartText {
   color?: string
 }
 
+/** a fill that is more than one color; the shape's plain `fill` holds a color standing in for it */
+export type FillLook =
+  | {
+      kind: 'gradient'
+      /** pos 0…1 along the gradient */
+      stops: { pos: number; color: string }[]
+      /** degrees clockwise from left-to-right (linear) */
+      angle: number
+      radial: boolean
+    }
+  | { kind: 'pattern'; preset: string; fg: string; bg: string }
+
+/** text's own size (pt), weight and color, where the file gives them */
+export interface TextLook {
+  size?: number
+  bold?: boolean
+  color?: string
+}
+
+export interface LineLook {
+  color: string
+  /** pt */
+  width: number
+  dash?: string
+}
+
 export interface DataLabels {
   value: boolean
   percent: boolean
@@ -33,10 +61,12 @@ export interface DataLabels {
   pos?: string
   format?: string
   sep?: string
+  text?: TextLook
 }
 
 export interface ChartPoint {
   color?: string
+  look?: FillLook
   /** pie slices: % of the radius */
   explosion?: number
 }
@@ -52,6 +82,8 @@ export interface ChartSeries {
   format?: string
   /** fill (bars, areas, slices); null: none */
   fill: string | null
+  /** a gradient or pattern over the fill */
+  look?: FillLook
   /** line (lines, scatter; bar outlines); null: none */
   line: { color: string; width: number; dash?: string } | null
   marker: { symbol: string; size: number; fill?: string; line?: string } | null
@@ -94,8 +126,14 @@ export interface ChartAxis {
   major?: number
   format?: string
   gridlines: boolean
+  /** the major gridlines' own line; null: none drawn */
+  grid?: LineLook | null
+  /** the axis line's own line; null: none drawn */
+  line?: LineLook | null
   /** tick labels shown */
   labels: boolean
+  /** the tick labels' own look */
+  text?: TextLook
   title?: ChartText
   crossAx: string
   crosses: 'autoZero' | 'min' | 'max'
@@ -114,15 +152,25 @@ export interface ChartLayout {
 
 export interface ChartModel {
   title?: ChartText
-  legend?: { pos: string; overlay: boolean; deleted: number[] }
+  legend?: { pos: string; overlay: boolean; deleted: number[]; text?: TextLook }
   groups: ChartGroup[]
   axes: ChartAxis[]
   plot?: ChartLayout
   /** pt: the chart's base text size */
   fontSize: number
   textColor: string
+  /** the chart area's fill (null: none, undefined: white) */
   bg?: string | null
+  bgLook?: FillLook
   border?: string | null
+  /** the plot area's own fill and border (null / undefined: none) */
+  plotFill?: string | null
+  plotLook?: FillLook
+  plotBorder?: LineLook | null
+  /** gridlines, and axis lines and the chart's border, where the file gives them no line: the theme's grays, or the
+   *  built-in style's (a dark one has lighter ones) */
+  gridColor: string
+  axisColor: string
   date1904: boolean
 }
 
@@ -173,27 +221,108 @@ function txLook(el: XEl | undefined, ctx: ColorCtx) {
   return rPr ? runLook(rPr, ctx, 0, false) : undefined
 }
 
-/** an accent of the theme, darker or lighter in later rounds (series 7 on), as Excel colors series without their own */
-function autoColor(i: number, ctx: ColorCtx): string {
-  const accent = `accent${(i % 6) + 1}`
-  const round = Math.floor(i / 6)
-  const mods: XEl[] = []
-  const mod = (n: string, v: number) => mods.push({ n, a: { val: String(v) }, c: [], t: '' })
-  if (round % 4 === 1) mod('lumMod', 60000)
-  else if (round % 4 === 2) (mod('lumMod', 80000), mod('lumOff', 20000))
-  else if (round % 4 === 3) mod('lumMod', 80000)
-  return drawingColor({ n: 'schemeClr', a: { val: accent }, c: mods, t: '' }, ctx) ?? '#4472c4'
+/** the text look an element's `c:txPr` gives (size 0 there: none given), or undefined */
+function textLookOf(el: XEl | undefined, ctx: ColorCtx): TextLook | undefined {
+  const rPr = kid(kid(kids(kid(el, 'txPr'), 'p')[0], 'pPr'), 'defRPr')
+  if (!rPr) return undefined
+  const sz = num(rPr.a.sz)
+  const look: TextLook = {
+    ...(sz ? { size: sz / 100 } : {}),
+    ...(rPr.a.b !== undefined ? { bold: rPr.a.b === '1' || rPr.a.b === 'true' } : {}),
+    ...(safe(colorOf(kid(rPr, 'solidFill'), ctx)) ? { color: safe(colorOf(kid(rPr, 'solidFill'), ctx)) } : {}),
+  }
+  return Object.keys(look).length ? look : undefined
 }
 
-/** a shape's fill: a color, null for none, undefined where it says nothing */
+const mod = (n: string, v: number): XEl => ({ n, a: { val: String(Math.round(v)) }, c: [], t: '' })
+const scheme = (name: string, mods: XEl[], ctx: ColorCtx, def: string) => drawingColor({ n: 'schemeClr', a: { val: name }, c: mods, t: '' }, ctx) ?? def
+
+/**
+ * The colors series take where they have none of their own, from the built-in chart style (`c:style`, 1…48, 2 when
+ * absent): eight columns of styles (gray shades, the theme's accents in turn, shades of one accent each) in six rows of
+ * effects, of which the fifth has tinted plot areas and the sixth dark backgrounds. Effects (bevels, shadows, gradients)
+ * are not drawn: each style is drawn by its flat colors.
+ */
+interface ChartStyle {
+  /** the color of series `i` of `n` */
+  color(i: number, n: number): string
+  bg?: string
+  plot?: string
+  text: string
+  /** gridlines, axis lines and the chart's border, where the file gives them no line */
+  grid: string
+  axis: string
+}
+
+function chartStyle(style: number | undefined, ctx: ColorCtx): ChartStyle {
+  const s = style && style >= 1 && style <= 48 ? style : 2
+  const col = (s - 1) % 8
+  const row = Math.floor((s - 1) / 8)
+  // a spread from dark to light: series i of n
+  const spread = (name: string, lo: number, hi: number) => (i: number, n: number) => {
+    const t = n > 1 ? lo + ((hi - lo) * i) / (n - 1) : (lo + hi) / 2
+    return t < 0 ? scheme(name, [mod('lumMod', (1 + t) * 100000)], ctx, '#808080') : scheme(name, [mod('lumMod', (1 - t) * 100000), mod('lumOff', t * 100000)], ctx, '#808080')
+  }
+  const color =
+    col === 0
+      ? (i: number, n: number) => spread('tx1', 0.25, 0.85)(i, n)
+      : col === 1
+        ? (i: number) => accentRound(i, ctx)
+        : spread(`accent${col - 1}`, -0.5, 0.5)
+  // Excel's own grays are shades of the theme's text color: text at 65 %, axis lines at 25 %, gridlines at 15 %
+  const gray = (pct: number, def: string) => scheme('tx1', [mod('lumMod', pct * 1000), mod('lumOff', (100 - pct) * 1000)], ctx, def)
+  const out: ChartStyle = { color, text: gray(65, '#595959'), axis: gray(25, '#bfbfbf'), grid: gray(15, '#d9d9d9') }
+  if (row === 4) out.plot = col <= 1 ? scheme('bg1', [mod('lumMod', 95000)], ctx, '#f2f2f2') : scheme(`accent${col - 1}`, [mod('lumMod', 20000), mod('lumOff', 80000)], ctx, '#f2f2f2')
+  if (row === 5) {
+    out.bg = scheme('tx1', [mod('lumMod', 85000), mod('lumOff', 15000)], ctx, '#262626')
+    out.plot = scheme('tx1', [mod('lumMod', 75000), mod('lumOff', 25000)], ctx, '#404040')
+    out.text = scheme('bg1', [], ctx, '#ffffff')
+    out.grid = scheme('bg1', [mod('lumMod', 50000)], ctx, '#808080')
+    out.axis = scheme('bg1', [mod('lumMod', 65000)], ctx, '#a6a6a6')
+  }
+  return out
+}
+
+/** an accent of the theme, darker or lighter in later rounds (series 7 on), as Excel colors series without their own */
+function accentRound(i: number, ctx: ColorCtx): string {
+  const round = Math.floor(i / 6)
+  const mods: XEl[] = []
+  if (round % 4 === 1) mods.push(mod('lumMod', 60000))
+  else if (round % 4 === 2) mods.push(mod('lumMod', 80000), mod('lumOff', 20000))
+  else if (round % 4 === 3) mods.push(mod('lumMod', 80000))
+  return scheme(`accent${(i % 6) + 1}`, mods, ctx, '#4472c4')
+}
+
+/** a shape's fill: a color, null for none, undefined where it says nothing; a gradient or pattern stands as one color */
 function fillOf(spPr: XEl | undefined, ctx: ColorCtx): string | null | undefined {
   if (!spPr) return undefined
   if (kid(spPr, 'noFill')) return null
   const solid = kid(spPr, 'solidFill')
   if (solid) return safe(colorOf(solid, ctx)) ?? undefined
+  const look = lookOf(spPr, ctx)
+  if (look?.kind === 'gradient') return look.stops[0].color
+  if (look?.kind === 'pattern') return look.fg
+  return undefined
+}
+
+/** a shape's gradient or pattern fill */
+function lookOf(spPr: XEl | undefined, ctx: ColorCtx): FillLook | undefined {
   const grad = kid(spPr, 'gradFill')
-  // a gradient: its first stop's color
-  if (grad) return safe(colorOf(kid(kid(grad, 'gsLst'), 'gs'), ctx)) ?? undefined
+  if (grad) {
+    const stops = kids(kid(grad, 'gsLst'), 'gs')
+      .map((gs) => ({ pos: Math.max(0, Math.min(1, num(gs.a.pos, 0)! / 100000)), color: safe(colorOf(gs, ctx)) }))
+      .filter((s): s is { pos: number; color: string } => !!s.color)
+      .sort((a, b) => a.pos - b.pos)
+    if (!stops.length) return undefined
+    const lin = kid(grad, 'lin')
+    return { kind: 'gradient', stops, angle: lin ? num(lin.a.ang, 0)! / 60000 : 90, radial: !lin && !!kid(grad, 'path') }
+  }
+  const patt = kid(spPr, 'pattFill')
+  if (patt) {
+    const fg = safe(colorOf(kid(patt, 'fgClr'), ctx)) ?? '#000000'
+    const bg = safe(colorOf(kid(patt, 'bgClr'), ctx)) ?? '#ffffff'
+    return { kind: 'pattern', preset: patt.a.prst ?? 'pct5', fg, bg }
+  }
   return undefined
 }
 
@@ -206,7 +335,15 @@ function lineOf(spPr: XEl | undefined, ctx: ColorCtx): { color?: string; width?:
   return { color: safe(colorOf(kid(ln, 'solidFill'), ctx)), width: w !== undefined ? w / EMU_PER_PT : undefined, dash: dash && dash !== 'solid' ? dash : undefined }
 }
 
-function labelsOf(el: XEl | undefined): DataLabels | undefined {
+/** a line the file gives in full (its color at least); null where it says none, undefined where it says nothing */
+function ownLine(spPr: XEl | undefined, ctx: ColorCtx, defWidth: number): LineLook | null | undefined {
+  const l = lineOf(spPr, ctx)
+  if (l === null) return null
+  if (!l?.color) return undefined
+  return { color: l.color, width: l.width ?? defWidth, ...(l.dash ? { dash: l.dash } : {}) }
+}
+
+function labelsOf(el: XEl | undefined, ctx: ColorCtx): DataLabels | undefined {
   if (!el || on(kid(el, 'delete'))) return undefined
   const l: DataLabels = {
     value: on(kid(el, 'showVal')),
@@ -216,6 +353,7 @@ function labelsOf(el: XEl | undefined): DataLabels | undefined {
     pos: val(kid(el, 'dLblPos')),
     format: kid(el, 'numFmt')?.a.formatCode,
     sep: textOf(kid(el, 'separator')) || undefined,
+    text: textLookOf(el, ctx),
   }
   return l.value || l.percent || l.category || l.series ? l : undefined
 }
@@ -272,7 +410,18 @@ const toNum = (v: number | string | null | undefined): number | null => {
   return Number.isFinite(n) ? n : null
 }
 
-async function seriesOf(ser: XEl, i: number, type: ChartType, varyColors: boolean, ctx: ColorCtx, read: RangeReader, plotVisOnly: boolean, date1904: boolean): Promise<ChartSeries> {
+interface SeriesCtx {
+  ctx: ColorCtx
+  read: RangeReader
+  plotVisOnly: boolean
+  date1904: boolean
+  style: ChartStyle
+  /** the series in the chart, for a style's spread of shades */
+  count: number
+}
+
+async function seriesOf(ser: XEl, i: number, type: ChartType, varyColors: boolean, sc: SeriesCtx): Promise<ChartSeries> {
+  const { ctx, read, plotVisOnly, date1904, style } = sc
   const tx = await source(kid(ser, 'tx'), read)
   const name = tx?.values.filter((x) => x !== null && x !== '').join(' ') || textOf(kid(kid(ser, 'tx'), 'v')) || `Series${num(val(kid(ser, 'idx')), i)! + 1}`
   const scatter = type === 'scatter'
@@ -297,18 +446,19 @@ async function seriesOf(ser: XEl, i: number, type: ChartType, varyColors: boolea
   }
   if (!cats.length) cats = values.map((_, k) => String(k + 1))
   const spPr = kid(ser, 'spPr')
-  const color = autoColor(num(val(kid(ser, 'idx')), i)!, ctx)
+  const color = style.color(num(val(kid(ser, 'idx')), i)!, sc.count)
   const ownFill = fillOf(spPr, ctx)
-  const ownLine = lineOf(spPr, ctx)
+  const look = lookOf(spPr, ctx)
+  const lineOwn = lineOf(spPr, ctx)
   const lined = type === 'line' || type === 'scatter'
   const fill = lined ? null : ownFill === undefined ? color : ownFill
   const line =
-    ownLine === null
+    lineOwn === null
       ? null
       : lined
-        ? { color: ownLine?.color ?? color, width: ownLine?.width ?? 2.25, dash: ownLine?.dash }
-        : ownLine?.color
-          ? { color: ownLine.color, width: ownLine.width ?? 0.75, dash: ownLine.dash }
+        ? { color: lineOwn?.color ?? color, width: lineOwn?.width ?? 2.25, dash: lineOwn?.dash }
+        : lineOwn?.color
+          ? { color: lineOwn.color, width: lineOwn.width ?? 0.75, dash: lineOwn.dash }
           : null
   const mk = kid(ser, 'marker')
   const symbol = val(kid(mk, 'symbol'), lined ? 'auto' : 'none')!
@@ -323,13 +473,19 @@ async function seriesOf(ser: XEl, i: number, type: ChartType, varyColors: boolea
           line: lineOf(markerSpPr, ctx)?.color ?? line?.color ?? color,
         }
   const points: Record<number, ChartPoint> = {}
-  // pie slices (and the points of a single series told to vary its colors) get the theme's accents in turn
-  if (varyColors) values.forEach((_, k) => (points[k] = { color: autoColor(k, ctx) }))
+  // pie slices (and the points of a single series told to vary its colors) get the style's colors in turn
+  if (varyColors) values.forEach((_, k) => (points[k] = { color: style.color(k, values.length) }))
   for (const dPt of kids(ser, 'dPt')) {
     const k = num(val(kid(dPt, 'idx')), -1)!
     if (k < 0) continue
     const c = fillOf(kid(dPt, 'spPr'), ctx)
-    points[k] = { ...points[k], ...(c !== undefined && c !== null ? { color: c } : {}), ...(kid(dPt, 'explosion') ? { explosion: num(val(kid(dPt, 'explosion')), 0) } : {}) }
+    const pl = lookOf(kid(dPt, 'spPr'), ctx)
+    points[k] = {
+      ...points[k],
+      ...(c !== undefined && c !== null ? { color: c } : {}),
+      ...(pl ? { look: pl } : {}),
+      ...(kid(dPt, 'explosion') ? { explosion: num(val(kid(dPt, 'explosion')), 0) } : {}),
+    }
   }
   const explosion = num(val(kid(ser, 'explosion')))
   if (explosion) values.forEach((_, k) => (points[k] = { explosion, ...points[k] }))
@@ -340,12 +496,13 @@ async function seriesOf(ser: XEl, i: number, type: ChartType, varyColors: boolea
     values,
     format: valSrc?.format,
     fill,
+    ...(look && fill !== null ? { look } : {}),
     line,
     marker,
     smooth: on(kid(ser, 'smooth')),
     invertIfNegative: on(kid(ser, 'invertIfNegative')),
     points,
-    labels: labelsOf(kid(ser, 'dLbls')),
+    labels: labelsOf(kid(ser, 'dLbls'), ctx),
   }
 }
 
@@ -353,7 +510,14 @@ function axisOf(el: XEl, ctx: ColorCtx, defSize: number): ChartAxis {
   const scaling = kid(el, 'scaling')
   const fmt = kid(el, 'numFmt')
   const crosses = val(kid(el, 'crosses'))
+  const grid = kid(el, 'majorGridlines')
+  const gridLine = grid ? ownLine(kid(grid, 'spPr'), ctx, 0.75) : undefined
+  const axLine = ownLine(kid(el, 'spPr'), ctx, 0.75)
+  const text = textLookOf(el, ctx)
   return {
+    ...(gridLine !== undefined ? { grid: gridLine } : {}),
+    ...(axLine !== undefined ? { line: axLine } : {}),
+    ...(text ? { text } : {}),
     id: val(kid(el, 'axId'), '')!,
     kind: el.n === 'catAx' ? 'cat' : el.n === 'dateAx' ? 'date' : 'val',
     pos: val(kid(el, 'axPos'), 'b')!,
@@ -394,12 +558,14 @@ export async function readChart(root: XEl | undefined, opts: { theme: Theme; dat
   const plot = kid(chart, 'plotArea')
   if (!chart || !plot) return null
   const ctx: ColorCtx = { theme: opts.theme }
+  const style = chartStyle(styleOf(root), ctx)
   const base = txLook(root, ctx)
   const fontSize = base?.size || 10
-  const textColor = base?.color ?? '#595959'
+  const textColor = base?.color ?? style.text
   const plotVisOnly = on(kid(chart, 'plotVisOnly'), true)
   const groups: ChartGroup[] = []
   let seriesIndex = 0
+  const count = plot.c.reduce((a, g) => a + (GROUPS[g.n] ? kids(g, 'ser').length : 0), 0)
   for (const g of plot.c) {
     const type = GROUPS[g.n]
     if (!type) {
@@ -412,8 +578,9 @@ export async function readChart(root: XEl | undefined, opts: { theme: Theme; dat
     const series: ChartSeries[] = []
     // a pie shows its first series, a slice per point in its own color; other kinds vary colors for a lone series only
     const vary = varyColors && (type === 'pie' || type === 'doughnut' || kids(g, 'ser').length === 1)
-    for (const ser of kids(g, 'ser')) series.push(await seriesOf(ser, seriesIndex++, type, vary, ctx, opts.read, plotVisOnly, opts.date1904))
-    const groupLabels = labelsOf(kid(g, 'dLbls'))
+    const sc: SeriesCtx = { ctx, read: opts.read, plotVisOnly, date1904: opts.date1904, style, count }
+    for (const ser of kids(g, 'ser')) series.push(await seriesOf(ser, seriesIndex++, type, vary, sc))
+    const groupLabels = labelsOf(kid(g, 'dLbls'), ctx)
     if (groupLabels) for (const s of series) s.labels ??= groupLabels
     groups.push({
       type,
@@ -443,18 +610,53 @@ export async function readChart(root: XEl | undefined, opts: { theme: Theme; dat
     title.color ??= textColor
   }
   const legend = kid(chart, 'legend')
+  const legendText = textLookOf(legend, ctx)
   const spPr = kid(root, 'spPr')
   const border = lineOf(spPr, ctx)
+  const bg = fillOf(spPr, ctx)
+  const bgLook = lookOf(spPr, ctx)
+  const plotSp = kid(plot, 'spPr')
+  const plotFill = fillOf(plotSp, ctx)
+  const plotLook = lookOf(plotSp, ctx)
+  const plotBorder = ownLine(plotSp, ctx, 0.75)
   return {
     title,
-    legend: legend ? { pos: val(kid(legend, 'legendPos'), 'r')!, overlay: on(kid(legend, 'overlay')), deleted: kids(legend, 'legendEntry').filter((e) => on(kid(e, 'delete'))).map((e) => num(val(kid(e, 'idx')), -1)!) } : undefined,
+    legend: legend
+      ? {
+          pos: val(kid(legend, 'legendPos'), 'r')!,
+          overlay: on(kid(legend, 'overlay')),
+          deleted: kids(legend, 'legendEntry').filter((e) => on(kid(e, 'delete'))).map((e) => num(val(kid(e, 'idx')), -1)!),
+          ...(legendText ? { text: legendText } : {}),
+        }
+      : undefined,
     groups,
     axes,
     plot: layoutOf(plot),
     fontSize,
     textColor,
-    bg: fillOf(spPr, ctx),
+    bg: bg === undefined ? style.bg : bg,
+    ...(bgLook ? { bgLook } : {}),
     border: border === null ? null : border?.color,
+    plotFill: plotFill === undefined ? style.plot : plotFill,
+    ...(plotLook ? { plotLook } : {}),
+    ...(plotBorder !== undefined ? { plotBorder } : {}),
+    gridColor: style.grid,
+    axisColor: style.axis,
     date1904: opts.date1904,
   }
+}
+
+/** the built-in style number: Excel 2010's own (`c14:style`, 101…148) where it is given, else `c:style` */
+function styleOf(root: XEl | undefined): number | undefined {
+  for (const el of root?.c ?? []) {
+    if (el.n === 'style') return num(el.a.val)
+    if (el.n === 'AlternateContent') {
+      const choice = kid(el, 'Choice')
+      const s14 = num(kid(choice, 'style')?.a.val)
+      if (s14 !== undefined) return s14 > 100 ? s14 - 100 : s14
+      const fb = num(kid(kid(el, 'Fallback'), 'style')?.a.val)
+      if (fb !== undefined) return fb
+    }
+  }
+  return undefined
 }
