@@ -162,6 +162,15 @@ describe('xlsx charts: drawing', () => {
     expect(renderChart(dm!, 400, 260)).toContain('>44%<')
   })
 
+  test('100% stacked: the axis ends at 100%, with no step above', async () => {
+    const pct = CLUSTERED.replace('<c:grouping val="clustered"/>', '<c:grouping val="percentStacked"/><c:overlap val="100"/>')
+    const { model } = await modelOf(await withChart(pct))
+    const svg = renderChart(model!, 400, 300)
+    expect(svg).toContain('>100%<')
+    expect(svg).not.toContain('>120%<')
+    expect(svg).not.toContain('>110%<')
+  })
+
   test('a title from a cell: the cell text, not the automatic one', async () => {
     const titleXml = `<c:title><c:tx>${strRef('Data!$C$1', ['cached title'])}</c:tx></c:title>`
     const { model } = await modelOf(await withChart(CLUSTERED, { titleXml }))
