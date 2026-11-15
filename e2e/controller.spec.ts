@@ -54,6 +54,21 @@ describe('controller and headless mode', () => {
     expect(v.errors).toEqual([])
   })
 
+  test('docx: undo is offered only while editing', async () => {
+    const v = await viewer({ src: 'samples/sample.docx', headless: true })
+    await until(v, 's.canEdit')
+    await v.page.evaluate(() => window.__ctl.setEditing(true))
+    await until(v, 's.editing')
+    await v.selectText('Quarterly Report', 'end')
+    await v.page.keyboard.type('!!')
+    await until(v, 's.canUndo')
+    await v.page.evaluate(() => window.__ctl.setEditing(false))
+    await until(v, '!s.editing && !s.canUndo && !s.canRedo')
+    await v.page.evaluate(() => window.__ctl.setEditing(true))
+    await until(v, 's.editing && s.canUndo')
+    expect(v.errors).toEqual([])
+  })
+
   test('docx: formatting state and commands through the controller', async () => {
     const v = await viewer({ src: 'samples/sample.docx', editable: true, onSave: true, headless: true })
     const { page } = v

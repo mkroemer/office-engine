@@ -68,4 +68,12 @@ describe('viewer controller', () => {
     ctl.attachView(null)
     expect(ctl.snapshot()).toMatchObject({ kind: 'pptx', page: null, canUndo: false, status: '', outline: null, zoom: null })
   })
+
+  test('the viewer going clears its part of the state', () => {
+    const ctl = createViewerController()
+    ctl.attachViewer({ setEditing: () => {}, save: async () => {}, fileAction: () => {}, toggleComments: () => {} })
+    ctl.update({ kind: 'docx', loading: true, editing: true, canEdit: true, dirty: true, saving: true })
+    ctl.attachViewer(null)
+    expect(ctl.snapshot()).toMatchObject({ kind: null, loading: false, editing: false, canEdit: false, dirty: false, saving: false })
+  })
 })

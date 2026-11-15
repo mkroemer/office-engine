@@ -105,7 +105,10 @@ export interface ViewerCommands {
 /** the view's part of the state, cleared when a view goes */
 const VIEW_STATE = { canUndo: false, canRedo: false, zoom: null, page: null, outline: null, status: '', format: null } as const
 
-const EMPTY: ViewerState = { rev: 0, kind: null, loading: false, editing: false, canEdit: false, dirty: false, saving: false, ...VIEW_STATE }
+/** the viewer's part of the state, cleared when the viewer goes, so a controller that outlives it shows no document */
+const VIEWER_STATE = { kind: null, loading: false, editing: false, canEdit: false, dirty: false, saving: false } as const
+
+const EMPTY: ViewerState = { rev: 0, ...VIEWER_STATE, ...VIEW_STATE }
 
 /** equal for the state's purposes: the same primitive, or the same JSON (small objects and the outline) */
 function same(a: unknown, b: unknown): boolean {
@@ -238,9 +241,10 @@ export class ViewerController {
     if (!c) this.update(VIEW_STATE)
   }
 
-  /** @internal the viewer's commands */
+  /** @internal the viewer's commands; null when it goes (its state is cleared) */
   attachViewer(c: ViewerCommands | null) {
     this.viewer = c
+    if (!c) this.update(VIEWER_STATE)
   }
 }
 

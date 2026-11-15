@@ -772,13 +772,16 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   useEffect(() => {
     ctl?.update({ outline: { kind: 'headings', items: ctlHeadings.map((h, i) => ({ id: String(h.bi), title: h.text, level: h.lvl, current: i === ctlActive })) } })
   }, [ctl, ctlHeadings, ctlActive])
+  // undo and redo run only while editing (below), so they are offered only then
   useEffect(() => {
     if (!ctl) return
-    editor.onHistory = (canUndo, canRedo) => ctl.update({ canUndo, canRedo })
+    const publish = (canUndo: boolean, canRedo: boolean) => ctl.update({ canUndo: isEditing && canUndo, canRedo: isEditing && canRedo })
+    publish(editor.canUndo, editor.canRedo)
+    editor.onHistory = publish
     return () => {
       editor.onHistory = undefined
     }
-  }, [ctl, editor])
+  }, [ctl, editor, isEditing])
   useViewCommands(ctl, {
     setZoom,
     goto: (id) => gotoBlock(Number(id)),

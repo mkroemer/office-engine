@@ -387,7 +387,10 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
   useViewCommands(ctl, {
     goto: (id) => {
       const i = Number(id)
-      if (meta.sheets[i] && !meta.sheets[i].hidden) setActive(i)
+      if (!meta.sheets[i] || meta.sheets[i].hidden) return
+      // a formula being typed stays open on the other sheet, for cross-sheet references, as with the built-in tabs
+      if (keepEditing && i !== cur) hold.current = true
+      setActive(i)
     },
     undo: () => gridCommands.current?.undo(),
     redo: () => gridCommands.current?.redo(),

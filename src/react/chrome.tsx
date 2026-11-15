@@ -62,7 +62,9 @@ export function SheetTabs({ controller: ctl, className, style }: Props) {
   return (
     <div className={'de-tabs' + (className ? ` ${className}` : '')} style={style} role="tablist" aria-label={t.xlsx.sheets}>
       {outline.items.map((item) => (
-        <button key={item.id} type="button" role="tab" className="de-tab" aria-selected={item.current} onClick={() => ctl.goto(item.id)}>
+        // the grid keeps the focus: a formula being typed is not committed by the click, so its references can
+        // point at cells of the sheet switched to
+        <button key={item.id} type="button" role="tab" className="de-tab" aria-selected={item.current} onMouseDown={(e) => e.preventDefault()} onClick={() => ctl.goto(item.id)}>
           {item.title}
         </button>
       ))}
