@@ -389,7 +389,11 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
     const lo = Math.min(...ext.map((e) => e[0]))
     const hi = Math.max(...ext.map((e) => e[1]))
     const pct = on.some((g) => g.grouping === 'percentStacked')
-    const scale = a?.logBase ? logScale(lo, hi, a.logBase, a) : niceScale(lo, hi, { min: a?.min, max: a?.max, major: a?.major, ticks: Math.round(valLen / 40) })
+    // an axis of 100% stacks alone ends at 100% (and -100%), with no headroom above
+    const whole = on.every((g) => g.grouping === 'percentStacked')
+    const scale = a?.logBase
+      ? logScale(lo, hi, a.logBase, a)
+      : niceScale(lo, hi, { min: a?.min ?? (whole ? lo : undefined), max: a?.max ?? (whole ? hi : undefined), major: a?.major, ticks: Math.round(valLen / 40) })
     const f = a?.format ?? (pct ? '0%' : on[0]?.series.find((s) => s.format)?.format)
     plans.set(id, { axis: a ?? fallbackAxis(id, horizontal ? 'b' : 'l'), scale: { ...scale, format: f }, labels: scale.ticks.map((t) => fmt(t, f, m.date1904)) })
   }
