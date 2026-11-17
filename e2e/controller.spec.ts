@@ -254,7 +254,7 @@ describe('controller and headless mode', () => {
   })
 
   test('docx: formatting state and commands through the controller', async () => {
-    const v = await viewer({ src: 'samples/sample.docx', editable: true, onSave: true, headless: true })
+    const v = await viewer({ controller: true, src: 'samples/sample.docx', editable: true, onSave: true, headless: true })
     const { page } = v
     await until(v, 's.editing')
     await v.selectText('document')
@@ -277,7 +277,7 @@ describe('controller and headless mode', () => {
   })
 
   test("xlsx: the active cell's format through the controller", async () => {
-    const v = await viewer({ src: 'samples/sample.xlsx', editable: true, onSave: true, headless: true })
+    const v = await viewer({ controller: true, src: 'samples/sample.xlsx', editable: true, onSave: true, headless: true })
     const { page } = v
     await page.locator('.de-grid').waitFor()
     await v.typeCell('J10', '12.5')
