@@ -116,12 +116,21 @@ export function useFileActions(o: FileActionsOptions): FileActions {
 
   const exec = async (action: string) => {
     const c = opts.current
-    if (action.startsWith('new:')) return c.create(action.slice(4) as DocKind)
-    if (action.startsWith('extra:')) return c.extra[Number(action.slice(6))]?.onClick()
+    if (action.startsWith('new:')) {
+      const kind = action.slice(4)
+      if (c.canOpen && (kind === 'docx' || kind === 'xlsx' || kind === 'pptx')) c.create(kind)
+      return
+    }
+    if (action.startsWith('extra:')) {
+      const item = c.extra[Number(action.slice(6))]
+      if (item && !item.disabled) item.onClick()
+      return
+    }
     switch (action) {
       case 'open': {
+        if (!c.canOpen) return
         const [file] = await pickFiles(OPEN_ACCEPT, false)
-        if (file) c.open(file)
+        if (file && opts.current.canOpen) opts.current.open(file)
         return
       }
       case 'rename':
@@ -131,12 +140,13 @@ export function useFileActions(o: FileActionsOptions): FileActions {
       case 'close':
         return c.close?.()
       case 'save':
-        return c.save()
+        return c.kind && c.canSave ? c.save() : undefined
     }
     const ops = c.ops.current
     if (action === 'import') {
+      if (!c.canImport || c.kind !== 'xlsx') return
       const [file] = await pickFiles('.csv,.tsv,.tab,.txt', false)
-      if (!file) return
+      if (!file || !opts.current.canImport) return
       if (!ops?.importText) throw new Error(t.common.stillLoading)
       await ops.importText(file, file.name.replace(/\.[^.]+$/, '').slice(0, 31) || 'Imported')
       return

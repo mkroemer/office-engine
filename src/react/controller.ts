@@ -82,7 +82,7 @@ function same(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b)
 }
 
-export class ViewerController {
+export class InternalViewerController {
   private state: ViewerState = EMPTY
   private subs = new Set<() => void>()
   private watchers = new Set<() => void>()
@@ -91,10 +91,11 @@ export class ViewerController {
 
   subscribe = (fn: () => void) => {
     const first = this.subs.size === 0
-    this.subs.add(fn)
+    const listener = () => fn()
+    this.subs.add(listener)
     if (first) for (const w of this.watchers) w()
     return () => {
-      this.subs.delete(fn)
+      if (this.subs.delete(listener) && this.subs.size === 0) for (const w of this.watchers) w()
     }
   }
 
@@ -103,7 +104,7 @@ export class ViewerController {
     return this.subs.size > 0
   }
 
-  /** calls `fn` when the first subscriber arrives */
+  /** calls `fn` when observation starts or stops */
   watchObserved(fn: () => void): () => void {
     this.watchers.add(fn)
     return () => {
@@ -195,20 +196,44 @@ export class ViewerController {
     for (const fn of this.subs) fn()
   }
 
-  /** @internal the mounted view's commands; null when it goes (its state is cleared) */
-  attachView(c: ViewCommands | null) {
+  /** @internal releases only this registration, so an exiting viewer cannot detach its successor. */
+  attachView(c: ViewCommands): () => void {
     this.view = c
-    if (!c) this.update(VIEW_STATE)
+    return () => {
+      if (this.view !== c) return
+      this.view = null
+      this.update(VIEW_STATE)
+    }
   }
 
-  /** @internal the viewer's commands; null when it goes (its state is cleared) */
-  attachViewer(c: ViewerCommands | null) {
+  /** @internal releases only this registration. */
+  attachViewer(c: ViewerCommands): () => void {
     this.viewer = c
-    if (!c) this.update(VIEWER_STATE)
+    return () => {
+      if (this.viewer !== c) return
+      this.viewer = null
+      this.update(VIEWER_STATE)
+    }
   }
 }
 
-export const createViewerController = () => new ViewerController()
+/** Host API; publishing and lifecycle methods belong to the engine. */
+export type ViewerController = Pick<InternalViewerController,
+  'subscribe' | 'snapshot' | 'setEditing' | 'save' | 'undo' | 'redo' | 'setZoom' | 'zoomIn' | 'zoomOut' |
+  'goto' | 'gotoPage' | 'present' | 'print' | 'fileAction' | 'toggleComments'>
+
+export const createViewerController = (): ViewerController => new InternalViewerController()
+/** @internal controllers supplied to viewers originate from createViewerController(). */
+export const internalController = (ctl: ViewerController): InternalViewerController => ctl as InternalViewerController
+
+/** @internal follows both subscription transitions, including a replacement controller. */
+export function useControllerObserved(ctl: InternalViewerController | null): boolean {
+  return useSyncExternalStore(
+    (fn) => ctl?.watchObserved(fn) ?? (() => {}),
+    () => !!ctl?.observed,
+    () => false,
+  )
+}
 
 /** The controller's state, rendering again whenever it changes: for a host's own controls in React. */
 export function useViewerState(ctl: ViewerController): ViewerState {
@@ -216,12 +241,11 @@ export function useViewerState(ctl: ViewerController): ViewerState {
 }
 
 /** Registers a view's commands (the latest closures each render) while it is mounted. */
-export function useViewCommands(ctl: ViewerController | null, commands: ViewCommands) {
+export function useViewCommands(ctl: InternalViewerController | null, commands: ViewCommands) {
   const latest = useLatest(commands)
   useEffect(() => {
     if (!ctl) return
     const call = <K extends keyof ViewCommands>(k: K) => ((...a: unknown[]) => (latest.current[k] as ((...x: unknown[]) => void) | undefined)?.(...a)) as ViewCommands[K]
-    ctl.attachView({ setZoom: call('setZoom'), goto: call('goto'), gotoPage: call('gotoPage'), undo: call('undo'), redo: call('redo'), present: call('present') })
-    return () => ctl.attachView(null)
+    return ctl.attachView({ setZoom: call('setZoom'), goto: call('goto'), gotoPage: call('gotoPage'), undo: call('undo'), redo: call('redo'), present: call('present') })
   }, [ctl, latest])
 }

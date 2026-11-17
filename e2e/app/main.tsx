@@ -20,6 +20,7 @@ declare global {
     __setLanguage: (language: 'en' | 'de-DE') => void
     __german: typeof de
     __ctl: ViewerController
+    __overlap: (phase: number) => void
   }
 }
 window.__events = []
@@ -105,7 +106,7 @@ const initial: DocViewerProps = {
   locale: (texts ? undefined : q.get('locale') as DocViewerProps['locale']) ?? undefined,
   strings: q.has('fileLabel') ? { ...texts, file: { ...(texts?.file ?? {}), menu: q.get('fileLabel')! } } : texts,
   headless: flag('headless'),
-  controller: window.__ctl,
+  controller: flag('controller') ? window.__ctl : undefined,
   onSave: q.has('onSave') ? async (blob, name) => void log({ type: 'save', name, b64: await b64(blob) }) : undefined,
   onDirtyChange: (dirty) => log({ type: 'dirty', dirty }),
   onRename: (name) => log({ type: 'rename', name }),
@@ -135,9 +136,14 @@ const initial: DocViewerProps = {
 
 function App() {
   const [props, setProps] = useState(initial)
+  const [phase, setPhase] = useState(0)
+  window.__overlap = setPhase
   window.__setProps = (p) => setProps((cur) => ({ ...cur, ...p }))
   window.__setLanguage = (language) => setProps((cur) => ({ ...cur, strings: language === 'de-DE' ? de : undefined }))
-  return <DocViewer {...props} />
+  return <>
+    {phase < 2 && <DocViewer key="old" {...props} />}
+    {phase > 0 && <DocViewer key="new" {...props} />}
+  </>
 }
 
 createRoot(document.getElementById('root')!).render(<App />)

@@ -4,7 +4,7 @@ import './core/default-worker'
 import { DocViewer, type DocViewerProps } from './react/DocViewer'
 import type { Icons } from './react/edit/Toolbar'
 import type { StringsOverride } from './react/strings'
-import { ViewerController } from './react/controller'
+import { createViewerController, type ViewerController } from './react/controller'
 
 export type MountOptions = Omit<DocViewerProps, 'styleTarget'>
 
@@ -21,14 +21,16 @@ export interface MountedViewer {
 export function mount(el: HTMLElement, options: MountOptions): MountedViewer {
   let root: Root | null = createRoot(el)
   let props = options
-  const controller = options.controller ?? new ViewerController()
+  const ownController = createViewerController()
+  let controller = options.controller ?? ownController
   const shadow = el.getRootNode() instanceof ShadowRoot ? (el.getRootNode() as ShadowRoot) : undefined
   const render = () => root?.render(createElement(DocViewer, { ...props, controller, styleTarget: shadow }))
   render()
   return {
-    controller,
+    get controller() { return controller },
     update(next) {
       props = { ...props, ...next }
+      controller = props.controller ?? ownController
       render()
     },
     destroy() {
@@ -58,7 +60,7 @@ export class OfficeViewerElement extends HTMLElement {
   private onLoad: NonNullable<MountOptions['onLoad']> = (client) => this.dispatchEvent(new CustomEvent('load', { detail: { kind: client.kind, name: client.name } }))
   private onError: NonNullable<MountOptions['onError']> = (error) => this.dispatchEvent(new CustomEvent('error', { detail: error }))
   /** the viewer's state and commands, the same object for the element's whole life */
-  readonly controller = new ViewerController()
+  readonly controller = createViewerController()
 
   get file() {
     return this._file

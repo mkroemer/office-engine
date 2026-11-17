@@ -6,7 +6,7 @@ import { useFileOps, useViewer, useSelectAll } from '../common/Slots'
 import { slidesToText } from '../file/text'
 import { Status } from '../common/Status'
 import { ZoomControl, type Zoom } from '../common/ZoomControl'
-import { useViewCommands } from '../controller'
+import { useViewCommands, useControllerObserved } from '../controller'
 import { getSel } from '../edit/input'
 import { PptxEditor } from './PptxEditor'
 import { PptxToolbar, type AlignTo, type Arrange, type Rotate, type SlideCmd } from './PptxToolbar'
@@ -601,12 +601,7 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
   const { ctl, headless } = viewer
   // slide titles for the outline, read only while a host reads the controller: from the slides' XML in one call
   // once the first slides are shown, then from each slide model an edit puts in the cache
-  const [observed, setObserved] = useState(() => !!ctl?.observed)
-  useEffect(() => {
-    if (!ctl) return
-    if (ctl.observed) setObserved(true)
-    return ctl.watchObserved(() => setObserved(true))
-  }, [ctl])
+  const observed = useControllerObserved(ctl)
   const [titles, setTitles] = useState<string[]>([])
   useEffect(() => {
     if (!observed) return

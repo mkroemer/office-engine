@@ -138,6 +138,12 @@ action: `pdf`, `html`, `text:md`, `details`, `rename`…), `toggleComments(open?
 for does nothing. `subscribe(fn)` returns its unsubscribe; `snapshot()` the current state. Without `react`, `mount()`
 returns the controller (`mounted.controller`), and `<office-viewer headless>` has it as `element.controller`.
 
+Controller actions obey `allowEdit`, `allowSave`, `allowDownload` and `allowOpen` even when the File menu is hidden.
+`fileMenu={false}` hides that menu and its keyboard shortcuts; it does not disable a host's controller controls.
+New/Open replace the document and remain available for a read-only file when `allowOpen` permits them.
+Import changes a workbook and additionally requires editing permission. Controllers are created with
+`createViewerController()`; publishing and attachment methods are internal to the engine.
+
 ### Comments
 
 ```tsx

@@ -8,7 +8,7 @@ import { StatusContext } from './common/Status'
 import { ConfirmDialog, PromptDialog, Toast } from './common/Dialog'
 import { download, Icon, IconsProvider, type Icons } from './edit/Toolbar'
 import { UIComponentsProvider, type UIComponents } from './ui'
-import { ViewerController } from './controller'
+import { createViewerController, internalController, type ViewerController } from './controller'
 import { DetailsDialog } from './file/DetailsDialog'
 import { FileMenu, useFileActions, type FileMenuItem } from './file/FileMenu'
 import { importFile, type Imported } from './file/importFile'
@@ -169,8 +169,8 @@ function Viewer(props: DocViewerProps) {
   const headless = !!props.headless
   const toolbar = props.toolbar ?? !headless
   // without a controller from the host the viewer keeps its own: the view publishes to one either way
-  const ownCtl = useMemo(() => new ViewerController(), [])
-  const ctl = props.controller ?? ownCtl
+  const ownCtl = useMemo(() => createViewerController(), [])
+  const ctl = internalController(props.controller ?? ownCtl)
   const root = useThemeRoot(theme, style)
   const { allowEdit = true, allowSave = true, allowDownload = true, fileMenu = true, allowOpen = true, captureSelectAll = true, onSave, onDirtyChange } = props
   const [editing, setEditing] = useState(!!props.editable)
@@ -403,7 +403,7 @@ function Viewer(props: DocViewerProps) {
   )
   const selectAll = useRef<(() => void) | null>(null)
   // next to its source, the document is a preview: it is edited through the source
-  const docEditable = editing && canEdit && !codeShown
+  const docEditable = editing && allowEdit && canEdit && !codeShown
   const api = useMemo<ViewerApi>(
     () => ({ bar: barEl, editable: docEditable, setDirty: setDocDirty, save, canDownload: allowDownload, client, fileOps, selectAll, ctl, headless }),
     [barEl, docEditable, setDocDirty, save, allowDownload, client, ctl, headless],
@@ -498,15 +498,15 @@ function Viewer(props: DocViewerProps) {
     setOpened(doc)
     if (edit) setEditing(true)
   }, [])
-  const canOpen = fileMenu && allowOpen && !props.collab
+  const canOpen = allowOpen && !props.collab
   const fileActions = useFileActions({
     kind: client?.kind,
     ext: officeExt,
     base: baseName,
     canOpen,
-    canImport: fileMenu && allowEdit && canEdit,
-    canSave: fileMenu && canSave,
-    canDownload: fileMenu && allowDownload && !!client,
+    canImport: allowOpen && allowEdit && canEdit,
+    canSave,
+    canDownload: allowDownload && !!client,
     ops: fileOps,
     create: (kind: DocKind) =>
       replace(t.bar.replaceNew(t.newWhat[kind]), () => {
@@ -564,12 +564,12 @@ function Viewer(props: DocViewerProps) {
   // ---- controller: the viewer's part of the state, and its commands ----
   const editAllowed = allowEdit && !readOnly && !codeShown
   useEffect(() => {
-    ctl.update({ kind: client?.kind ?? null, loading: busy, editing: docEditable, canEdit: editAllowed && canEdit, dirty, saving })
+    ctl.update({ kind: client?.kind ?? null, loading: busy, editing: docEditable, canEdit: !!client && editAllowed && canEdit, dirty, saving })
   }, [ctl, client, busy, docEditable, editAllowed, canEdit, dirty, saving])
   const commands = useRef({ editAllowed, save, fileActions, cmCtl })
   commands.current = { editAllowed, save, fileActions, cmCtl }
   useEffect(() => {
-    ctl.attachViewer({
+    return ctl.attachViewer({
       setEditing: (on) => {
         if (!on || commands.current.editAllowed) setEditing(on)
       },
@@ -577,7 +577,6 @@ function Viewer(props: DocViewerProps) {
       fileAction: (id) => commands.current.fileActions.run(id),
       toggleComments: (open) => commands.current.cmCtl?.toggle(open),
     })
-    return () => ctl.attachViewer(null)
   }, [ctl])
 
   let body: ReactNode
