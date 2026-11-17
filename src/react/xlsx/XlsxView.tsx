@@ -590,6 +590,12 @@ export function withMerges(r: Range, merges: Merge[]): Range {
 
 function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, gridCommands }: GridProps) {
   const viewer = useViewer()
+  // Async edits may outlive this grid, its document, or the controller / edit mode that started them.
+  const currentViewer = useRef<typeof viewer | null>(null)
+  useLayoutEffect(() => {
+    currentViewer.current = viewer
+    return () => { currentViewer.current = null }
+  }, [viewer])
   const str = useStrings()
   const editable = viewer.editable
   const s = store.sheet(sheet)
@@ -1007,7 +1013,10 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
       // nothing to undo or redo: the worker's history is shorter than counted (it keeps the last 200 edits)
       else if (kind === 'undo') store.history = { ...h, undo: 0 }
       else if (kind === 'redo') store.history = { ...h, redo: 0 }
-      viewer.ctl?.update({ canUndo: viewer.editable && store.history.undo > 0, canRedo: viewer.editable && store.history.redo > 0 })
+      const current = currentViewer.current
+      if (current?.client === client) {
+        current.ctl?.update({ canUndo: current.editable && store.history.undo > 0, canRedo: current.editable && store.history.redo > 0 })
+      }
       setDetailTick((t) => t + 1)
     } catch (e) {
       console.error('[office-engine]', e)

@@ -1,12 +1,61 @@
 import { describe, expect, test } from 'bun:test'
-import type { ViewerState } from '../src'
-import { useBrowser, viewer, type Viewer } from './harness'
+import type { ViewerController, ViewerState } from '../src'
+import { fromB64, useBrowser, viewer, xlsxSheet, type Viewer } from './harness'
 
 useBrowser()
 
 const state = (v: Viewer) => v.page.evaluate(() => window.__ctl.snapshot()) as Promise<ViewerState>
 /** waits until the controller's state passes `check` (run in the page) */
 const until = (v: Viewer, check: string) => v.page.waitForFunction(`(() => { const s = window.__ctl.snapshot(); return ${check} })()`, null, { timeout: 15_000 })
+
+type HistoryMethod = 'xlsx.set' | 'xlsx.undo' | 'xlsx.redo'
+declare global {
+  interface Window {
+    __xlsxHistory: { hold: HistoryMethod | null; release: (() => void) | null; publications: ViewerState[] }
+    __oldHistoryController: ViewerController
+  }
+}
+
+/** Hold a real worker response after the mutation, before the grid can apply it. */
+async function delayedXlsx() {
+  const v = await viewer({ controller: true, editable: true, headless: true, onSave: true }, { wait: false })
+  await v.page.evaluate(() => window.__setProps({
+    src: 'samples/sample.xlsx',
+    onLoad: (client) => {
+      window.__xlsxHistory = { hold: null, release: null, publications: [] }
+      const call = client.call.bind(client)
+      client.call = async (method, ...args) => {
+        const result = await call(method, ...args)
+        if (method === window.__xlsxHistory.hold) {
+          window.__xlsxHistory.hold = null
+          await new Promise<void>((resolve) => { window.__xlsxHistory.release = resolve })
+        }
+        return result
+      }
+    },
+  }))
+  await v.page.locator('.de-grid').waitFor()
+  await until(v, "s.kind === 'xlsx' && s.editing")
+  return v
+}
+
+async function holdHistory(v: Viewer, method: HistoryMethod) {
+  await v.page.evaluate((method) => {
+    window.__xlsxHistory.hold = method
+    window.__xlsxHistory.release = null
+  }, method)
+}
+
+async function pendingHistory(v: Viewer) {
+  await v.page.waitForFunction(() => !!window.__xlsxHistory.release)
+}
+
+async function saveXlsx(v: Viewer) {
+  const count = (await v.events('save')).length
+  await v.page.evaluate(() => window.__ctl.save())
+  const saved = await v.waitEvent('save', count + 1)
+  return xlsxSheet(fromB64(saved.b64 as string))
+}
 
 describe('controller and headless mode', () => {
   test('docx: zoom, pages and headings through the controller; no chrome of its own', async () => {
@@ -109,6 +158,91 @@ describe('controller and headless mode', () => {
     await v.page.evaluate(() => window.__ctl.undo())
     await until(v, 's.canRedo')
     expect(await v.shown('J12')).toBe('')
+  })
+
+  test('xlsx: a delayed edit publishes history to the replacement controller only', async () => {
+    const v = await delayedXlsx()
+    await holdHistory(v, 'xlsx.set')
+    await v.clickCell('J12')
+    await v.page.keyboard.type('pending edit')
+    await v.page.keyboard.press('Enter')
+    await pendingHistory(v)
+    await v.page.evaluate(async (path) => {
+      const { createViewerController } = await import(path)
+      window.__oldHistoryController = window.__ctl
+      window.__ctl = createViewerController()
+      window.__ctl.subscribe(() => {})
+      window.__setProps({ controller: window.__ctl })
+    }, '/@fs/' + process.cwd() + '/src/index.ts')
+    await until(v, "s.kind === 'xlsx' && s.editing")
+    const detached = await v.page.evaluate(() => window.__oldHistoryController.snapshot())
+    expect(detached).toMatchObject({ kind: null, editing: false, canUndo: false, canRedo: false })
+    await v.page.evaluate(() => window.__xlsxHistory.release!())
+    await until(v, 's.dirty && s.canUndo')
+    expect(await v.page.evaluate(() => window.__oldHistoryController.snapshot())).toEqual(detached)
+    expect((await saveXlsx(v)).cell('J12')).toBe('pending edit')
+    await v.page.evaluate(() => window.__ctl.undo())
+    await until(v, 's.canRedo && !s.canUndo')
+    expect((await saveXlsx(v)).cell('J12')).toBe('')
+    expect(v.errors).toEqual([])
+  })
+
+  for (const method of ['xlsx.set', 'xlsx.undo', 'xlsx.redo'] as const) {
+    test(`xlsx: delayed ${method} completion respects the current edit gate`, async () => {
+      const v = await delayedXlsx()
+      if (method !== 'xlsx.set') {
+        await v.typeCell('J12', 'pending history')
+        await until(v, 's.canUndo')
+        if (method === 'xlsx.redo') {
+          await v.page.evaluate(() => window.__ctl.undo())
+          await until(v, 's.canRedo && !s.canUndo')
+        }
+        await saveXlsx(v)
+        await until(v, '!s.dirty')
+      }
+      await holdHistory(v, method)
+      if (method === 'xlsx.set') {
+        await v.clickCell('J12')
+        await v.page.keyboard.type('pending history')
+        await v.page.keyboard.press('Enter')
+      } else await v.page.evaluate((method) => method === 'xlsx.undo' ? window.__ctl.undo() : window.__ctl.redo(), method)
+      await pendingHistory(v)
+      await v.page.evaluate(() => window.__ctl.setEditing(false))
+      await until(v, '!s.editing && !s.canUndo && !s.canRedo')
+      await v.page.evaluate(() => {
+        window.__ctl.subscribe(() => window.__xlsxHistory.publications.push(window.__ctl.snapshot()))
+        window.__xlsxHistory.release!()
+      })
+      // Dirty is published by run after the held response resumes, so the assertion cannot pass before completion.
+      await until(v, 's.dirty')
+      expect(await state(v)).toMatchObject({ editing: false, canUndo: false, canRedo: false })
+      expect(await v.page.evaluate(() => window.__xlsxHistory.publications.some((s) => s.canUndo || s.canRedo))).toBe(false)
+      expect((await saveXlsx(v)).cell('J12')).toBe(method === 'xlsx.undo' ? '' : 'pending history')
+      await v.page.evaluate(() => window.__ctl.setEditing(true))
+      await until(v, method === 'xlsx.undo' ? 's.canRedo && !s.canUndo' : 's.canUndo && !s.canRedo')
+      expect(v.errors).toEqual([])
+    })
+  }
+
+  test('xlsx: an unmounted view cannot publish its delayed history over the current view', async () => {
+    const v = await delayedXlsx()
+    await holdHistory(v, 'xlsx.set')
+    await v.clickCell('J12')
+    await v.page.keyboard.type('old workbook')
+    await v.page.keyboard.press('Enter')
+    await pendingHistory(v)
+    await v.page.evaluate(() => window.__setProps({ src: 'samples/sample.docx', onLoad: undefined }))
+    await v.page.locator('.de-pages').waitFor()
+    await until(v, "s.kind === 'docx' && !s.loading && !s.canUndo && !s.canRedo")
+    await v.page.evaluate(async () => {
+      window.__ctl.subscribe(() => window.__xlsxHistory.publications.push(window.__ctl.snapshot()))
+      window.__xlsxHistory.release!()
+      // The response continuation runs in microtasks before the next frame, even though its grid is gone.
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    })
+    expect(await v.page.evaluate(() => window.__xlsxHistory.publications.some((s) => s.canUndo || s.canRedo))).toBe(false)
+    expect(await state(v)).toMatchObject({ kind: 'docx', canUndo: false, canRedo: false })
+    expect(v.errors).toEqual([])
   })
 
   test('controller file actions enforce permissions even with the menu hidden', async () => {
