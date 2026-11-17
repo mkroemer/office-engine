@@ -806,7 +806,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
       editor.onHistory = undefined
     }
   }, [ctl, editor, isEditing])
-  useViewCommands(ctl, {
+  const publishFormat = useViewCommands(ctl, {
     setZoom,
     goto: (id) => gotoBlock(Number(id)),
     gotoPage: (n) => {
@@ -821,18 +821,21 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
       if (isEditing) editor.redo()
     },
     format: (c) => {
-      if (isEditing) applyDocx(editor, c)
+      if (isEditing && editor.input.formatSelection()) {
+        editor.input.preserveControlFocus()
+        applyDocx(editor, c)
+      }
     },
   })
   useEffect(() => {
     if (!ctl) return
-    if (!isEditing) return ctl.update({ format: null })
-    const off = editor.subscribeState((s) => ctl.update({ format: s && docxFormat(s) }))
+    if (!isEditing) return publishFormat(null)
+    const off = editor.subscribeState((s) => publishFormat(s && editor.input.formatSelection() ? docxFormat(s) : null))
     return () => {
       off()
-      ctl.update({ format: null })
+      publishFormat(null)
     }
-  }, [ctl, editor, isEditing])
+  }, [ctl, editor, isEditing, publishFormat])
 
   return (
     <div style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex' }}>

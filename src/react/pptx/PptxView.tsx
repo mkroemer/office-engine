@@ -640,7 +640,7 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
   useEffect(() => {
     ctl?.update({ canUndo: viewer.editable && (undoDepth > 0 || editor.active), canRedo: viewer.editable })
   })
-  useViewCommands(ctl, {
+  const publishFormat = useViewCommands(ctl, {
     setZoom,
     goto: (id) => go(Number(id)),
     gotoPage: (n) => go(n - 1),
@@ -648,19 +648,22 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
     redo: () => viewer.editable && (editor.active ? editor.redo() : void undoShapes(true)),
     present: () => setPresenting(current),
     format: (c) => {
-      if (viewer.editable && editor.active) applyPptx(editor, c)
+      if (viewer.editable && editor.active && editor.input.formatSelection()) {
+        editor.input.preserveControlFocus()
+        applyPptx(editor, c)
+      }
     },
   })
   // formatting reaches text being edited; a shape that is only selected has none
   useEffect(() => {
     if (!ctl) return
-    if (!viewer.editable) return ctl.update({ format: null })
-    const off = editor.subscribeState((s) => ctl.update({ format: s && pptxFormat(s) }))
+    if (!viewer.editable) return publishFormat(null)
+    const off = editor.subscribeState((s) => publishFormat(s && editor.input.formatSelection() ? pptxFormat(s) : null))
     return () => {
       off()
-      ctl.update({ format: null })
+      publishFormat(null)
     }
-  }, [ctl, editor, viewer.editable])
+  }, [ctl, editor, viewer.editable, publishFormat])
 
   // ---- comments: a thread points at a point of a slide ----
   const cm = useCommentsCtl()

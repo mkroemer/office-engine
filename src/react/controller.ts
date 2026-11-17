@@ -5,7 +5,7 @@
  * store), state replaced as a whole on every change (`rev` counts them). The viewer and its mounted view publish their
  * state and register the commands they can run; a command with nobody to run it does nothing.
  */
-import { useEffect, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import type { DocKind } from '../core/opc'
 import { stepZoom, type Zoom } from './common/ZoomControl'
 import { useLatest } from './common/hooks'
@@ -65,7 +65,7 @@ export interface TextFormat {
   /** text highlight; in a spreadsheet, the cell's fill */
   highlight?: string
   align?: 'left' | 'center' | 'right' | 'justify'
-  /** the paragraph's list; undefined where there are no lists (cells) */
+  /** the paragraph's list; null for no list, undefined where unsupported (cells). Mixed selections are not aggregated. */
   list?: 'bullet' | 'number' | null
 }
 
@@ -73,10 +73,12 @@ export interface TextFormat {
 export type FormatCommand =
   | { op: 'toggle'; mark: 'bold' | 'italic' | 'underline' | 'strike' }
   | { op: 'font'; name: string }
+  /** finite, positive points; invalid sizes do nothing */
   | { op: 'size'; pt: number }
   | { op: 'color'; color: string | null }
   | { op: 'highlight'; color: string | null }
   | { op: 'align'; align: 'left' | 'center' | 'right' | 'justify' }
+  /** toggles the kind off when already applied; DOCX checks all selected paragraphs, PPTX the first */
   | { op: 'list'; list: 'bullet' | 'number' }
   | { op: 'clear' }
 
@@ -110,6 +112,7 @@ export interface ViewController {
   activate(): () => void
   update(state: Partial<ViewState>): void
   attachView(commands: ViewCommands): () => void
+  publishFormat(commands: ViewCommands, format: TextFormat | null): void
   readonly observed: boolean
   watchObserved(fn: () => void): () => void
 }
@@ -215,6 +218,7 @@ export class InternalViewerController {
 
   /** formats the selection while editing: `format({ op: 'toggle', mark: 'bold' })`, `format({ op: 'size', pt: 14 })` */
   format = (cmd: FormatCommand) => {
+    if (cmd.op === 'size' && (!Number.isFinite(cmd.pt) || cmd.pt <= 0)) return
     this.view?.format?.(cmd)
   }
 
@@ -304,6 +308,7 @@ export class InternalViewerController {
               this.view = null
             }
           },
+          publishFormat: (commands, format) => { if (current() && this.view === commands) this.update({ format }) },
           get observed() { return controller.observed },
           watchObserved: (fn) => this.watchObserved(fn),
         }
@@ -315,7 +320,7 @@ export class InternalViewerController {
 /** Host API; publishing and lifecycle methods belong to the engine. */
 export type ViewerController = { readonly [controllerBrand]: true } & Pick<InternalViewerController,
   'subscribe' | 'snapshot' | 'setEditing' | 'save' | 'undo' | 'redo' | 'setZoom' | 'zoomIn' | 'zoomOut' |
-  'goto' | 'gotoPage' | 'present' | 'print' | 'fileAction' | 'toggleComments'>
+  'goto' | 'gotoPage' | 'present' | 'format' | 'print' | 'fileAction' | 'toggleComments'>
 
 export const createViewerController = (): ViewerController => new InternalViewerController()
 /** @internal controllers supplied to viewers originate from createViewerController(). */
@@ -341,9 +346,11 @@ export function useViewerState(ctl: ViewerController): ViewerState {
 /** Registers a view's commands (the latest closures each render) while it is mounted. */
 export function useViewCommands(ctl: ViewController | null, commands: ViewCommands) {
   const latest = useLatest(commands)
-  useEffect(() => {
-    if (!ctl) return
+  const registration = useMemo(() => {
     const call = <K extends keyof ViewCommands>(k: K) => ((...a: unknown[]) => (latest.current[k] as ((...x: unknown[]) => void) | undefined)?.(...a)) as ViewCommands[K]
-    return ctl.attachView({ setZoom: call('setZoom'), goto: call('goto'), gotoPage: call('gotoPage'), undo: call('undo'), redo: call('redo'), present: call('present'), format: call('format') })
+    const view = { setZoom: call('setZoom'), goto: call('goto'), gotoPage: call('gotoPage'), undo: call('undo'), redo: call('redo'), present: call('present'), format: call('format') }
+    return { view, publishFormat: (format: TextFormat | null) => ctl?.publishFormat(view, format) }
   }, [ctl, latest])
+  useEffect(() => ctl?.attachView(registration.view), [ctl, registration])
+  return registration.publishFormat
 }

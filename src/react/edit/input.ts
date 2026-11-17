@@ -339,6 +339,9 @@ export class RichInput {
   private justComposed = ''
   private raf = 0
   lastSel: Sel | null = null
+  /** A live formatting target may move to a native control, but never survive a real selection loss. */
+  private formatTarget: Sel | null = null
+  private formatControl: Element | null = null
   /** select all: the model selection covers every paragraph, the DOM one only what is rendered */
   private override: { model: Sel; dom: Sel } | null = null
 
@@ -367,6 +370,9 @@ export class RichInput {
     this.raf = 0 // or the next selection change waits forever for a frame that was cancelled
     this.root = null
     this.override = null
+    this.formatTarget = null
+    this.formatControl = null
+    this.lastSel = null
   }
 
   get isComposing() {
@@ -386,6 +392,25 @@ export class RichInput {
   /** current selection, falling back to the last known one (e.g. after focusing a toolbar control) */
   sel(): Sel | null {
     return this.override?.model ?? this.readSel() ?? this.lastSel
+  }
+
+  /** Native controls have their own selection; keep the editor target while the host edits a value. */
+  private activeControl(): Element | null {
+    const root = this.root
+    if (!root) return null
+    let active = root.ownerDocument.activeElement
+    while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement
+    return active && !root.contains(active) && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName) ? active : null
+  }
+
+  /** Controller formatting can restore asynchronously; leave the initiating native control alone. */
+  preserveControlFocus() {
+    this.formatControl = this.activeControl()
+  }
+
+  formatSelection(): Sel | null {
+    const sel = this.activeControl() ? this.formatTarget : this.readSel()
+    return sel && this.host.para(sel.a.pa) && this.host.para(sel.f.pa) ? sel : null
   }
 
   /**
@@ -414,6 +439,11 @@ export class RichInput {
   restore(sel: Sel | null, focus = true): boolean {
     const root = this.root
     if (!root || !sel) return false
+    // Re-rendering a format change must not replace a host input's focus or its selection.
+    if (focus && this.formatControl && (this.activeControl() === this.formatControl || !this.formatSelection())) {
+      this.lastSel = sel
+      return true
+    }
     this.override = null
     const a = domFromPos(root, sel.a)
     const f = domFromPos(root, sel.f)
@@ -430,6 +460,7 @@ export class RichInput {
       /* node vanished */
     }
     this.lastSel = sel
+    this.formatTarget = sel
     return true
   }
 
@@ -576,15 +607,21 @@ export class RichInput {
     if (this.raf) return
     this.raf = requestAnimationFrame(() => {
       this.raf = 0
-      const s = this.readSel()
+      const dom = this.readSel()
+      const control = this.activeControl()
+      if (dom && !control) this.formatControl = null
       const ov = this.override
+      const active = (this.root?.getRootNode() as Document | ShadowRoot | undefined)?.activeElement
       // select all stays until the selection moves somewhere else (losing it to a re-render keeps it, like lastSel)
-      if (ov && s && !sameSel(s, ov.dom)) this.override = null
-      else if (ov) {
+      if (ov && (dom ? sameSel(dom, ov.dom) : (control && !!this.formatTarget) || this.root === active)) {
+        this.formatTarget = ov.model
         this.host.onSelection?.(ov.model)
         return
       }
+      this.override = null
+      const s = dom ?? (control ? this.formatSelection() : null)
       if (s) this.lastSel = s
+      this.formatTarget = s
       this.host.onSelection?.(s)
     })
   }

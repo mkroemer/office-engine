@@ -125,6 +125,32 @@ describe('viewer controller', () => {
     expect(observed).toEqual([true, false, true, false])
   })
 
+  test('format publication and cleanup require the current command owner, including late callbacks', () => {
+    const ctl = new InternalViewerController()
+    const { view: old } = mount(ctl)
+    const { view: next, detach: detachNext } = mount(ctl)
+    const oldCommands = {}, nextCommands = {}
+    const format = { bold: true, italic: false, underline: false, strike: false, size: 25 }
+    const detachOld = old.attachView(oldCommands)
+    next.attachView(nextCommands)
+    next.publishFormat(nextCommands, format)
+    old.publishFormat(oldCommands, null)
+    old.publishFormat(oldCommands, { ...format, size: 10 })
+    detachOld()
+    expect(ctl.snapshot().format).toEqual(format)
+    detachNext()
+    next.publishFormat(nextCommands, format)
+    expect(ctl.snapshot().format).toBeNull()
+  })
+
+  test('invalid sizes never reach a view command; positive finite sizes keep their value', () => {
+    const ctl = new InternalViewerController()
+    const sizes: number[] = []
+    mount(ctl).view.attachView({ format: (c) => { if (c.op === 'size') sizes.push(c.pt) } })
+    for (const pt of [NaN, Infinity, -Infinity, 0, -1, 0.25, 12.5, 1000]) ctl.format({ op: 'size', pt })
+    expect(sizes).toEqual([0.25, 12.5, 1000])
+  })
+
   test('structural mocks and wrappers fail clearly before mounting', () => {
     const real = createViewerController()
     const fake: Pick<ViewerController, Extract<keyof ViewerController, string>> = { ...real }

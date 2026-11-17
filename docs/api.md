@@ -130,7 +130,7 @@ function Viewer({ file }: { file: File }) {
 | `page` | `{ current, count }` from 1: the page (documents; `count` 0 while laid out) or slide in view; `null` for spreadsheets |
 | `outline` | `{ kind, items: [{ id, title, level, current }] }`: a document's headings, a workbook's visible sheets, a presentation's slides (titled by their title placeholder, else "Slide n") |
 | `status` | the status line ("Page 2 of 7 · 1,204 words", "Slide 3 of 12", "200 rows × 8 cols") |
-| `format` | while editing, the formatting at the selection (`TextFormat`, below); `null` while viewing, and in a presentation unless text is being edited |
+| `format` | while editing, the formatting at the selection (`TextFormat`, below), retained while using native host inputs; `null` without a valid target, while viewing, and in a presentation unless text is being edited |
 
 Commands: `setEditing(on)`, `save()`, `undo()`, `redo()`, `zoomIn()`, `zoomOut()`, `setZoom('fit' | number)`,
 `goto(outlineId)`, `gotoPage(n)`, `present()` (a slideshow from the slide in view), `print()`, `fileAction(id)` (a File menu
@@ -153,9 +153,29 @@ const f = useViewerState(ctl).format
 spreadsheet), `align` (`'left' | 'center' | 'right' | 'justify'`), `list` (`'bullet' | 'number' | null`; undefined for
 cells). `FormatCommand`: `{ op: 'toggle', mark }`, `{ op: 'font', name }`, `{ op: 'size', pt }`, `{ op: 'color', color }`,
 `{ op: 'highlight', color }` (`null` removes either), `{ op: 'align', align }`, `{ op: 'list', list }`, `{ op: 'clear' }`.
-What a kind has no use for does nothing (lists and justified text in cells). A button must not take the focus from the
-document (prevent its mouse down), or the command loses the selection. Tables, pictures, tracked changes and cell borders
-stay with the built-in toolbars.
+Sizes must be finite and greater than zero; `NaN`, infinities, zero and negative sizes do nothing, without changing the
+document or its history. Existing finite positive sizes keep the editor's usual precision.
+
+`list` commands **toggle**: requesting the same kind again removes it. DOCX removes the list only when **all** selected
+paragraphs already have that kind; otherwise it applies that kind to all of them. PPTX decides from the **first** selected
+paragraph, including a mixed selection, and applies the result to all selected paragraphs. The snapshot does not summarize
+mixed formatting: both report the first selected paragraph's list. `list: null` means no list;
+`list: undefined` means lists are unsupported (cells). Other optional `TextFormat` fields may be undefined when unspecified
+or unsupported; `format: null` means there is no formatting target.
+
+Cells support marks, font, size, text color, fill, left/center/right alignment and clear; lists and justified alignment do
+nothing. DOCX and PPTX support every command above. Tables, pictures, tracked changes and cell borders stay with the built-in
+toolbars.
+
+Buttons should prevent mouse down to keep the document selection. Native inputs, textareas and selects may take focus:
+the valid editor target remains available, and formatting preserves the control's focus and text selection, including live
+`onChange` commands. A true selection loss, leaving edit mode, ending slide text editing, or replacing the source clears
+the target. For example, a host size input can use `disabled={!f}` and send a size on change:
+
+```tsx
+<input aria-label="Font size" type="number" disabled={!f} defaultValue={f?.size}
+  onChange={(e) => ctl.format({ op: 'size', pt: e.currentTarget.valueAsNumber })} />
+```
 
 Controller actions obey `allowSave`, `allowDownload` and `allowOpen` even when the File menu is hidden.
 `fileMenu={false}` hides that menu and its keyboard shortcuts; it does not disable a host's controller controls.

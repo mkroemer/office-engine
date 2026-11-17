@@ -17,6 +17,7 @@ export function docxFormat(s: FormatState): TextFormat {
 }
 
 export function applyDocx(ed: DocxEditor, c: FormatCommand) {
+  if (c.op === 'size' && !validSize(c.pt)) return
   if (c.op === 'toggle') ed.toggle(MARK_KEY[c.mark])
   else if (c.op === 'font') ed.setFont(c.name)
   else if (c.op === 'size') ed.setSize(c.pt)
@@ -32,6 +33,7 @@ export function pptxFormat(s: PptxFormat): TextFormat {
 }
 
 export function applyPptx(ed: PptxEditor, c: FormatCommand) {
+  if (c.op === 'size' && !validSize(c.pt)) return
   if (c.op === 'toggle') ed.toggle(MARK_KEY[c.mark])
   else if (c.op === 'font') ed.setFont(c.name)
   else if (c.op === 'size') ed.setSize(c.pt)
@@ -66,10 +68,12 @@ export function cellFormat(css: Record<string, string | number>, base: { fontFam
 export function cellPatch(c: FormatCommand, now: TextFormat): FmtPatch | null {
   if (c.op === 'toggle') return { [MARK_KEY[c.mark]]: !now[c.mark] }
   if (c.op === 'font') return { font: c.name }
-  if (c.op === 'size') return { sz: c.pt }
+  if (c.op === 'size') return validSize(c.pt) ? { sz: c.pt } : null
   if (c.op === 'color') return { color: c.color }
   if (c.op === 'highlight') return { fill: c.color }
   if (c.op === 'align') return c.align === 'justify' ? null : { align: c.align }
   if (c.op === 'clear') return { clear: true }
   return null
 }
+
+const validSize = (pt: number) => Number.isFinite(pt) && pt > 0
