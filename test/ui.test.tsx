@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import type { ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import type { Icon as PublicIcon } from '../src'
 import { ConfirmDialog, PromptDialog, Toast } from '../src/react/common/Dialog'
-import { Btn, ColorBtn, Dropdown, Pop, Sep } from '../src/react/edit/Toolbar'
-import { UIComponentsProvider, type ButtonProps, type DialogProps, type SelectProps, type UIComponents } from '../src/react/ui'
+import { Btn, ColorBtn, Dropdown, Icon, Pop, Sep } from '../src/react/edit/Toolbar'
+import { OfficeUIProvider, UIComponentsProvider, type ButtonProps, type DialogProps, type SelectProps, type UIComponents } from '../src/react/ui'
 
 const seen: { button: ButtonProps[]; select: SelectProps[]; dialog: DialogProps[] } = { button: [], select: [], dialog: [] }
 const host: Partial<UIComponents> = {
@@ -43,6 +44,15 @@ describe('UI components', () => {
     expect(html(<Sep />, null)).toBe('<span class="de-tb-sep"></span>')
     expect(html(<Dropdown title="Style" options={[{ value: 'a', label: 'A' }]} onChange={noop} value="a" />, null)).toContain('class="de-dd"')
     expect(html(<Toast text="Saved" onDone={noop} />, null)).toBe('<div class="de-toast" role="status">Saved</div>')
+    expect(html(<PromptDialog spec={{ title: 'Link', label: 'URL', initial: 'https://x', placeholder: 'https://', note: 'A link', onOk: noop, extra: { label: 'Remove link', run: noop } }} onClose={noop} />, null)).toBe(
+      '<div class="de-dialog-back"><form class="de-dialog" role="dialog" aria-label="Link"><div class="de-dialog-title">Link</div><label class="de-dialog-label">URL</label><input placeholder="https://" value="https://x"/><div class="de-dialog-note">A link</div><div class="de-dialog-btns"><button type="button" class="de-btn de-dialog-extra">Remove link</button><button type="button" class="de-btn">Cancel</button><button type="submit" class="de-btn de-btn-primary">OK</button></div></form></div>',
+    )
+    expect(html(<PromptDialog spec={{ title: 'Notes', area: true, initial: 'Text', onOk: noop }} onClose={noop} />, null)).toBe(
+      '<div class="de-dialog-back"><form class="de-dialog" role="dialog" aria-label="Notes"><div class="de-dialog-title">Notes</div><textarea rows="3">Text</textarea><div class="de-dialog-btns"><button type="button" class="de-btn">Cancel</button><button type="submit" class="de-btn de-btn-primary">OK</button></div></form></div>',
+    )
+    expect(html(<ConfirmDialog title="Delete?" message="Gone for good" ok="Delete" onOk={noop} onClose={noop} />, null)).toBe(
+      '<div class="de-dialog-back"><div class="de-dialog" role="alertdialog" aria-label="Delete?"><div class="de-dialog-title">Delete?</div><div class="de-dialog-note">Gone for good</div><div class="de-dialog-btns"><button type="button" class="de-btn">Cancel</button><button type="button" class="de-btn de-btn-primary" autofocus="">Delete</button></div></div></div>',
+    )
   })
 
   test('Button gets title, resolved icon, state, the engine classes and the focus-keeping mouse down', () => {
@@ -84,10 +94,24 @@ describe('UI components', () => {
     html(<ConfirmDialog title="Delete?" message="Gone for good" ok="Delete" onOk={noop} onClose={noop} />)
     const [prompt, confirm] = seen.dialog
     expect(prompt.onSubmit).toBeFunction()
+    expect(prompt.actions[0]).toMatchObject({ label: 'Remove link', extra: true })
     expect(prompt.actions.at(-1)).toMatchObject({ primary: true, submit: true })
     expect(confirm.kind).toBe('alert')
     expect(confirm.onSubmit).toBeUndefined()
     expect(confirm.actions.at(-1)).toMatchObject({ label: 'Delete', primary: true, autoFocus: true })
+  })
+
+  test('host Select can render option icons through the public Icon export and host icon provider', () => {
+    // The root entry includes Vite worker imports; check its public type without loading it in Bun.
+    const OptionIcon: typeof PublicIcon = Icon
+    const Select = (p: SelectProps) => <>{p.options.map((o) => o.icon && <OptionIcon key={o.value} name={o.icon} size={16} />)}</>
+    const out = renderToStaticMarkup(
+      <OfficeUIProvider components={{ Select }} icons={{ bold: <b>host bold</b> }}>
+        <Dropdown title="Format" options={[{ value: 'b', label: 'Bold', icon: 'bold' }, { value: 'i', label: 'Italic', icon: 'italic' }]} onChange={noop} />
+      </OfficeUIProvider>,
+    )
+    expect(out).toContain('<span class="de-icon" style="font-size:16px;width:16px;height:16px" aria-hidden="true"><b>host bold</b></span>')
+    expect(out).toContain('<svg width="16" height="16"')
   })
 
   test('Toast', () => {

@@ -36,6 +36,7 @@ export function PromptDialog({ spec, onClose }: { spec: PromptSpec; onClose: () 
       ? [
           {
             label: spec.extra.label,
+            extra: true,
             onClick: () => {
               onClose()
               spec.extra!.run()

@@ -55,6 +55,8 @@ export interface SelectProps<T extends string | number = string | number> {
 export interface DialogAction {
   label: string
   onClick?: () => void
+  /** an auxiliary action, placed at the start of the built-in dialog's action row */
+  extra?: boolean
   /** the main action: styled as such; with `submit`, also what Enter does */
   primary?: boolean
   /** submits the dialog's form (`onSubmit`) */
@@ -121,7 +123,7 @@ export function DefaultDialog(props: DialogProps) {
           <button
             key={i}
             type={a.submit ? 'submit' : 'button'}
-            className={a.primary ? 'de-btn de-btn-primary' : 'de-btn'}
+            className={'de-btn' + (a.primary ? ' de-btn-primary' : '') + (a.extra ? ' de-dialog-extra' : '')}
             autoFocus={a.autoFocus}
             onClick={a.onClick}
           >

@@ -42,7 +42,7 @@ const items: FileMenuItem[] = [
 // plain host components: no engine classes, so nothing of the engine's CSS styles them
 const components: Partial<UIComponents> = {
   Button: (p) => (
-    <button type="button" data-host-button="" data-active={p.active || undefined} title={p.title} aria-label={p.title} aria-expanded={p.expanded} disabled={p.disabled} onMouseDown={p.onMouseDown} onClick={p.onClick}>
+    <button type="button" data-host-button="" data-active={p.active || undefined} title={p.title} aria-label={p.title} aria-expanded={p.expanded} disabled={p.disabled} onMouseDown={p.onMouseDown} onClick={p.onClick} style={p.iconName === 'more' ? { width: 140 } : undefined}>
       {p.icon}
       {p.label}
       {p.children}

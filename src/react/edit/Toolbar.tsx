@@ -579,6 +579,7 @@ export function ToolbarRow({ children }: { children: ReactNode }) {
   const [fit, setFit] = useState<{ sig: string; cut: number; w: number }>({ sig: '', cut: items.length, w: 0 })
   const [more, setMore] = useState(false)
   const moreRef = useRef<HTMLSpanElement>(null)
+  const moreWidth = useRef(34)
   useDismiss(moreRef, more, () => setMore(false))
   const measured = fit.sig === sig
   const cut = measured ? fit.cut : items.length
@@ -589,7 +590,7 @@ export function ToolbarRow({ children }: { children: ReactNode }) {
     const total = ws.reduce((a, b) => a + b + gap, 0)
     let k = items.length
     if (total > w) {
-      const room = w - 34
+      const room = w - moreWidth.current
       let used = 0
       k = 0
       while (k < items.length && used + ws[k] + gap <= room) used += ws[k++] + gap
@@ -609,6 +610,14 @@ export function ToolbarRow({ children }: { children: ReactNode }) {
     if (!el || measured) return
     widths.current = [...el.querySelectorAll<HTMLElement>(':scope > [data-i]')].map((x) => x.getBoundingClientRect().width)
     layout(avail())
+  })
+  // A host's overflow button may be wider than the built-in icon button.
+  useLayoutEffect(() => {
+    const w = moreRef.current?.getBoundingClientRect().width
+    if (w !== undefined && w !== moreWidth.current) {
+      moreWidth.current = w
+      layout(avail())
+    }
   })
   const relayout = useRef(() => {})
   relayout.current = () => {
