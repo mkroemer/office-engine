@@ -154,7 +154,8 @@ spreadsheet), `align` (`'left' | 'center' | 'right' | 'justify'`), `list` (`'bul
 cells). `FormatCommand`: `{ op: 'toggle', mark }`, `{ op: 'font', name }`, `{ op: 'size', pt }`, `{ op: 'color', color }`,
 `{ op: 'highlight', color }` (`null` removes either), `{ op: 'align', align }`, `{ op: 'list', list }`, `{ op: 'clear' }`.
 Sizes must be finite and greater than zero; `NaN`, infinities, zero and negative sizes do nothing, without changing the
-document or its history. Existing finite positive sizes keep the editor's usual precision.
+document or its history. DOCX and PPTX also reject sizes that round to zero, overflow or exceed safely represented integer
+units when converted to half points or hundredths of a point. Accepted sizes keep the editor's usual precision.
 
 `list` commands **toggle**: requesting the same kind again removes it. DOCX removes the list only when **all** selected
 paragraphs already have that kind; otherwise it applies that kind to all of them. PPTX decides from the **first** selected

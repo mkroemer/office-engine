@@ -17,7 +17,7 @@ export function docxFormat(s: FormatState): TextFormat {
 }
 
 export function applyDocx(ed: DocxEditor, c: FormatCommand) {
-  if (c.op === 'size' && !validSize(c.pt)) return
+  if (c.op === 'size' && !validSize(c.pt, 2)) return
   if (c.op === 'toggle') ed.toggle(MARK_KEY[c.mark])
   else if (c.op === 'font') ed.setFont(c.name)
   else if (c.op === 'size') ed.setSize(c.pt)
@@ -33,7 +33,7 @@ export function pptxFormat(s: PptxFormat): TextFormat {
 }
 
 export function applyPptx(ed: PptxEditor, c: FormatCommand) {
-  if (c.op === 'size' && !validSize(c.pt)) return
+  if (c.op === 'size' && !validSize(c.pt, 100)) return
   if (c.op === 'toggle') ed.toggle(MARK_KEY[c.mark])
   else if (c.op === 'font') ed.setFont(c.name)
   else if (c.op === 'size') ed.setSize(c.pt)
@@ -76,4 +76,10 @@ export function cellPatch(c: FormatCommand, now: TextFormat): FmtPatch | null {
   return null
 }
 
-const validSize = (pt: number) => Number.isFinite(pt) && pt > 0
+const validSize = (pt: number, unitsPerPoint?: number) => {
+  if (!Number.isFinite(pt) || pt <= 0) return false
+  if (unitsPerPoint === undefined) return true
+  // DOCX stores half points and PPTX hundredths: validate the writer's rounded units before editing history.
+  const units = Math.round(pt * unitsPerPoint)
+  return Number.isSafeInteger(units) && units > 0
+}

@@ -8,6 +8,7 @@ import { applyDocx, applyPptx, cellPatch, cellFormat } from '../src/react/edit/f
 
 const file = async (kind: string) => new Blob([await Bun.file(`${import.meta.dir}/../playground/public/samples/sample.${kind}`).arrayBuffer()])
 const invalid = [NaN, Infinity, -Infinity, 0, -1]
+const invalidConverted = [Number.MAX_VALUE, Number.MIN_VALUE, Number.MAX_SAFE_INTEGER]
 const xml = async (client: DocumentClient, path: string) => (await ZipArchive.open(new BlobSource(await client.call('save')))).text(path)
 async function documentEditor() {
   const client = await DocumentClient.open(await file('docx'), { worker: false })
@@ -37,7 +38,7 @@ test('DOCX: invalid public sizes leave model, history and saved XML untouched; f
   try {
     const before = await xml(client, 'word/document.xml')
     const state = ed.state()
-    for (const pt of invalid) applyDocx(ed, { op: 'size', pt })
+    for (const pt of [...invalid, ...invalidConverted, 0.24]) applyDocx(ed, { op: 'size', pt })
     expect(ed.state()).toEqual(state)
     expect(ed.canUndo).toBe(false)
     expect(await xml(client, 'word/document.xml')).toBe(before)
@@ -55,7 +56,7 @@ test('PPTX: invalid public sizes leave model, history and saved XML untouched; f
   try {
     const before = await xml(client, 'ppt/slides/slide1.xml')
     const text = ed.text()
-    for (const pt of invalid) applyPptx(ed, { op: 'size', pt })
+    for (const pt of [...invalid, ...invalidConverted, 0.004]) applyPptx(ed, { op: 'size', pt })
     expect(ed.text()).toEqual(text)
     // If an invalid command had entered history, undo/redo would also alter this body.
     ed.undo()
