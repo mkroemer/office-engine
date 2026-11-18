@@ -136,6 +136,7 @@ export const de: Strings = {
     fontSize: 'Schriftgrad',
     fontSizeDown: 'Schriftgrad verkleinern',
     fontSizeUp: 'Schriftgrad vergrößern',
+    more: 'Mehr',
     moreTools: 'Weitere Werkzeuge',
     custom: 'Benutzerdefiniert',
     customColor: 'Benutzerdefinierte Farbe',
