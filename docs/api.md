@@ -167,7 +167,7 @@ The snapshot reports the first selected paragraph's list, without aggregating mi
 `list: undefined` means lists are unsupported (cells). Other optional `TextFormat` fields may be undefined when unspecified
 or unsupported; `format: null` means there is no formatting target. Unknown operations and invalid arguments do nothing.
 
-Each accepted format command is a separate undo step (caret-only pending marks follow normal typing behavior). For a live
+Each mutating format command is a separate undo step (caret-only pending marks follow normal typing behavior). For a live
 font/size field, keep a local draft and commit on blur or Enter when one undo step per finished value is desired; do not
 publish every prefix of a font name. The controller also supports live commands while preserving native input focus.
 
