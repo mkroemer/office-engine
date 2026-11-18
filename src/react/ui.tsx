@@ -94,7 +94,11 @@ const UIContext = createContext<Partial<UIComponents>>({})
 /** Replaces UI components for everything below it; an outer provider's components stay for those left out. */
 export function UIComponentsProvider({ components, children }: { components?: Partial<UIComponents>; children?: ReactNode }) {
   const outer = useContext(UIContext)
-  const value = useMemo(() => (components ? { ...outer, ...components } : outer), [outer, components])
+  const value = useMemo(() => {
+    if (!components) return outer
+    const defined = Object.fromEntries(Object.entries(components).filter(([, component]) => component !== undefined))
+    return { ...outer, ...defined }
+  }, [outer, components])
   return <UIContext.Provider value={value}>{children}</UIContext.Provider>
 }
 

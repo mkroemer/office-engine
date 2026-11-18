@@ -70,14 +70,16 @@ gives the class name and style their root needs:
 ```tsx
 const root = useThemeRoot(theme)
 return (
-  <OfficeUIProvider icons={icons} components={components} locale="de">
+  <OfficeUIProvider icons={icons} components={components} locale="de-DE">
     <div className={root.className} style={root.style}><XlsxView client={client} /></div>
   </OfficeUIProvider>
 )
 ```
 
 `OfficeUIProvider` carries what `DocViewer` takes as `icons`, `components`, `locale` and `strings` to views mounted on
-their own.
+their own. Nested providers inherit the outer texts, icons and components. Local `strings` merge key by key;
+an explicit `locale` changes number/date formatting while preserving the inherited texts. Omitted or `undefined`
+components and string entries preserve the outer values.
 
 ## Your own components
 

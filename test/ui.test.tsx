@@ -4,6 +4,8 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import type { Icon as PublicIcon } from '../src'
 import { ConfirmDialog, PromptDialog, Toast } from '../src/react/common/Dialog'
 import { Btn, ColorBtn, Dropdown, Icon, Pop, Sep } from '../src/react/edit/Toolbar'
+import { useStrings, type Strings } from '../src/react/strings'
+import { de } from '../src/locales/de'
 import { DefaultDialog, OfficeUIProvider, UIComponentsProvider, type ButtonProps, type DialogProps, type SelectProps, type UIComponents } from '../src/react/ui'
 
 const seen: { button: ButtonProps[]; select: SelectProps[]; dialog: DialogProps[] } = { button: [], select: [], dialog: [] }
@@ -37,6 +39,11 @@ const host: Partial<UIComponents> = {
 /** renders with the host components, or with `null` with the built-in ones */
 const html = (node: ReactNode, components: Partial<UIComponents> | null = host) => renderToStaticMarkup(<UIComponentsProvider components={components ?? undefined}>{node}</UIComponentsProvider>)
 const noop = () => {}
+const texts: Strings[] = []
+function TextProbe() {
+  texts.push(useStrings())
+  return null
+}
 
 describe('UI components', () => {
   test('without host components the built-in markup is unchanged', () => {
@@ -149,7 +156,7 @@ describe('UI components', () => {
   test('nested providers: inner components win, the outer ones stay for the rest', () => {
     const out = renderToStaticMarkup(
       <UIComponentsProvider components={host}>
-        <UIComponentsProvider components={{ Separator: () => <i>inner</i> }}>
+        <UIComponentsProvider components={{ Separator: () => <i>inner</i>, Toast: undefined }}>
           <Sep />
           <Toast text="t" onDone={noop} />
         </UIComponentsProvider>
@@ -158,4 +165,26 @@ describe('UI components', () => {
     expect(out).toBe('<i>inner</i><output data-host="toast">t</output>')
   })
 
+  test('nested OfficeUIProvider inherits texts and merges only defined string overrides', () => {
+    texts.length = 0
+    renderToStaticMarkup(
+      <OfficeUIProvider locale="de-CH" strings={{ ...de, common: { ok: 'Outer OK' }, file: { menu: 'Ablage' } }}>
+        <TextProbe />
+        <OfficeUIProvider components={host}><TextProbe /></OfficeUIProvider>
+        <OfficeUIProvider strings={{ common: { cancel: 'Inner cancel', ok: undefined } }}><TextProbe /></OfficeUIProvider>
+        <OfficeUIProvider locale="en-GB" strings={{ common: { ok: 'Inner OK' } }}><TextProbe /></OfficeUIProvider>
+      </OfficeUIProvider>,
+    )
+    expect(texts[1]).toBe(texts[0])
+    expect(texts[2].locale).toBe('de-CH')
+    expect(texts[2].common.ok).toBe('Outer OK')
+    expect(texts[2].common.cancel).toBe('Inner cancel')
+    expect(texts[2].file.menu).toBe('Ablage')
+    expect(texts[2].file.print).toBe(de.file.print)
+    expect(texts[3].locale).toBe('en-GB')
+    expect(texts[3].common.ok).toBe('Inner OK')
+    expect(texts[3].file.menu).toBe('Ablage')
+    expect(texts[3].file.print).toBe(de.file.print)
+    expect(de.common.ok).toBe('OK')
+  })
 })
