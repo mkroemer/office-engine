@@ -3,16 +3,20 @@
  *   ?src=samples/sample.docx&editable=1&allowSave=0&onSave=1&items=1&close=1&collab=ws://…&room=r
  *   comments: &me=Ann&meId=u1 (author), &people=1 (mentions: Ann, Bob Stone, Cid), &comments=0 (hidden), &cmOpen=1
  *   &icons=1: every icon from a host resolver, as `<svg data-host-icon={name}>`
+ *   texts: &locale=de-DE opts into the explicitly imported German table, &fileLabel=… overrides the File label
  */
 import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { DocViewer, type DocViewerProps, type FileMenuItem } from '../../src'
+import { de } from '../../src/locales/de'
 
 type Ev = { type: string; [k: string]: unknown }
 declare global {
   interface Window {
     __events: Ev[]
     __setProps: (p: Partial<DocViewerProps>) => void
+    __setLanguage: (language: 'en' | 'de-DE') => void
+    __german: typeof de
   }
 }
 window.__events = []
@@ -20,6 +24,7 @@ const log = (e: Ev) => window.__events.push(e)
 
 const q = new URLSearchParams(location.search)
 const flag = (k: string) => (q.has(k) ? q.get(k) !== '0' : undefined)
+const texts = q.get('locale') === 'de-DE' || q.get('locale') === 'de' ? de : undefined
 
 async function b64(blob: Blob) {
   const bytes = new Uint8Array(await blob.arrayBuffer())
@@ -48,6 +53,8 @@ const initial: DocViewerProps = {
   captureSelectAll: flag('captureSelectAll'),
   theme: (q.get('theme') as DocViewerProps['theme']) ?? undefined,
   injectStyles: flag('injectStyles'),
+  locale: (texts ? undefined : q.get('locale') as DocViewerProps['locale']) ?? undefined,
+  strings: q.has('fileLabel') ? { ...texts, file: { ...(texts?.file ?? {}), menu: q.get('fileLabel')! } } : texts,
   onSave: q.has('onSave') ? async (blob, name) => void log({ type: 'save', name, b64: await b64(blob) }) : undefined,
   onDirtyChange: (dirty) => log({ type: 'dirty', dirty }),
   onRename: (name) => log({ type: 'rename', name }),
@@ -77,6 +84,7 @@ const initial: DocViewerProps = {
 function App() {
   const [props, setProps] = useState(initial)
   window.__setProps = (p) => setProps((cur) => ({ ...cur, ...p }))
+  window.__setLanguage = (language) => setProps((cur) => ({ ...cur, strings: language === 'de-DE' ? de : undefined }))
   return <DocViewer {...props} />
 }
 

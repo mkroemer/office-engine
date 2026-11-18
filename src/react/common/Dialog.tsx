@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useStrings } from '../strings'
 
 export interface PromptSpec {
   title: string
@@ -16,6 +17,7 @@ export interface PromptSpec {
 
 /** Small modal prompt (no window.prompt: works in sandboxed / embedded pages). */
 export function PromptDialog({ spec, onClose }: { spec: PromptSpec; onClose: () => void }) {
+  const t = useStrings()
   const [v, setV] = useState(spec.initial ?? '')
   const ref = useRef<HTMLInputElement & HTMLTextAreaElement>(null)
   useEffect(() => {
@@ -69,10 +71,10 @@ export function PromptDialog({ spec, onClose }: { spec: PromptSpec; onClose: () 
             </button>
           )}
           <button type="button" className="de-btn" onClick={onClose}>
-            Cancel
+            {t.common.cancel}
           </button>
           <button type="submit" className="de-btn de-btn-primary">
-            {spec.ok ?? 'OK'}
+            {spec.ok ?? t.common.ok}
           </button>
         </div>
       </form>
@@ -82,6 +84,7 @@ export function PromptDialog({ spec, onClose }: { spec: PromptSpec; onClose: () 
 
 /** Yes / no question (no window.confirm: works in sandboxed / embedded pages). */
 export function ConfirmDialog(props: { title: string; message: ReactNode; ok: string; onOk: () => void; onClose: () => void }) {
+  const t = useStrings()
   const okRef = useRef<HTMLButtonElement>(null)
   useEffect(() => okRef.current?.focus(), [])
   return (
@@ -100,7 +103,7 @@ export function ConfirmDialog(props: { title: string; message: ReactNode; ok: st
         <div className="de-dialog-note">{props.message}</div>
         <div className="de-dialog-btns">
           <button type="button" className="de-btn" onClick={props.onClose}>
-            Cancel
+            {t.common.cancel}
           </button>
           <button
             ref={okRef}

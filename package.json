@@ -23,6 +23,10 @@
       "types": "./dist/types/embed.d.ts",
       "import": "./dist/embed.js"
     },
+    "./locales/de": {
+      "types": "./dist/types/locales/de.d.ts",
+      "import": "./dist/locales/de.js"
+    },
     "./worker": "./dist/office-engine.worker.js",
     "./embed.js": "./dist/office-engine.embed.js",
     "./collab": {

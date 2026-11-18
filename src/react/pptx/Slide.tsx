@@ -4,6 +4,7 @@ import type { Box, Fill, SlideEl, SlideModel, Stroke, TCell, TextBody, TRun } fr
 import { safeHref } from '../../core/url'
 import type { DocumentClient } from '../../core/worker/client'
 import { useMediaUrl } from '../common/hooks'
+import { useStrings } from '../strings'
 import { geomPath, LINE_GEOMS } from './geometry'
 
 function boxStyle(b: Box): CSSProperties {
@@ -57,6 +58,7 @@ export interface TextEdit {
 }
 
 export function TextView({ text, flow, edit }: { text: TextBody; flow?: boolean; edit?: TextEdit }) {
+  const str = useStrings()
   const [l, t, r, b] = text.ins
   const style: CSSProperties = {
     ...(flow ? { position: 'relative', inset: 'auto', minHeight: '100%' } : {}),
@@ -64,12 +66,13 @@ export function TextView({ text, flow, edit }: { text: TextBody; flow?: boolean;
     justifyContent: text.anchor === 'ctr' ? 'center' : text.anchor === 'b' ? 'flex-end' : 'flex-start',
   }
   if (text.vert) style.writingMode = text.vert === 'vert270' ? 'sideways-lr' : 'vertical-rl'
-  if (text.empty && !edit) return <div className="de-txt" style={style} />
+  if (text.empty && !edit) return <div className="de-txt" style={style} data-placeholder={str.pptx.placeholder} />
   return (
     <div
       ref={edit?.root}
       className={(text.wrap ? 'de-txt' : 'de-txt de-nowrap') + (edit ? ' de-txt-edit' : '')}
       style={style}
+      data-placeholder={str.pptx.placeholder}
       contentEditable={edit ? true : undefined}
       suppressContentEditableWarning
       spellCheck={edit ? false : undefined}
@@ -221,6 +224,7 @@ function ShapeView({ el, client, live, editing }: { el: Extract<SlideEl, { t: 's
 
 function PicView({ el, client, live }: { el: Extract<SlideEl, { t: 'pic' }>; client: DocumentClient; live: boolean }) {
   const url = useMediaUrl(client, el.target, live)
+  const str = useStrings()
   const { box } = el
   const style: CSSProperties = { ...boxStyle(box), overflow: 'hidden' }
   const top = el.top
@@ -242,10 +246,10 @@ function PicView({ el, client, live }: { el: Extract<SlideEl, { t: 'pic' }>; cli
         <img src={url} alt="" style={img} draggable={false} />
       ) : url === 'unsupported' ? (
         <div className="de-ph" style={{ width: '100%', height: '100%' }}>
-          {el.target?.split('.').pop()?.toUpperCase()} image
+          {str.pptx.imageOf(el.target?.split('.').pop()?.toUpperCase() ?? '')}
         </div>
       ) : null}
-      {el.video && <div className="de-ph" style={{ position: 'absolute', right: 8, bottom: 8, padding: '2px 6px', border: 0, background: 'var(--de-tip-bg, rgba(0,0,0,.6))', color: 'var(--de-tip-ink, #fff)' }}>▶ media</div>}
+      {el.video && <div className="de-ph" style={{ position: 'absolute', right: 8, bottom: 8, padding: '2px 6px', border: 0, background: 'var(--de-tip-bg, rgba(0,0,0,.6))', color: 'var(--de-tip-ink, #fff)' }}>▶ {str.pptx.media}</div>}
     </div>
   )
 }

@@ -12,6 +12,7 @@ import { DocViewer } from '@p10node/office-engine'
 <DocViewer src={file} allowSave={false} allowDownload={false} />  // no Save/Download, no image download
 <DocViewer src={file} fileMenu={false} />                         // no File menu
 <DocViewer src={file} theme="dark" />                             // dark chrome; "auto" follows the OS setting
+<DocViewer src={file} strings={{ file: { menu: 'Files' } }} />      // override individual UI texts
 ```
 
 ### File menu
@@ -62,7 +63,9 @@ CSS is auto-injected, no import needed (or import `@p10node/office-engine/styles
 | `styleTarget`      | `Document \| ShadowRoot`                       | document  | Where CSS is injected                                                                                                    |
 | `injectStyles`     | `boolean`                                      | `true`    | Inject the stylesheet; false when the page loads `@p10node/office-engine/styles.css` itself                              |
 | `theme`            | `'light' \| 'dark' \| 'auto' \| ThemeOptions`  | `'light'` | Color scheme of the chrome; `'auto'` follows `prefers-color-scheme`; an object adds token overrides ([Theming](theming.md)). Documents keep their own colors |
-| `editable`         | `boolean`                                      | `false`   | Open in edit mode (Pages, Keynote, Numbers and Visio files stay view only)                                               |
+| `locale`           | `string`                                       | browser   | BCP 47 number/date formatting tag; does not select UI texts. See [UI texts](#ui-texts)                                      |
+| `strings`          | `StringsOverride`                              | –         | Texts merged over the enclosing provider or English, key by key; may include a formatting `locale`                        |
+| `editable`         | `boolean`                                      | `false`   | Open in edit mode (Pages, Keynote, Numbers and Visio files stay view only)                                                      |
 | `allowEdit`        | `boolean`                                      | `true`    | Show Edit/View button                                                                                                    |
 | `allowSave`        | `boolean`                                      | `true`    | Show Save/Download button, enable Ctrl+S                                                                                 |
 | `allowDownload`    | `boolean`                                      | `true`    | Allow downloads to device (save without `onSave`, images)                                                                |
@@ -190,6 +193,93 @@ import { IconsProvider, XlsxView } from '@p10node/office-engine'
 </IconsProvider>
 ```
 
+### UI texts
+
+Viewer UI texts (titles, labels, menu entries, placeholders, dialogs, toasts, status lines such as "Page 1 of 5") come from one typed table, `Strings`, with the exceptions listed below. Only US English (`en-US`) is included in the default viewer and standalone embed bundle. German is a separate optional import with standard German spelling and `de-DE` number/date formatting (for example `1.234.567,89`):
+
+```tsx
+import { DocViewer } from '@p10node/office-engine'
+import { de } from '@p10node/office-engine/locales/de'
+
+<DocViewer src={file} strings={de} />
+```
+
+The locale module is included only when your app imports it. The German table uses standard German spelling and `de-DE` formatting. `locale="de-DE"` alone changes number/date formatting while keeping English UI texts; it does not load German. With no table or formatting override, numbers and dates keep the browser's locale.
+
+`strings` merges over the enclosing `StringsProvider` (or English) key by key, so a group can be given in part. Nested providers and `DocViewer` inherit the outer texts and formatting. A value is a string, or a function where the text takes numbers or names. Count callbacks receive raw numbers for pluralization; callbacks that format grouped counts also receive the active formatting tag as their final optional argument. Hoist override objects outside render, or memoize them when they depend on props, to keep the provider value stable. To customize an imported language, spread that table and any groups you change:
+
+```tsx
+import { DocViewer } from '@p10node/office-engine'
+import { de } from '@p10node/office-engine/locales/de'
+
+const germanTexts = {
+  ...de,
+  file: { ...de.file, menu: 'Ablage' },
+  docx: {
+    ...de.docx,
+    status: (page: number, pages: number, words: number, locale?: string) =>
+      `${page.toLocaleString(locale)}/${pages.toLocaleString(locale)} · ${words.toLocaleString(locale)} ${words === 1 ? 'Wort' : 'Wörter'}`,
+  },
+}
+
+<DocViewer src={file} strings={germanTexts} />
+```
+
+Views used on their own get their texts from a `StringsProvider` (English without one); `useStrings()` reads them in your own components:
+
+```tsx
+import { StringsProvider, useStrings, XlsxView } from '@p10node/office-engine'
+import { de } from '@p10node/office-engine/locales/de'
+
+const sheetTexts = { ...de, xlsx: { ...de.xlsx, addSheet: 'Neues Blatt' } }
+
+<StringsProvider strings={sheetTexts}>
+  <div className="de-root"><XlsxView client={client} /></div>
+</StringsProvider>
+```
+
+For a regional variant, override only the texts that differ. The `locale` prop is a BCP 47 formatting tag and takes precedence over `strings.locale`; otherwise the table or enclosing provider supplies the tag, then the browser default. Malformed tags (for example `de_DE`) fall back to the browser default without throwing. Well-formed but unsupported tags follow `Intl` fallback. For example, a host can use US English as the base and supply British formatting and selected British spellings:
+
+```tsx
+import { DocViewer, StringsProvider, en, type StringsOverride } from '@p10node/office-engine'
+
+const usEnglish = { ...en, locale: 'en-US' }
+const britishOverrides: StringsOverride = {
+  edit: { textColor: 'Text colour' },
+  format: { borderColor: 'Border colour' },
+}
+
+<StringsProvider strings={usEnglish}>
+  <DocViewer src={file} locale="en-GB" strings={britishOverrides} />
+</StringsProvider>
+```
+
+The same overrides work with `StringsProvider`, `mount()` and the web component's `strings` property. The example changes only those two labels; other text keeps the US English defaults. Override any other regional differences you need.
+
+For a complete language of your own, pass a `Strings` table as `strings`. Starting from `en` (or `de`) keeps untranslated entries as fallbacks; the following example only translates Cancel. Replace the remaining entries to complete the translation:
+
+```ts
+import { en, type Strings } from '@p10node/office-engine'
+
+export const fr: Strings = { ...en, locale: 'fr-FR', common: { ...en.common, cancel: 'Annuler' } }
+// <DocViewer src={file} strings={fr} />
+```
+
+A host can keep its own language tables in its app and pass them through `strings`; no engine registration is needed. A new optional package locale follows the German entry: add its typed table, a `src/locales/<code>.ts` entry and the corresponding build/package export. Locale parity tests check complete keys and nonempty texts.
+
+For vanilla embeds, pass the same optional table to `mount(el, { src, strings: de })` or assign it to the web component:
+
+```html
+<script src="office-engine.embed.js"></script>
+<office-viewer id="viewer" src="/file.xlsx"></office-viewer>
+<script type="module">
+  import { de } from './locales/de.js' // optional module next to the distributed embed bundle
+  document.getElementById('viewer').strings = de
+</script>
+```
+
+Document content stays in its original language. Default new sheet names, the author "Me" and new text box content also stay unchanged; the “Page 1 of 5” header/footer preset inserts text in the UI language. Font names, formula names and help, number format previews, host-provided labels and engine/transport errors (including main-thread fetch errors such as `HTTP 404 while fetching …`, collaboration errors such as `Document is still syncing`, and parsing-worker messages) are not translated by the table. Print, PDF and HTML export inherit the active UI table for viewer-generated labels; document content remains unchanged.
+
 ## Without a React build
 
 ```html
@@ -205,7 +295,7 @@ import { IconsProvider, XlsxView } from '@p10node/office-engine'
 </script>
 ```
 
-`<office-viewer>`: attributes `src`, `name`, `editable`, `toolbar="false"`, `thumbnails="false"`, `save="false"`, `download="false"`, `file-menu="false"`, `open="false"`, `capture-select-all="false"`, `theme="dark"` (or `"auto"`), `collab` / `room` / `user` / `base` (real-time collaboration; `user` also writes the comments), `comments="false"`; properties `.file = File` and `.icons` (map or resolver, as `icons` above); events `load`, `error`, `comment` (`detail`: a `CommentEvent`).
+`<office-viewer>`: attributes `src`, `name`, `editable`, `toolbar="false"`, `thumbnails="false"`, `save="false"`, `download="false"`, `file-menu="false"`, `open="false"`, `capture-select-all="false"`, `theme="dark"` (or `"auto"`), `locale="en-GB"` (number/date formatting), `collab` / `room` / `user` / `base` (real-time collaboration; `user` also writes the comments), `comments="false"`; properties `.file = File`, `.icons` (map or resolver, as `icons` above) and `.strings = { … }` (see [UI texts](#ui-texts)); events `load`, `error`, `comment` (`detail`: a `CommentEvent`).
 
 ## Core API (no React)
 
