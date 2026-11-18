@@ -3,6 +3,9 @@ import { expect, test } from 'bun:test'
 import { strFromU8, unzipSync } from 'fflate'
 import { docxParas, fromB64, paraText, runsOf, useBrowser, viewer, xlsxSheet, type Viewer } from './harness'
 
+import { builtModule, useBuiltPackage } from './built-package'
+
+useBuiltPackage()
 useBrowser()
 
 async function select(v: Viewer, kind: 'docx' | 'xlsx' | 'pptx') {
@@ -45,7 +48,7 @@ for (const kind of ['docx', 'xlsx', 'pptx'] as const) {
           }))
       }
       root.render(R.createElement(Host))
-    }, { pkg: `/@fs${process.cwd()}/dist/index.js`, kind })
+    }, { pkg: builtModule('index.js'), kind })
     await v.ready(kind)
     const cellBefore = kind === 'xlsx' ? await v.shown('B2') : undefined
     const inputBefore = kind === 'xlsx' ? await v.formula('B2') : undefined
