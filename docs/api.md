@@ -120,17 +120,17 @@ function Viewer({ file }: { file: File }) {
 
 | `ViewerState` | Meaning |
 |---------------|---------|
-| `rev` | counts the changes (the state object is replaced on each) |
-| `kind` | `'docx'`, `'xlsx'`, `'pptx'`, or `null` before a document is open |
-| `loading` | loading or downloading |
-| `editing`, `canEdit` | in edit mode; whether editing is possible (allowed, not view only) |
-| `dirty`, `saving` | unsaved changes; a save running |
-| `canUndo`, `canRedo` | whether undo / redo can run (spreadsheets count the edits made here; presentations offer redo whenever editing) |
-| `zoom` | `{ value: 'fit' \| number, effective }`, `null` for spreadsheets |
-| `page` | `{ current, count }` from 1: the page (documents; `count` 0 while laid out) or slide in view; `null` for spreadsheets |
-| `outline` | `{ kind, items: [{ id, title, level, current }] }`: a document's headings, a workbook's visible sheets, a presentation's slides (titled by their title placeholder, else "Slide n") |
-| `status` | the status line ("Page 2 of 7 · 1,204 words", "Slide 3 of 12", "200 rows × 8 cols") |
-| `format` | while editing, the formatting at the selection (`TextFormat`, below), retained while using native host inputs; `null` without a valid target, while viewing, and in a presentation unless text is being edited |
+| `rev`                    | counts the changes (the state object is replaced on each) |
+| `kind`                   | `'docx'`, `'xlsx'`, `'pptx'`, or `null` before a document is open |
+| `loading`                | loading or downloading |
+| `editing`, `canEdit`     | in edit mode; whether editing is possible (allowed, not view only) |
+| `dirty`, `saving`        | unsaved changes; a save running |
+| `canUndo`, `canRedo`     | whether undo / redo can run (spreadsheets count the edits made here; presentations offer redo whenever editing) |
+| `zoom`                   | `{ value: 'fit' \| number, effective }`, `null` for spreadsheets |
+| `page`                   | `{ current, count }` from 1: the page (documents; `count` 0 while laid out) or slide in view; `null` for spreadsheets |
+| `outline`                | `{ kind, items: [{ id, title, level, current }] }`: a document's headings, a workbook's visible sheets, a presentation's slides (titled by their title placeholder, else "Slide n") |
+| `status`                 | the status line ("Page 2 of 7 · 1,204 words", "Slide 3 of 12", "200 rows × 8 cols") |
+| `format`                 | while editing, the formatting at the selection (`TextFormat`, below), retained while using native host inputs; `null` without a valid target, while viewing, and in a presentation unless text is being edited |
 
 Commands: `setEditing(on)`, `save()`, `undo()`, `redo()`, `zoomIn()`, `zoomOut()`, `setZoom('fit' | number)`,
 `goto(outlineId)`, `gotoPage(n)`, `present()` (a slideshow from the slide in view), `print()`, `fileAction(id)` (a File menu
@@ -153,16 +153,23 @@ const f = useViewerState(ctl).format
 spreadsheet), `align` (`'left' | 'center' | 'right' | 'justify'`), `list` (`'bullet' | 'number' | null`; undefined for
 cells). `FormatCommand`: `{ op: 'toggle', mark }`, `{ op: 'font', name }`, `{ op: 'size', pt }`, `{ op: 'color', color }`,
 `{ op: 'highlight', color }` (`null` removes either), `{ op: 'align', align }`, `{ op: 'list', list }`, `{ op: 'clear' }`.
-Sizes must be finite and greater than zero; `NaN`, infinities, zero and negative sizes do nothing, without changing the
-document or its history. DOCX and PPTX also reject sizes that round to zero, overflow or exceed safely represented integer
-units when converted to half points or hundredths of a point. Accepted sizes keep the editor's usual precision.
+Sizes must be finite and in **1–400 points**, rounded to the nearest half point, just like the built-in size box.
+Invalid sizes do nothing before mutation, dirty state or history, including values whose converted Office units would
+overflow or underflow. Font names are trimmed and must be nonempty without control characters.
 
-`list` commands **toggle**: requesting the same kind again removes it. DOCX removes the list only when **all** selected
-paragraphs already have that kind; otherwise it applies that kind to all of them. PPTX decides from the **first** selected
-paragraph, including a mixed selection, and applies the result to all selected paragraphs. The snapshot does not summarize
-mixed formatting: both report the first selected paragraph's list. `list: null` means no list;
+Color commands accept opaque **`#rgb`, `#rrggbb`, or `#rrggbbff`** (normalized to six hex digits); `null` removes the color.
+Other CSS syntax, including names (`red`), functions (`rgb(...)`), and translucent colors, is rejected before mutation.
+The snapshot may still contain other CSS colors read from the original file.
+
+`list` commands **set every selected paragraph** to `'bullet'` or `'number'`, including mixed selections; `list: null`
+explicitly removes lists. Repeating a setter is idempotent. The built-in toolbar buttons still toggle.
+The snapshot reports the first selected paragraph's list, without aggregating mixed selections: `list: null` means no list;
 `list: undefined` means lists are unsupported (cells). Other optional `TextFormat` fields may be undefined when unspecified
-or unsupported; `format: null` means there is no formatting target.
+or unsupported; `format: null` means there is no formatting target. Unknown operations and invalid arguments do nothing.
+
+Each accepted format command is a separate undo step (caret-only pending marks follow normal typing behavior). For a live
+font/size field, keep a local draft and commit on blur or Enter when one undo step per finished value is desired; do not
+publish every prefix of a font name. The controller also supports live commands while preserving native input focus.
 
 Cells support marks, font, size, text color, fill, left/center/right alignment and clear; lists and justified alignment do
 nothing. DOCX and PPTX support every command above. Tables, pictures, tracked changes and cell borders stay with the built-in

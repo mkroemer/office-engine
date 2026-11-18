@@ -1,9 +1,11 @@
+import { strFromU8, unzipSync } from 'fflate'
 import { expect, test } from 'bun:test'
-import { docxParas, fromB64, openFile, paraText, runsOf, useBrowser, viewer, type Viewer } from './harness'
+import { docxParas, fromB64, openFile, xlsxSheet, paraText, runsOf, useBrowser, viewer, type Viewer } from './harness'
 
 useBrowser()
 const state = (v: Viewer) => v.page.evaluate(() => window.__ctl.snapshot())
 const settle = (v: Viewer) => v.page.waitForTimeout(150)
+const formatting = (s: Awaited<ReturnType<typeof state>>) => ({ format: s.format, dirty: s.dirty, canUndo: s.canUndo, canRedo: s.canRedo })
 
 async function selectTarget(v: Viewer, kind: 'docx' | 'pptx', index = 0) {
   if (kind === 'docx' && index === 0) return v.selectText('document')
@@ -176,3 +178,187 @@ for (const kind of ['docx', 'pptx'] as const) {
     expect(v.errors).toEqual([])
   })
 }
+
+
+test('xlsx: live host number input retains focus and saved cell value through typing and Backspace', async () => {
+  const v = await viewer({ controller: true, src: 'samples/sample.xlsx', editable: true, headless: true, onSave: true })
+  await v.typeCell('B2', 'keep-value')
+  await v.clickCell('B2')
+  await v.page.evaluate(() => {
+    const input = document.createElement('input')
+    input.type = 'number'; input.id = 'host-size'; input.value = ''
+    input.style.cssText = 'position:fixed;top:0;left:0;z-index:999999'
+    input.oninput = () => window.__ctl.format({ op: 'size', pt: input.valueAsNumber })
+    document.body.append(input)
+  })
+  const input = v.page.locator('#host-size')
+  await input.click()
+  await v.page.keyboard.type('14', { delay: 200 })
+  await settle(v)
+  expect(await input.inputValue()).toBe('14')
+  expect(await input.evaluate((el) => el === document.activeElement)).toBe(true)
+  await v.page.keyboard.press('Backspace')
+  await settle(v)
+  expect(await input.inputValue()).toBe('1')
+  await v.page.keyboard.type('4')
+  await settle(v)
+  await v.page.evaluate(() => window.__ctl.save())
+  const bytes = fromB64((await v.waitEvent('save')).b64 as string)
+  expect((await xlsxSheet(bytes)).cell('B2')).toBe('keep-value')
+  expect((await state(v)).format?.size).toBe(14)
+  expect(strFromU8(unzipSync(bytes)['xl/styles.xml'])).toContain('val="14"')
+  // Direct calls retain whichever element the host focused; the grid's keyboard still works afterward.
+  await v.page.evaluate(() => window.__ctl.format({ op: 'size', pt: 18 }))
+  await settle(v)
+  expect(await input.evaluate((el) => el === document.activeElement)).toBe(true)
+  await v.page.evaluate(() => window.__ctl.undo())
+  await settle(v)
+  expect((await state(v)).format?.size).toBe(14)
+  await v.page.evaluate(() => window.__ctl.redo())
+  await settle(v)
+  expect((await state(v)).format?.size).toBe(18)
+  await v.page.evaluate(() => window.__ctl.undo())
+  await settle(v)
+  await v.page.evaluate((data) => window.__setProps({ src: new Blob([new Uint8Array(data)]), name: 'reopened.xlsx' }), Array.from(bytes))
+  await v.waitEvent('load', 2)
+  await v.page.locator('.de-grid').waitFor()
+  await settle(v)
+  await v.clickCell('B2')
+  expect(await v.shown('B2')).toBe('keep-value')
+  expect((await state(v)).format?.size).toBe(14)
+  await v.page.keyboard.press('ArrowRight')
+  expect(await v.page.locator('.de-fx-ref').innerText()).toBe('C2')
+  await v.page.evaluate(() => window.__ctl.goto('1'))
+  await settle(v)
+  expect((await state(v)).outline?.items.find((i) => i.current)?.id).toBe('1')
+
+  expect(v.errors).toEqual([])
+})
+
+test('docx: controlled host rerenders with inline callbacks preserve the logical target', async () => {
+  const v = await viewer({ controller: true, src: 'samples/sample.docx', editable: true, headless: true, onSave: true, renderHost: true })
+  await v.selectText('document')
+  const input = v.page.getByLabel('React host size')
+  await input.click()
+  await settle(v)
+  expect(await input.isEnabled()).toBe(true)
+  await input.selectText()
+  await v.page.keyboard.type('14', { delay: 200 })
+  await settle(v)
+  expect(await input.inputValue()).toBe('14')
+  expect((await state(v)).format?.size).toBe(14)
+  await v.page.evaluate(() => window.__ctl.save())
+  const bytes = fromB64((await v.waitEvent('save')).b64 as string)
+  expect(runsOf((await docxParas(bytes)).find((p) => paraText(p).startsWith('This document'))!).find((r) => r.text === 'document')?.s.sz).toBe(14)
+})
+
+test('docx without controller: Ctrl+S then Ctrl+K preserves selection and saves the link', async () => {
+  const v = await viewer({ src: 'samples/sample.docx', editable: true, onSave: true })
+  await v.selectText('document')
+  await v.page.keyboard.press('Control+s')
+  await v.waitEvent('save')
+  await v.page.keyboard.press('Control+k')
+  await v.page.locator('.de-dialog input').fill('https://example.org/after-save')
+  await v.page.keyboard.press('Enter')
+  await settle(v)
+  const bytes = (await v.save()).bytes
+  const p = (await docxParas(bytes)).find((p) => paraText(p).startsWith('This document'))!
+  expect(runsOf(p).find((r) => r.text === 'document')?.href).toBe('https://example.org/after-save')
+  expect(v.errors).toEqual([])
+})
+
+for (const kind of ['docx', 'pptx'] as const) {
+  test(`${kind}: a host format command does not suppress later undo caret restoration`, async () => {
+    const v = await viewer({ controller: true, src: `samples/sample.${kind}`, editable: true, headless: true, onSave: true })
+    await selectTarget(v, kind)
+    const original = (await state(v)).format!.size
+    await v.page.evaluate(() => {
+      const input = document.createElement('input')
+      input.id = 'focus-host'; input.style.cssText = 'position:fixed;top:0;left:0;z-index:999999'
+      const undo = document.createElement('button')
+      undo.id = 'undo-host'; undo.textContent = 'Undo host'
+      undo.style.cssText = 'position:fixed;top:0;left:220px;z-index:999999'
+      undo.onclick = window.__ctl.undo
+      document.body.append(input, undo)
+    })
+    await v.page.locator('#focus-host').click()
+    await v.page.evaluate(() => window.__ctl.format({ op: 'size', pt: 35 }))
+    await settle(v)
+    expect(await v.page.locator('#focus-host').evaluate((el) => el === document.activeElement)).toBe(true)
+    await v.page.locator('#undo-host').click()
+    await settle(v)
+    expect(await v.page.evaluate(() => document.activeElement?.matches('.de-pages, .de-txt-edit'))).toBe(true)
+    expect((await state(v)).format?.size).toBe(original)
+    expect(await v.page.evaluate(() => getSelection()?.toString())).toBe(kind === 'docx' ? 'document' : 'office-engine')
+    await v.page.evaluate(() => window.__ctl.redo())
+    await settle(v)
+    expect((await state(v)).format?.size).toBe(35)
+    expect(v.errors).toEqual([])
+  })
+}
+
+for (const kind of ['docx', 'xlsx', 'pptx'] as const) {
+  test(`${kind}: invalid runtime commands preserve dirty/history/XML and opaque colors save and reopen`, async () => {
+    const v = await viewer({ controller: true, src: `samples/sample.${kind}`, editable: true, headless: true, onSave: true })
+    if (kind === 'xlsx') await v.clickCell('B2')
+    else await selectTarget(v, kind)
+    const invalid = async () => {
+      await v.page.evaluate(() => {
+        const commands = [
+          { op: 'bold' }, { op: 'font', name: '' }, { op: 'font', name: '  ' },
+          ...['red', 'rgb(255,0,0)', '#ff000080'].flatMap((color) => [{ op: 'color', color }, { op: 'highlight', color }]),
+          ...[0.5, 1000, NaN, Infinity, Number.MIN_VALUE, Number.MAX_VALUE].map((pt) => ({ op: 'size', pt })),
+        ]
+        commands.forEach((c) => (window.__ctl.format as (c: unknown) => void)(c))
+      })
+      await settle(v)
+    }
+    const before = await state(v)
+    await invalid()
+    expect(formatting(await state(v))).toEqual(formatting(before))
+    const path = kind === 'docx' ? 'word/document.xml' : kind === 'pptx' ? 'ppt/slides/slide1.xml' : 'xl/styles.xml'
+    const saveXML = async () => {
+      const count = (await v.events('save')).length
+      await v.page.evaluate(() => window.__ctl.save())
+      const bytes = fromB64((await v.waitEvent('save', count + 1)).b64 as string)
+      return { bytes, xml: strFromU8(unzipSync(bytes)[path]) }
+    }
+    const initial = await saveXML()
+    await v.page.evaluate(() => {
+      window.__ctl.format({ op: 'color', color: '#123456ff' })
+      window.__ctl.format({ op: 'highlight', color: '#abc' })
+    })
+    await v.page.waitForTimeout(kind === 'pptx' ? 550 : 200)
+    const colored = await saveXML()
+    expect(colored.xml).not.toBe(initial.xml)
+    expect(colored.xml).toMatch(/123456/i)
+    expect(colored.xml).toMatch(/AABBCC/i)
+    const stable = await state(v)
+    await invalid()
+    expect(formatting(await state(v))).toEqual(formatting(stable))
+    expect((await saveXML()).xml).toBe(colored.xml)
+    await v.page.evaluate((data) => window.__setProps({ src: new Blob([new Uint8Array(data.bytes)]), name: `reopened.${data.kind}` }), { bytes: Array.from(colored.bytes), kind })
+    await v.waitEvent('load', 2)
+    await v.page.waitForTimeout(500)
+    if (kind === 'xlsx') await v.clickCell('B2')
+    else await selectTarget(v, kind)
+    expect((await state(v)).format?.color?.toLowerCase()).toBe('#123456')
+    expect((await state(v)).format?.highlight?.toLowerCase()).toBe('#aabbcc')
+    expect(v.errors).toEqual([])
+  })
+}
+
+test('shared SizeBox retains decimal-comma semantics and commits half points once', async () => {
+  const v = await viewer({ controller: true, src: 'samples/sample.docx', editable: true, onSave: true })
+  await v.selectText('document')
+  const size = v.page.getByRole('textbox', { name: 'Font size', exact: true })
+  await size.fill('12,5')
+  await size.press('Enter')
+  await settle(v)
+  expect((await state(v)).format?.size).toBe(12.5)
+  const p = (await docxParas((await v.save()).bytes)).find((p) => paraText(p).startsWith('This document'))!
+  expect(runsOf(p).find((r) => r.text === 'document')?.s.sz).toBe(12.5)
+  await v.page.evaluate(() => window.__ctl.undo())
+  await settle(v)
+  expect((await state(v)).canUndo).toBe(false)
+})

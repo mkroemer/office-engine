@@ -1228,8 +1228,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
     focusGrid()
   }
   const toggle = (k: 'b' | 'i' | 'u' | 'strike') => {
-    const on =
-      k === 'b' ? activeCss.fontWeight === 700 : k === 'i' ? activeCss.fontStyle === 'italic' : String(activeCss.textDecoration ?? '').includes(k === 'u' ? 'underline' : 'line-through')
+    const on = cellFmt[k === 'b' ? 'bold' : k === 'i' ? 'italic' : k === 'u' ? 'underline' : 'strike']
     fmt({ [k]: !on })
   }
   const undo = () => void run(client.call('xlsx.undo'), 'undo')
@@ -1242,7 +1241,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
       redo: () => editable && redo(),
       format: (c) => {
         const patch = editable && cellPatch(c, cellFmt)
-        if (patch) fmt(patch)
+        if (patch) void run(client.call('xlsx.format', sheet, rect, patch))
       },
     }
     const h = store.history

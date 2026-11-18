@@ -8,6 +8,7 @@ import { Status } from '../common/Status'
 import { ZoomControl, type Zoom } from '../common/ZoomControl'
 import { useViewCommands, useControllerObserved } from '../controller'
 import { applyPptx, pptxFormat } from '../edit/format'
+import type { Sel } from '../edit/rich'
 import { getSel } from '../edit/input'
 import { PptxEditor } from './PptxEditor'
 import { PptxToolbar, type AlignTo, type Arrange, type Rotate, type SlideCmd } from './PptxToolbar'
@@ -352,7 +353,9 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
     const sel = editor.pendingSel
     if (sel) {
       editor.pendingSel = null
-      editor.input.restore(sel)
+      const noRefocus = editor.pendingNoRefocus
+      editor.pendingNoRefocus = false
+      editor.input.restore(sel, noRefocus ? 'preserve' : true)
     }
   })
 
@@ -640,6 +643,7 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
   useEffect(() => {
     ctl?.update({ canUndo: viewer.editable && (undoDepth > 0 || editor.active), canRedo: viewer.editable })
   })
+  const publishedSelection = useRef<Sel | null>(null)
   const publishFormat = useViewCommands(ctl, {
     setZoom,
     goto: (id) => go(Number(id)),
@@ -648,19 +652,23 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
     redo: () => viewer.editable && (editor.active ? editor.redo() : void undoShapes(true)),
     present: () => setPresenting(current),
     format: (c) => {
-      if (viewer.editable && editor.active && editor.input.formatSelection()) {
-        editor.input.preserveControlFocus()
-        applyPptx(editor, c)
-      }
+      const sel = publishedSelection.current
+      if (viewer.editable && editor.active && sel) editor.input.withFormatSelection(sel, () => applyPptx(editor, c))
     },
   })
   // formatting reaches text being edited; a shape that is only selected has none
   useEffect(() => {
     if (!ctl) return
     if (!viewer.editable) return publishFormat(null)
-    const off = editor.subscribeState((s) => publishFormat(s && editor.input.formatSelection() ? pptxFormat(s) : null))
+    const off = editor.subscribeState((s) => {
+      const sel = s && editor.input.formatSelection()
+      publishedSelection.current = sel
+      const current = sel && editor.state(sel)
+      publishFormat(current ? pptxFormat(current) : null)
+    })
     return () => {
       off()
+      publishedSelection.current = null
       publishFormat(null)
     }
   }, [ctl, editor, viewer.editable, publishFormat])

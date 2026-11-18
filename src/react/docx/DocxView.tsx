@@ -14,7 +14,7 @@ import { ContextMenu, MOD, type MenuItem } from '../common/ContextMenu'
 import { PromptDialog, Toast, type PromptSpec } from '../common/Dialog'
 import { domFromPos, getSel, opInsert, posFromDom, selPoints } from '../edit/input'
 import { download, Icon, pickFiles } from '../edit/Toolbar'
-import { runsText, type RRun } from '../edit/rich'
+import { runsText, type RRun, type Sel } from '../edit/rich'
 import { DocxEditor, type CommentRange, type DocState, type FormatState } from './DocxEditor'
 import { markCss, useCommentsCtl, useCommentsState, type CommentHost, type PlacedThread } from '../comments/Comments'
 import { COMMENT_KEYS } from '../comments/CommentsPanel'
@@ -271,7 +271,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   // ---- editing wiring ----
   useEffect(() => {
     const el = pagesRef.current
-    if (!isEditing || !el) return
+    if (!isEditing || !el) { editor.input.clearSelection(); return }
     editor.input.attach(el)
     editor.onDirty = () => viewer.setDirty(true)
     return () => editor.input.detach()
@@ -336,7 +336,9 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   useIsoLayoutEffect(() => {
     const sel = editor.pendingSel
     if (!sel || !pagesRef.current) return
-    if (!editor.input.restore(sel)) {
+    const noRefocus = editor.pendingNoRefocus
+    editor.pendingNoRefocus = false
+    if (!editor.input.restore(sel, noRefocus ? 'preserve' : true)) {
       // caret paragraph not rendered (scrolled away): bring its page into view, retry next render
       const bi = Number(sel.f.pa.split('.')[0])
       const pi = pages.findIndex((p) => bi >= p.start && bi < p.end)
@@ -345,6 +347,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
       return
     }
     editor.pendingSel = null
+    if (noRefocus) return
     // keep the caret visible
     const ds = getSel(pagesRef.current)
     const range = ds?.rangeCount ? ds.getRangeAt(0) : null
@@ -806,6 +809,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
       editor.onHistory = undefined
     }
   }, [ctl, editor, isEditing])
+  const publishedSelection = useRef<Sel | null>(null)
   const publishFormat = useViewCommands(ctl, {
     setZoom,
     goto: (id) => gotoBlock(Number(id)),
@@ -821,18 +825,22 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
       if (isEditing) editor.redo()
     },
     format: (c) => {
-      if (isEditing && editor.input.formatSelection()) {
-        editor.input.preserveControlFocus()
-        applyDocx(editor, c)
-      }
+      const sel = publishedSelection.current
+      if (isEditing && sel) editor.input.withFormatSelection(sel, () => applyDocx(editor, c))
     },
   })
   useEffect(() => {
     if (!ctl) return
     if (!isEditing) return publishFormat(null)
-    const off = editor.subscribeState((s) => publishFormat(s && editor.input.formatSelection() ? docxFormat(s) : null))
+    const off = editor.subscribeState((s) => {
+      const sel = s && editor.input.formatSelection()
+      publishedSelection.current = sel
+      const current = sel && editor.state(sel)
+      publishFormat(current ? docxFormat(current) : null)
+    })
     return () => {
       off()
+      publishedSelection.current = null
       publishFormat(null)
     }
   }, [ctl, editor, isEditing, publishFormat])

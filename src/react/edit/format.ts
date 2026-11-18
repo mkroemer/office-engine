@@ -2,6 +2,7 @@ import type { FmtPatch } from '../../core/xlsx/types'
 import { MARK_KEY, type FormatCommand, type TextFormat } from '../controller'
 import type { DocxEditor, FormatState } from '../docx/DocxEditor'
 import type { PptxEditor, PptxFormat } from '../pptx/PptxEditor'
+import { formatCommand } from './format-values'
 import { fontName } from './Toolbar'
 
 // The editors' formatting states as the controller's TextFormat, and its commands as editor calls: one formatting
@@ -17,15 +18,17 @@ export function docxFormat(s: FormatState): TextFormat {
 }
 
 export function applyDocx(ed: DocxEditor, c: FormatCommand) {
-  if (c.op === 'size' && !validSize(c.pt, 2)) return
+  const command = formatCommand(c)
+  if (!command) return
+  c = command
   if (c.op === 'toggle') ed.toggle(MARK_KEY[c.mark])
   else if (c.op === 'font') ed.setFont(c.name)
   else if (c.op === 'size') ed.setSize(c.pt)
   else if (c.op === 'color') ed.setColor(c.color)
   else if (c.op === 'highlight') ed.setHighlight(c.color)
   else if (c.op === 'align') ed.setPara({ align: c.align }, { align: c.align })
-  else if (c.op === 'list') ed.toggleList(c.list)
-  else ed.clearFormat()
+  else if (c.op === 'list') ed.setList(c.list)
+  else if (c.op === 'clear') ed.clearFormat()
 }
 
 export function pptxFormat(s: PptxFormat): TextFormat {
@@ -33,15 +36,17 @@ export function pptxFormat(s: PptxFormat): TextFormat {
 }
 
 export function applyPptx(ed: PptxEditor, c: FormatCommand) {
-  if (c.op === 'size' && !validSize(c.pt, 100)) return
+  const command = formatCommand(c)
+  if (!command) return
+  c = command
   if (c.op === 'toggle') ed.toggle(MARK_KEY[c.mark])
   else if (c.op === 'font') ed.setFont(c.name)
   else if (c.op === 'size') ed.setSize(c.pt)
   else if (c.op === 'color') ed.setColor(c.color)
   else if (c.op === 'highlight') ed.setHighlight(c.color)
   else if (c.op === 'align') ed.setAlign(c.align)
-  else if (c.op === 'list') ed.toggleBullet(c.list)
-  else ed.clearFormat()
+  else if (c.op === 'list') ed.setList(c.list)
+  else if (c.op === 'clear') ed.clearFormat()
 }
 
 /** a CSS font size (px number or 'pt' string) in points */
@@ -66,20 +71,15 @@ export function cellFormat(css: Record<string, string | number>, base: { fontFam
 
 /** a command as a cell format patch; null for what cells do not have (lists, justified text) */
 export function cellPatch(c: FormatCommand, now: TextFormat): FmtPatch | null {
+  const command = formatCommand(c)
+  if (!command) return null
+  c = command
   if (c.op === 'toggle') return { [MARK_KEY[c.mark]]: !now[c.mark] }
   if (c.op === 'font') return { font: c.name }
-  if (c.op === 'size') return validSize(c.pt) ? { sz: c.pt } : null
+  if (c.op === 'size') return { sz: c.pt }
   if (c.op === 'color') return { color: c.color }
   if (c.op === 'highlight') return { fill: c.color }
   if (c.op === 'align') return c.align === 'justify' ? null : { align: c.align }
   if (c.op === 'clear') return { clear: true }
   return null
-}
-
-const validSize = (pt: number, unitsPerPoint?: number) => {
-  if (!Number.isFinite(pt) || pt <= 0) return false
-  if (unitsPerPoint === undefined) return true
-  // DOCX stores half points and PPTX hundredths: validate the writer's rounded units before editing history.
-  const units = Math.round(pt * unitsPerPoint)
-  return Number.isSafeInteger(units) && units > 0
 }

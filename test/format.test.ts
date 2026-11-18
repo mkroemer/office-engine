@@ -26,7 +26,7 @@ describe('formatting as TextFormat', () => {
     const now = cellFormat({ fontWeight: 700 }, {})
     expect(cellPatch({ op: 'toggle', mark: 'bold' }, now)).toEqual({ b: false })
     expect(cellPatch({ op: 'toggle', mark: 'italic' }, now)).toEqual({ i: true })
-    expect(cellPatch({ op: 'highlight', color: '#ff0' }, now)).toEqual({ fill: '#ff0' })
+    expect(cellPatch({ op: 'highlight', color: '#ff0' }, now)).toEqual({ fill: '#ffff00' })
     expect(cellPatch({ op: 'size', pt: 9 }, now)).toEqual({ sz: 9 })
     expect(cellPatch({ op: 'clear' }, now)).toEqual({ clear: true })
     expect(cellPatch({ op: 'align', align: 'justify' }, now)).toBeNull()

@@ -143,12 +143,13 @@ describe('viewer controller', () => {
     expect(ctl.snapshot().format).toBeNull()
   })
 
-  test('invalid sizes never reach a view command; positive finite sizes keep their value', () => {
+  test('invalid sizes never reach a view command; valid sizes use the shared half-point range', () => {
     const ctl = new InternalViewerController()
     const sizes: number[] = []
     mount(ctl).view.attachView({ format: (c) => { if (c.op === 'size') sizes.push(c.pt) } })
-    for (const pt of [NaN, Infinity, -Infinity, 0, -1, 0.25, 12.5, 1000]) ctl.format({ op: 'size', pt })
-    expect(sizes).toEqual([0.25, 12.5, 1000])
+    const { format } = ctl
+    for (const pt of [NaN, Infinity, -Infinity, 0, -1, 0.25, 0.5, 1, 12.26, 12.5, 400, 400.1, 1000]) format({ op: 'size', pt })
+    expect(sizes).toEqual([1, 12.5, 12.5, 400])
   })
 
   test('structural mocks and wrappers fail clearly before mounting', () => {

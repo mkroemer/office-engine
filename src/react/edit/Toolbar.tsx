@@ -17,6 +17,7 @@ import {
   type ReactNode,
   type RefObject,
 } from 'react'
+import { fontSize } from './format-values'
 import { cssColor } from '../../core/color'
 import { useStrings } from '../strings'
 import { useHostUI, type ButtonProps, type SelectProps } from '../ui'
@@ -502,7 +503,8 @@ export function SizeBox(props: { value?: number; placeholder?: number; sizes?: n
   const set = (n: number) => {
     setText(null)
     setOpen(false)
-    if (Number.isFinite(n) && n >= 1 && n <= 400) props.onChange(Math.round(n * 2) / 2)
+    const value = fontSize(n)
+    if (value !== null) props.onChange(value)
   }
   const done = () => {
     if (text !== null) set(parseFloat(text))

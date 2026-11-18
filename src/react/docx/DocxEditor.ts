@@ -194,6 +194,7 @@ export type DocxCommit = { kind: 'paras'; before: Paragraph[]; next: Paragraph[]
 export class DocxEditor implements RichHost<Paragraph> {
   readonly input: RichInput
   pendingSel: Sel | null = null
+  pendingNoRefocus = false
   styles: StyleInfo[] = []
   private history: Entry[] = []
   private future: Entry[] = []
@@ -439,6 +440,7 @@ export class DocxEditor implements RichHost<Paragraph> {
     // a collaborator's paragraphs may come with the look a style had before it changed
     if (opts.label === 'collab') this.catchUp()
     this.pendingSel = sel
+    this.pendingNoRefocus = this.input.formatting
     this.onDirty?.()
     this.changed()
     // the caret may not move (formatting): refresh the toolbar from the new runs
@@ -895,7 +897,7 @@ export class DocxEditor implements RichHost<Paragraph> {
   }
 
   clearFormat() {
-    this.format({ b: false, i: false, u: 'none', strike: false, hl: undefined }, { b: false, i: false, u: 'none', strike: false, color: null, hl: null, va: null }, { want: true })
+    this.format({ b: false, i: false, u: 'none', strike: false, hl: undefined, shd: undefined }, { b: false, i: false, u: 'none', strike: false, color: null, hl: null, va: null }, { want: true })
   }
 
   setPara(patch: ParaDirty, optimistic: Partial<ParaStyle> = {}, sel = this.input.sel()) {
@@ -908,6 +910,17 @@ export class DocxEditor implements RichHost<Paragraph> {
       return { ...p, pd, ps: { ...p.ps, ...optimistic }, edited: true, sid: patch.style ?? p.sid }
     })
     this.replace(r.pas, next, sel, { label: 'para', want: true })
+  }
+
+  /** Host API setter; the built-in toolbar retains toggleList. */
+  setList(kind: 'bullet' | 'number' | null) {
+    const sel = this.input.sel()
+    const r = sel && this.selectedParas(sel)
+    if (!r || r.pas.every((pa) => {
+      const p = this.para(pa)
+      return (p?.pd?.list ?? p?.lst ?? 'none') === (kind ?? 'none')
+    })) return
+    this.setPara({ list: kind ?? 'none', ilvl: kind ? 0 : undefined }, {}, sel)
   }
 
   toggleList(kind: 'bullet' | 'number') {
@@ -1764,6 +1777,7 @@ export class DocxEditor implements RichHost<Paragraph> {
     if (!sel) return
     this.patchObjects(sel, (x) => (x.t === 'img' ? fn(x) : x))
     this.pendingSel = sel
+    this.pendingNoRefocus = this.input.formatting
   }
 
   /** exact size in pt */
@@ -1881,12 +1895,12 @@ export class DocxEditor implements RichHost<Paragraph> {
       u: !!rs.u && rs.u !== 'none',
       strike: !!rs.strike,
       color: rs.color,
-      hl: rs.hl,
+      hl: rs.hl ?? rs.shd,
       sz: rs.sz ?? p.markSz ?? this.defaultSz,
       font: rs.font ?? p.markFont ?? this.defaultFont,
       align: p.ps.align ?? 'left',
       style: p.sid,
-      lst: p.lst,
+      lst: p.pd?.list === 'none' ? undefined : p.pd?.list ?? p.lst,
       canUndo: this.canUndo,
       canRedo: this.canRedo,
     }

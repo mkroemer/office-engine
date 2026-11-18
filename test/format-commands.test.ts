@@ -7,7 +7,7 @@ import { PptxEditor } from '../src/react/pptx/PptxEditor'
 import { applyDocx, applyPptx, cellPatch, cellFormat } from '../src/react/edit/format'
 
 const file = async (kind: string) => new Blob([await Bun.file(`${import.meta.dir}/../playground/public/samples/sample.${kind}`).arrayBuffer()])
-const invalid = [NaN, Infinity, -Infinity, 0, -1]
+const invalid = [NaN, Infinity, -Infinity, 0, -1, 0.25, 0.5, 400.1, 1000]
 const invalidConverted = [Number.MAX_VALUE, Number.MIN_VALUE, Number.MAX_SAFE_INTEGER]
 const xml = async (client: DocumentClient, path: string) => (await ZipArchive.open(new BlobSource(await client.call('save')))).text(path)
 async function documentEditor() {
@@ -48,6 +48,10 @@ test('DOCX: invalid public sizes leave model, history and saved XML untouched; f
     expect(saved).toContain('w:sz w:val="25"')
     expect(saved).not.toMatch(/NaN|Infinity/)
     expect(ed.state()?.sz).toBe(12.5)
+    for (const pt of [1, 400, 12.26]) {
+      applyDocx(ed, { op: 'size', pt }); await settled(ed)
+      expect(await xml(client, 'word/document.xml')).toContain(`w:sz w:val="${Math.round(pt * 2)}"`)
+    }
   } finally { client.destroy() }
 })
 
@@ -68,6 +72,10 @@ test('PPTX: invalid public sizes leave model, history and saved XML untouched; f
     ed.commit()
     const saved = await xml(client, 'ppt/slides/slide1.xml')
     expect(saved).toContain('sz="1250"')
+    for (const pt of [1, 400, 12.26]) {
+      applyPptx(ed, { op: 'size', pt }); ed.commit()
+      expect(await xml(client, 'ppt/slides/slide1.xml')).toContain(`sz="${Math.round(pt * 2) * 50}"`)
+    }
     expect(saved).not.toMatch(/NaN|Infinity/)
   } finally { ed.end(); client.destroy() }
 })
@@ -85,11 +93,15 @@ test('XLSX: invalid public sizes produce no mutation; fractional size survives s
     await client.call('xlsx.format', 0, { r0: 1, c0: 1, r1: 1, c1: 1 }, cellPatch({ op: 'size', pt: 12.5 }, now)!)
     const saved = await xml(client, 'xl/styles.xml')
     expect(saved).toContain('val="12.5"')
+    for (const pt of [1, 400, 12.26]) {
+      await client.call('xlsx.format', 0, { r0: 1, c0: 1, r1: 1, c1: 1 }, cellPatch({ op: 'size', pt }, now)!)
+      expect(await xml(client, 'xl/styles.xml')).toContain(`val="${Math.round(pt * 2) / 2}"`)
+    }
     expect(saved).not.toMatch(/NaN|Infinity/)
   } finally { client.destroy() }
 })
 
-test('DOCX lists toggle collectively across a mixed selection; repetition removes the list', async () => {
+test('DOCX list setters cover mixed selection, are idempotent and explicitly remove lists', async () => {
   const { client, ed } = await documentEditor()
   try {
     const first = ed.input.lastSel!.a.pa
@@ -103,22 +115,101 @@ test('DOCX lists toggle collectively across a mixed selection; repetition remove
     expect([ed.para(first)?.lst, ed.para(second)?.lst]).toEqual(['bullet', 'bullet'])
     applyDocx(ed, { op: 'list', list: 'bullet' })
     await settled(ed)
+    expect([ed.para(first)?.lst, ed.para(second)?.lst]).toEqual(['bullet', 'bullet'])
+    applyDocx(ed, { op: 'list', list: null })
+    await settled(ed)
     expect([ed.para(first)?.lst, ed.para(second)?.lst]).toEqual([undefined, undefined])
     // Read the converted model directly: subscription refresh after conversion depends on inherited #19.
     expect(ed.state()?.lst).toBeUndefined()
   } finally { client.destroy() }
 })
 
-test('PPTX mixed lists toggle from the first paragraph and repetition removes the list', async () => {
+test('PPTX list setters cover mixed selection, are idempotent and explicitly remove lists', async () => {
   const { client, ed, body, sid } = await presentationEditor()
   try {
     ed.begin(0, sid, { ...body, paras: [{ ...body.paras[0], buKind: 'bullet' }, { ...body.paras[0], buKind: 'none' }] })
     ed.input.lastSel = { a: { pa: '0', o: 0 }, f: { pa: '1', o: 1 } }
     applyPptx(ed, { op: 'list', list: 'bullet' })
-    expect(ed.paras.map((p) => p.pp?.bullet)).toEqual(['none', 'none'])
+    expect(ed.paras.map((p) => p.pp?.bullet)).toEqual(['bullet', 'bullet'])
     applyPptx(ed, { op: 'list', list: 'number' })
     expect(ed.paras.map((p) => p.pp?.bullet)).toEqual(['number', 'number'])
     applyPptx(ed, { op: 'list', list: 'number' })
+    expect(ed.paras.map((p) => p.pp?.bullet)).toEqual(['number', 'number'])
+    applyPptx(ed, { op: 'list', list: null })
+    expect(ed.paras.map((p) => p.pp?.bullet)).toEqual(['none', 'none'])
+    ed.toggleBullet('bullet')
+    ed.toggleBullet('bullet')
     expect(ed.paras.map((p) => p.pp?.bullet)).toEqual(['none', 'none'])
   } finally { ed.end(); client.destroy() }
+})
+
+const invalidCommands = [
+  { op: 'bold' }, { op: 'toggle', mark: 'unknown' }, { op: 'align', align: 'unknown' }, { op: 'list', list: 'unknown' },
+  { op: 'font', name: '' }, { op: 'font', name: '   ' }, { op: 'font', name: 'Arial\u0000' },
+  ...['red', 'rgb(255,0,0)', '#ff000080', '#1234', 'var(--brand)', 'not-a-color'].flatMap((color) => [{ op: 'color', color }, { op: 'highlight', color }]),
+] as unknown as import('../src/react/controller').FormatCommand[]
+
+for (const kind of ['docx', 'pptx'] as const) {
+  test(`${kind}: invalid JS commands, empty fonts and unsupported CSS colors preserve model, dirty, history and XML`, async () => {
+    const { client, ed } = kind === 'docx' ? await documentEditor() : await presentationEditor()
+    const apply = (c: import('../src/react/controller').FormatCommand) => kind === 'docx' ? applyDocx(ed as DocxEditor, c) : applyPptx(ed as PptxEditor, c)
+    const path = kind === 'docx' ? 'word/document.xml' : 'ppt/slides/slide1.xml'
+    try {
+      let dirty = 0
+      ed.onDirty = () => dirty++
+      const before = await xml(client, path)
+      const model = JSON.stringify(ed instanceof DocxEditor ? ed.state() : ed.text())
+      for (const c of invalidCommands) apply(c)
+      expect(dirty).toBe(0)
+      expect(JSON.stringify(ed instanceof DocxEditor ? ed.state() : ed.text())).toBe(model)
+      if (ed instanceof DocxEditor) expect(ed.canUndo).toBe(false)
+      else ed.commit()
+      ed.undo(); ed.redo()
+      expect(await xml(client, path)).toBe(before)
+      // Opaque alpha normalizes to writable RGB; shorthand highlight is also expanded.
+      apply({ op: 'color', color: '#123456ff' })
+      apply({ op: 'highlight', color: '#abc' })
+      apply({ op: 'font', name: ' Arial ' })
+      if (ed instanceof DocxEditor) await settled(ed)
+      else ed.commit()
+      const colored = await xml(client, path)
+      expect(colored).toMatch(/123456/i)
+      expect(colored).toMatch(/AABBCC/i)
+      expect(colored).toContain('Arial')
+      // Rejected colors cannot erase an existing color or add an undo step.
+      const dirtyBefore = dirty
+      for (const c of invalidCommands) apply(c)
+      expect(dirty).toBe(dirtyBefore)
+      if (ed instanceof PptxEditor) ed.commit()
+      expect(await xml(client, path)).toBe(colored)
+      ed.undo()
+      if (ed instanceof DocxEditor) await settled(ed)
+      else ed.commit()
+      expect(await xml(client, path)).toMatch(/123456/i)
+    } finally { if (ed instanceof PptxEditor) ed.end(); client.destroy() }
+  })
+}
+
+test('XLSX: invalid commands cannot reach worker history; opaque colors survive actual saved XML', async () => {
+  const client = await DocumentClient.open(await file('xlsx'), { worker: false })
+  try {
+    const loaded = new Promise<void>((r) => client.on('xlsx:progress', (p) => p.sheet === 0 && p.done && r()))
+    await client.call('xlsx.load', 0); await loaded
+    const range = { r0: 1, c0: 1, r1: 1, c1: 1 }
+    const now = cellFormat({}, {})
+    for (const c of invalidCommands) expect(cellPatch(c, now)).toBeNull()
+    for (const c of [{ op: 'color', color: '#123456ff' }, { op: 'highlight', color: '#abc' }] as const) {
+      await client.call('xlsx.format', 0, range, cellPatch(c, now)!)
+    }
+    const saved = await xml(client, 'xl/styles.xml')
+    expect(saved).toMatch(/FF123456/i)
+    expect(saved).toMatch(/FFAABBCC/i)
+    for (const c of invalidCommands) {
+      const patch = cellPatch(c, now)
+      if (patch) await client.call('xlsx.format', 0, range, patch)
+    }
+    expect(await xml(client, 'xl/styles.xml')).toBe(saved)
+    await client.call('xlsx.undo')
+    expect(await xml(client, 'xl/styles.xml')).toMatch(/FF123456/i)
+  } finally { client.destroy() }
 })

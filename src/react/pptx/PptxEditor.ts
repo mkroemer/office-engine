@@ -84,6 +84,7 @@ export class PptxEditor implements RichHost<EPara> {
   slide = -1
   sid = -1
   pendingSel: Sel | null = null
+  pendingNoRefocus = false
   private history: Entry[] = []
   private future: Entry[] = []
   private pend: { s: Partial<RunStyle>; d: PRunSet; at: { pa: string; o: number } } | null = null
@@ -132,6 +133,7 @@ export class PptxEditor implements RichHost<EPara> {
     clearTimeout(this.timer)
     if (this.sid >= 0 && this.changedSinceCommit) this.commitInBackground()
     this.input.detach()
+    this.input.clearSelection()
     this.sid = -1
     this.slide = -1
     this.body = undefined
@@ -210,6 +212,7 @@ export class PptxEditor implements RichHost<EPara> {
       this.future = []
     }
     this.pendingSel = sel
+    this.pendingNoRefocus = this.input.formatting
     this.changedSinceCommit = true
     this.onDirty?.()
     clearTimeout(this.timer)
@@ -233,6 +236,7 @@ export class PptxEditor implements RichHost<EPara> {
   private restore(paras: EPara[], sel: Sel) {
     this.paras = paras
     this.pendingSel = sel
+    this.pendingNoRefocus = this.input.formatting
     this.changedSinceCommit = true
     this.onDirty?.()
     clearTimeout(this.timer)
@@ -339,12 +343,19 @@ export class PptxEditor implements RichHost<EPara> {
   }
 
   /** applies a paragraph-level change to the selected paragraphs */
-  private paraOp(fn: (p: EPara) => EPara, label: string) {
+  private paraOp(fn: (p: EPara) => EPara, label: string, list?: 'bullet' | 'number' | 'none') {
     const sel = this.input.sel()
     if (!sel) return
     const [a, b] = ordered(this, sel)
     const pas = this.span(a.pa, b.pa)
+    if (list && pas.every((pa) => bulletOf(this.para(pa)) === list)) return
     this.replace(pas, pas.map((pa) => fn(this.para(pa))), sel, { label })
+  }
+
+  /** Host API setter; the built-in toolbar retains toggleBullet. */
+  setList(kind: 'bullet' | 'number' | null) {
+    const next = kind ?? 'none'
+    this.paraOp((p) => ({ ...p, pp: { ...p.pp, bullet: next } }), 'bullet', next)
   }
 
   toggleBullet(kind: 'bullet' | 'number') {

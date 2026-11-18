@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { rebuildZip } from '../src/core/zipwrite'
-import { SAMPLES, useBrowser, viewer, fromB64, xlsxSheet } from './harness'
+import { SAMPLES, useBrowser, viewer, fromB64, xlsxSheet, docxParas, paraText, runsOf } from './harness'
 
 useBrowser()
 
@@ -181,4 +181,38 @@ describe('docx: a built-in style the document lacks', () => {
     expect(await colour(v, 'Hello')).toBe(HEADING)
     expect(v.errors).toEqual([])
   })
+})
+
+
+test('docx: host format uses the published selection after a peer inserts an earlier paragraph', async () => {
+  const id = await room('sample.docx')
+  const joinDoc = (user: string) => viewer({ src: `${HTTP}/rooms/${id}/file?seq=0`, name: 'shared.docx', collab: `ws://localhost:${PORT}/collab`, room: id, user, base: 0, editable: true, controller: true, onSave: true })
+  const a = await joinDoc('Ann')
+  const b = await joinDoc('Bob')
+  for (const v of [a, b]) await v.page.locator('.de-collab-live').waitFor({ timeout: 20_000 })
+  await b.selectText('document')
+  await b.page.evaluate(() => {
+    const input = document.createElement('input')
+    input.id = 'collab-format-host'; input.style.cssText = 'position:fixed;top:0;left:0;z-index:999999'
+    document.body.append(input)
+  })
+  await b.page.locator('#collab-format-host').click()
+  await a.selectText('Quarterly Report', 'start')
+  await a.page.keyboard.type('Peer prefix')
+  await a.page.keyboard.press('Enter')
+  await b.page.waitForFunction(() => document.querySelector('.de-pages')?.textContent?.includes('Peer prefix'))
+  await b.page.waitForTimeout(500)
+  expect(await b.page.locator('#collab-format-host').evaluate((el) => el === document.activeElement)).toBe(true)
+  expect(await b.page.evaluate(() => window.__ctl.snapshot().format)).not.toBeNull()
+  await b.page.evaluate(() => window.__ctl.format({ op: 'size', pt: 31 }))
+  await b.page.waitForTimeout(800)
+  expect(await b.page.evaluate(() => window.__ctl.snapshot().format?.size)).toBe(31)
+  expect(await b.page.locator('#collab-format-host').evaluate((el) => el === document.activeElement)).toBe(true)
+  for (const v of [a, b]) {
+    await v.page.evaluate(() => window.__ctl.save())
+    const bytes = fromB64((await v.waitEvent('save')).b64 as string)
+    const p = (await docxParas(bytes)).find((p) => paraText(p).startsWith('This document'))!
+    expect(runsOf(p).find((r) => r.text === 'document')?.s.sz).toBe(31)
+    expect(v.errors).toEqual([])
+  }
 })
