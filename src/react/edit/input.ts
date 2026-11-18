@@ -412,7 +412,15 @@ export class RichInput {
     if (!root) return null
     let active = root.ownerDocument.activeElement
     while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement
-    return active && active !== root.ownerDocument.body && active !== root.ownerDocument.documentElement && !root.contains(active) ? active : null
+    if (!active || root.contains(active)) return null
+    // A focusable page wrapper is background, including ancestors outside a web component's shadow root.
+    let scope: Node = root
+    for (;;) {
+      if (active.contains(scope)) return null
+      const tree = scope.getRootNode()
+      if (!(tree instanceof ShadowRoot)) return active
+      scope = tree.host
+    }
   }
 
   /** Use the exact published logical target for one command, without affecting later undo/navigation. */

@@ -667,7 +667,7 @@ export class DocxCollab implements Adapter<DocxOp> {
   private capture() {
     if (this.snap || !this.host) return
     const focused = this.ed.input.focused && !!this.ed.input.readSel()
-    const sel = this.ed.input.sel()
+    const sel = focused ? this.ed.input.sel() : this.ed.input.lastSel
     const a = sel && this.toD(sel.a)
     const f = sel && this.toD(sel.f)
     if (!a || !f) return

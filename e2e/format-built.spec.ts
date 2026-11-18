@@ -90,6 +90,23 @@ for (const kind of ['docx', 'xlsx', 'pptx'] as const) {
     await select(v, kind)
     expect(await v.page.evaluate(() => window.__ctl.snapshot().format?.size)).toBe(14)
     if (kind === 'xlsx') expect(await v.formula('B2')).toBe(inputBefore!)
+    if (kind !== 'xlsx') {
+      await v.page.evaluate(() => {
+        const root = document.getElementById('built')!
+        const wrapper = document.createElement('div')
+        wrapper.id = 'focusable-app'; wrapper.tabIndex = -1
+        root.before(wrapper); wrapper.append(root)
+        const text = document.createElement('p')
+        text.textContent = 'Host page background'
+        text.style.cssText = 'position:fixed;top:0;right:0;z-index:999999;background:white'
+        wrapper.append(text)
+      })
+      await v.page.getByText('Host page background', { exact: true }).click()
+      expect(await v.page.evaluate(() => document.activeElement?.id)).toBe('focusable-app')
+      await v.page.waitForFunction(() => window.__ctl.snapshot().format === null, null, { timeout: 3000 })
+      await v.page.evaluate(() => window.__ctl.format({ op: 'toggle', mark: 'italic' }))
+      expect(await v.page.evaluate(() => window.__ctl.snapshot().dirty)).toBe(false)
+    }
     expect(v.errors).toEqual([])
   })
 }
