@@ -93,3 +93,73 @@ for (const kind of ['docx', 'xlsx', 'pptx'] as const) {
     expect(v.errors).toEqual([])
   })
 }
+
+for (const keyboard of [false, true]) {
+  test(`built DOCX: consecutive commands from ${keyboard ? 'keyboard-activated' : 'plain mouse'} host buttons keep the selected text`, async () => {
+    const v = await viewer({}, { page: 'built-locale.html', wait: false })
+    await v.page.waitForFunction(() => !!(window as any).__builtRuntime)
+    await v.page.evaluate(async ({ pkg, keyboard }) => {
+      const { React: R, createRoot } = (window as any).__builtRuntime
+      const api = await import(/* @vite-ignore */ pkg)
+      const ctl = api.createViewerController()
+      window.__ctl = ctl
+      const root = createRoot(document.getElementById('built')!)
+      function Host() {
+        const f = api.useViewerState(ctl).format
+        const [props, setProps] = R.useState({ src: '/samples/sample.docx', name: 'sample.docx' })
+        window.__setProps = (p: any) => setProps((old: any) => ({ ...old, ...p }))
+        const commands = [
+          { op: 'toggle', mark: 'underline' },
+          { op: 'size', pt: 30 },
+          { op: 'color', color: '#00aa00' },
+        ]
+        return R.createElement(R.Fragment, null,
+          ...commands.map((c, i) => R.createElement('button', {
+            key: i, 'aria-label': `Host command ${i}`, disabled: !f,
+            'aria-pressed': i === 0 ? !!f?.underline : undefined,
+            onMouseDown: keyboard ? (e: any) => e.preventDefault() : undefined,
+            onClick: () => ctl.format(c),
+          }, String(i))),
+          R.createElement(api.DocViewer, { ...props, controller: ctl, editable: true, headless: true,
+            onLoad: (c: any) => window.__events.push({ type: 'load', kind: c.kind }),
+            onSave: async (blob: Blob) => {
+              let raw = ''
+              for (const b of new Uint8Array(await blob.arrayBuffer())) raw += String.fromCharCode(b)
+              window.__events.push({ type: 'save', b64: btoa(raw) })
+            },
+          }))
+      }
+      root.render(R.createElement(Host))
+    }, { pkg: builtModule('index.js'), keyboard })
+    await v.ready('docx')
+    await select(v, 'docx')
+    if (keyboard) await v.page.getByLabel('Host command 0', { exact: true }).focus()
+    for (let i = 0; i < 3; i++) {
+      const button = v.page.getByLabel(`Host command ${i}`, { exact: true })
+      if (keyboard) {
+        if (i) await v.page.keyboard.press('Tab')
+        for (let press = 0; press < (i === 0 ? 3 : 1); press++) {
+          await v.page.keyboard.press('Enter')
+          await v.page.waitForTimeout(100)
+          if (i === 0) expect(await button.getAttribute('aria-pressed')).toBe(press % 2 ? 'false' : 'true')
+        }
+      } else await button.click()
+      await v.page.waitForTimeout(150)
+      expect(await button.evaluate((el) => el === document.activeElement)).toBe(true)
+      expect(await v.page.getByLabel('Host command 0', { exact: true }).getAttribute('aria-pressed')).toBe('true')
+    }
+    await v.page.evaluate(() => window.__ctl.save())
+    const bytes = fromB64((await v.waitEvent('save')).b64 as string)
+    const p = (await docxParas(bytes)).find((p) => paraText(p).startsWith('This document'))!
+    const run = runsOf(p).find((r) => r.text === 'document')!
+    expect(run.s.u).toBe('single')
+    expect(run.s.sz).toBe(30)
+    expect(run.s.color).toMatch(/00aa00/i)
+    await v.page.evaluate((data) => window.__setProps({ src: new Blob([new Uint8Array(data)]), name: 'reopened.docx' }), Array.from(bytes))
+    await v.waitEvent('load', 2)
+    await v.page.locator('.de-pages [data-pa]').filter({ hasText: 'This document' }).first().waitFor()
+    await select(v, 'docx')
+    expect(await v.page.evaluate(() => window.__ctl.snapshot().format)).toMatchObject({ underline: true, size: 30 })
+    expect(v.errors).toEqual([])
+  })
+}

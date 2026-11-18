@@ -4,11 +4,32 @@ import { BlobSource } from '../src/core/source'
 import { ZipArchive } from '../src/core/zip'
 import { DocxEditor, type DocState } from '../src/react/docx/DocxEditor'
 import { PptxEditor } from '../src/react/pptx/PptxEditor'
-import { applyDocx, applyPptx, cellPatch, cellFormat } from '../src/react/edit/format'
+import { applyDocx as mapDocx, applyPptx as mapPptx, cellPatch as mapCellPatch, cellFormat } from '../src/react/edit/format'
+
+import { InternalViewerController, type FormatCommand, type TextFormat } from '../src/react/controller'
+import type { FmtPatch } from '../src/core/xlsx/types'
+
+/** Exercise validation at the public controller boundary, then the same adapters the views register. */
+function commandTarget(apply: (command: FormatCommand) => void) {
+  const ctl = new InternalViewerController()
+  const binding = ctl.createBinding()
+  binding.attachViewer({ setEditing() {}, async save() {}, fileAction() {}, toggleComments() {} })
+  const view = binding.createView()
+  view.activate()
+  view.attachView({ format: apply })
+  return ctl.format
+}
+const applyDocx = (ed: DocxEditor, c: FormatCommand) => commandTarget((command) => mapDocx(ed, command))(c)
+const applyPptx = (ed: PptxEditor, c: FormatCommand) => commandTarget((command) => mapPptx(ed, command))(c)
+function cellPatch(c: FormatCommand, now: TextFormat): FmtPatch | null {
+  let patch: FmtPatch | null = null
+  commandTarget((command) => { patch = mapCellPatch(command, now) })(c)
+  return patch
+}
 
 const file = async (kind: string) => new Blob([await Bun.file(`${import.meta.dir}/../playground/public/samples/sample.${kind}`).arrayBuffer()])
 const invalid = [NaN, Infinity, -Infinity, 0, -1, 0.25, 0.5, 400.1, 1000]
-const invalidConverted = [Number.MAX_VALUE, Number.MIN_VALUE, Number.MAX_SAFE_INTEGER]
+const extremes = [Number.MAX_VALUE, Number.MIN_VALUE, Number.MAX_SAFE_INTEGER]
 const xml = async (client: DocumentClient, path: string) => (await ZipArchive.open(new BlobSource(await client.call('save')))).text(path)
 async function documentEditor() {
   const client = await DocumentClient.open(await file('docx'), { worker: false })
@@ -38,7 +59,7 @@ test('DOCX: invalid public sizes leave model, history and saved XML untouched; f
   try {
     const before = await xml(client, 'word/document.xml')
     const state = ed.state()
-    for (const pt of [...invalid, ...invalidConverted, 0.24]) applyDocx(ed, { op: 'size', pt })
+    for (const pt of [...invalid, ...extremes, 0.24]) applyDocx(ed, { op: 'size', pt })
     expect(ed.state()).toEqual(state)
     expect(ed.canUndo).toBe(false)
     expect(await xml(client, 'word/document.xml')).toBe(before)
@@ -60,7 +81,7 @@ test('PPTX: invalid public sizes leave model, history and saved XML untouched; f
   try {
     const before = await xml(client, 'ppt/slides/slide1.xml')
     const text = ed.text()
-    for (const pt of [...invalid, ...invalidConverted, 0.004]) applyPptx(ed, { op: 'size', pt })
+    for (const pt of [...invalid, ...extremes, 0.004]) applyPptx(ed, { op: 'size', pt })
     expect(ed.text()).toEqual(text)
     // If an invalid command had entered history, undo/redo would also alter this body.
     ed.undo()

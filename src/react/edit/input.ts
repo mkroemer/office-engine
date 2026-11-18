@@ -339,7 +339,7 @@ export class RichInput {
   private justComposed = ''
   private raf = 0
   lastSel: Sel | null = null
-  /** A live formatting target may move to a native control, but never survive a real selection loss. */
+  /** A live formatting target remains valid while a focused host control owns DOM focus. */
   private formatTarget: Sel | null = null
   private attachedRoot: HTMLElement | null = null
   private commandSelection: Sel | null = null
@@ -406,13 +406,13 @@ export class RichInput {
     return this.commandSelection ?? this.override?.model ?? this.readSel() ?? this.lastSel
   }
 
-  /** Native controls have their own selection; keep the editor target while the host edits a value. */
-  private activeControl(): Element | null {
+  /** Keep a logical target for any focused host element, including keyboard-operated buttons and menus. */
+  private activeHost(): Element | null {
     const root = this.root
     if (!root) return null
     let active = root.ownerDocument.activeElement
     while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement
-    return active && !root.contains(active) && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName) ? active : null
+    return active && active !== root.ownerDocument.body && active !== root.ownerDocument.documentElement && !root.contains(active) ? active : null
   }
 
   /** Use the exact published logical target for one command, without affecting later undo/navigation. */
@@ -427,7 +427,7 @@ export class RichInput {
   }
 
   formatSelection(): Sel | null {
-    const sel = this.activeControl() ? (this.formatTarget && this.lastSel) : (this.override?.model ?? this.readSel())
+    const sel = this.activeHost() ? (this.formatTarget && this.lastSel) : (this.override?.model ?? this.readSel())
     return sel && this.host.para(sel.a.pa) && this.host.para(sel.f.pa) ? sel : null
   }
 
@@ -625,17 +625,17 @@ export class RichInput {
     this.raf = requestAnimationFrame(() => {
       this.raf = 0
       const dom = this.readSel()
-      const control = this.activeControl()
+      const control = this.activeHost()
       const ov = this.override
       const active = (this.root?.getRootNode() as Document | ShadowRoot | undefined)?.activeElement
       // select all stays until the selection moves somewhere else (losing it to a re-render keeps it, like lastSel)
-      if (ov && (dom ? sameSel(dom, ov.dom) : (control && !!this.formatTarget) || this.root === active)) {
+      if (ov && ((control && !!this.formatTarget) || (dom ? sameSel(dom, ov.dom) : this.root === active))) {
         this.formatTarget = ov.model
         this.host.onSelection?.(ov.model)
         return
       }
       this.override = null
-      const s = dom ?? (control ? this.formatSelection() : null)
+      const s = control ? this.formatSelection() : dom
       if (s) this.lastSel = s
       this.formatTarget = s
       this.host.onSelection?.(s)

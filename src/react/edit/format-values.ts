@@ -3,9 +3,7 @@ import type { FormatCommand } from '../controller'
 /** Shared with SizeBox: 1–400 points, rounded to the nearest half point. */
 export function fontSize(pt: number): number | null {
   if (!Number.isFinite(pt) || pt < 1 || pt > 400) return null
-  const value = Math.round(pt * 2) / 2
-  // Check the integer units used by both Office text writers before changing history.
-  return [2, 100].every((scale) => Number.isSafeInteger(Math.round(value * scale)) && Math.round(value * scale) > 0) ? value : null
+  return Math.round(pt * 2) / 2
 }
 
 /** Only opaque hex is part of the write contract. CSS names/functions and transparency are rejected. */

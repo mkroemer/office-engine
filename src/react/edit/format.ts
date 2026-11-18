@@ -2,11 +2,10 @@ import type { FmtPatch } from '../../core/xlsx/types'
 import { MARK_KEY, type FormatCommand, type TextFormat } from '../controller'
 import type { DocxEditor, FormatState } from '../docx/DocxEditor'
 import type { PptxEditor, PptxFormat } from '../pptx/PptxEditor'
-import { formatCommand } from './format-values'
 import { fontName } from './Toolbar'
 
 // The editors' formatting states as the controller's TextFormat, and its commands as editor calls: one formatting
-// API for a host's toolbar, whichever kind of document is open.
+// API for a host's toolbar, whichever kind of document is open. The controller validates each command before dispatch.
 
 const ALIGNS = ['left', 'center', 'right', 'justify'] as const
 const alignOf = (a: string | undefined): TextFormat['align'] => ALIGNS.find((x) => x === a)
@@ -18,9 +17,6 @@ export function docxFormat(s: FormatState): TextFormat {
 }
 
 export function applyDocx(ed: DocxEditor, c: FormatCommand) {
-  const command = formatCommand(c)
-  if (!command) return
-  c = command
   if (c.op === 'toggle') ed.toggle(MARK_KEY[c.mark])
   else if (c.op === 'font') ed.setFont(c.name)
   else if (c.op === 'size') ed.setSize(c.pt)
@@ -36,9 +32,6 @@ export function pptxFormat(s: PptxFormat): TextFormat {
 }
 
 export function applyPptx(ed: PptxEditor, c: FormatCommand) {
-  const command = formatCommand(c)
-  if (!command) return
-  c = command
   if (c.op === 'toggle') ed.toggle(MARK_KEY[c.mark])
   else if (c.op === 'font') ed.setFont(c.name)
   else if (c.op === 'size') ed.setSize(c.pt)
@@ -71,9 +64,6 @@ export function cellFormat(css: Record<string, string | number>, base: { fontFam
 
 /** a command as a cell format patch; null for what cells do not have (lists, justified text) */
 export function cellPatch(c: FormatCommand, now: TextFormat): FmtPatch | null {
-  const command = formatCommand(c)
-  if (!command) return null
-  c = command
   if (c.op === 'toggle') return { [MARK_KEY[c.mark]]: !now[c.mark] }
   if (c.op === 'font') return { font: c.name }
   if (c.op === 'size') return { sz: c.pt }
