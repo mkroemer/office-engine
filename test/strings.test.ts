@@ -101,3 +101,30 @@ test('count callbacks accept numbers and choose singular/plural before formattin
   expect(de.xlsx.usedRangeValue(2, 3)).toBe('2 Zeilen × 3 Spalten')
   expect(en.xlsx.status(1, 1)).toBe('1 row × 1 col')
 })
+
+test('default measurements and page labels retain their ASCII representation', () => {
+  expect(formatNumber(en, 8.5)).toBe('8.5')
+  expect(formatNumber(en, 1.25, { style: 'percent' })).toBe('125%')
+  expect(formatBytes(en, 44 * 1024)).toBe('44 KB')
+  expect(en.docx.status(1, 1000, 1234)).toBe(`Page 1 of 1000 · ${(1234).toLocaleString()} words`)
+  expect(en.docx.statusLoading(1, 1000)).toBe('Page 1 of 1000+ · loading…')
+  expect(en.pptx.status(1, 1000)).toBe('Slide 1 of 1000')
+  expect(en.pptx.slideNumber(1000)).toBe('Slide 1000')
+  expect(formatNumber(resolveStrings('de-DE'), 8.5)).toBe('8,5')
+  expect(en.pptx.status(1, 7, 'ar-EG')).toBe('Slide ١ of ٧')
+})
+
+test('invalid formatting tags preserve a valid table or enclosing provider tag', () => {
+  expect(resolveStrings('de_DE', de).locale).toBe('de-DE')
+  expect(resolveStrings('de_DE', { locale: 'also_invalid' }, de).locale).toBe('de-DE')
+  expect(resolveStrings('en-GB', de).locale).toBe('en-GB')
+  // Undefined overrides are inherited consistently, including the English table's locale.
+  expect(resolveStrings(undefined, en, de).locale).toBe('de-DE')
+  expect(resolveStrings('en-US', en, de).locale).toBe('en-US')
+})
+
+test('clipboard feedback is translated and receives numeric counts', () => {
+  expect(de.xlsx.clipboardCopyBlocked).toContain('Zwischenablage')
+  expect(de.xlsx.pasteLimit(100000, 100001, de.locale)).toBe('Nur die ersten 100.000 von 100.001 Zellen wurden eingefügt')
+  expect(en.xlsx.pasteLimit(100000, 100001, 'en-US')).toBe('Only the first 100,000 of the 100,001 cells were pasted')
+})

@@ -344,6 +344,8 @@ export const de: Strings = {
   },
 
   xlsx: {
+    clipboardCopyBlocked: 'Der Browser hat den Zugriff auf die Zwischenablage blockiert. Zum Kopieren weniger Zeilen auswählen.',
+    pasteLimit: (max: number, total: number, locale: string | undefined = undefined) => `Nur die ersten ${max.toLocaleString(locale)} von ${total.toLocaleString(locale)} Zellen wurden eingefügt`,
     status: (rows: number, cols: number, locale: string | undefined = undefined) => `${rows.toLocaleString(locale)} ${rows === 1 ? 'Zeile' : 'Zeilen'} × ${cols.toLocaleString(locale)} ${cols === 1 ? 'Spalte' : 'Spalten'}`,
     statusLoading: ' · wird geladen…',
     overLimit: (max: number, locale: string | undefined = undefined) => ` · mehr als die ${max.toLocaleString(locale)} Zeilen von Excel: als CSV speichern`,

@@ -63,9 +63,9 @@ CSS is auto-injected, no import needed (or import `@p10node/office-engine/styles
 | `styleTarget`      | `Document \| ShadowRoot`                       | document  | Where CSS is injected                                                                                                    |
 | `injectStyles`     | `boolean`                                      | `true`    | Inject the stylesheet; false when the page loads `@p10node/office-engine/styles.css` itself                              |
 | `theme`            | `'light' \| 'dark' \| 'auto' \| ThemeOptions`  | `'light'` | Color scheme of the chrome; `'auto'` follows `prefers-color-scheme`; an object adds token overrides ([Theming](theming.md)). Documents keep their own colors |
-| `locale`           | `string`                                       | browser   | BCP 47 number/date formatting tag; does not select UI texts. See [UI texts](#ui-texts)                                      |
-| `strings`          | `StringsOverride`                              | –         | Texts merged over the enclosing provider or English, key by key; may include a formatting `locale`                        |
-| `editable`         | `boolean`                                      | `false`   | Open in edit mode (Pages, Keynote, Numbers and Visio files stay view only)                                                      |
+| `locale`           | `string`                                       | inherited | BCP 47 number/date formatting tag; does not select UI texts. See [UI texts](#ui-texts)                                   |
+| `strings`          | `StringsOverride`                              | –         | Texts merged over the enclosing provider or English, key by key; may include a formatting `locale`                       |
+| `editable`         | `boolean`                                      | `false`   | Open in edit mode (Pages, Keynote, Numbers and Visio files stay view only)                                               |
 | `allowEdit`        | `boolean`                                      | `true`    | Show Edit/View button                                                                                                    |
 | `allowSave`        | `boolean`                                      | `true`    | Show Save/Download button, enable Ctrl+S                                                                                 |
 | `allowDownload`    | `boolean`                                      | `true`    | Allow downloads to device (save without `onSave`, images)                                                                |
@@ -195,7 +195,7 @@ import { IconsProvider, XlsxView } from '@p10node/office-engine'
 
 ### UI texts
 
-Viewer UI texts (titles, labels, menu entries, placeholders, dialogs, toasts, status lines such as "Page 1 of 5") come from one typed table, `Strings`, with the exceptions listed below. Only US English (`en-US`) is included in the default viewer and standalone embed bundle. German is a separate optional import with standard German spelling and `de-DE` number/date formatting (for example `1.234.567,89`):
+Viewer UI texts (titles, labels, menu entries, placeholders, dialogs, toasts, status lines such as "Page 1 of 5") come from one typed table, `Strings`, with the exceptions listed below. Only English UI texts with US spelling are included in the default viewer and standalone embed bundle. German is a separate optional import with standard German spelling and `de-DE` number/date formatting (for example `1.234.567,89`):
 
 ```tsx
 import { DocViewer } from '@p10node/office-engine'
@@ -204,9 +204,9 @@ import { de } from '@p10node/office-engine/locales/de'
 <DocViewer src={file} strings={de} />
 ```
 
-The locale module is included only when your app imports it. The German table uses standard German spelling and `de-DE` formatting. `locale="de-DE"` alone changes number/date formatting while keeping English UI texts; it does not load German. With no table or formatting override, numbers and dates keep the browser's locale.
+The locale module is included only when your app imports it. The German table uses standard German spelling and `de-DE` formatting. `locale="de-DE"` alone changes number/date formatting while keeping English UI texts; it does not load German. With no table or formatting override, dates and grouped counts retain the browser's locale. Page/slide numbers, measurements, file sizes and zoom labels retain ASCII digits and a decimal point, as before. An explicit formatting tag applies to all of these displays.
 
-`strings` merges over the enclosing `StringsProvider` (or English) key by key, so a group can be given in part. Nested providers and `DocViewer` inherit the outer texts and formatting. A value is a string, or a function where the text takes numbers or names. Count callbacks receive raw numbers for pluralization; callbacks that format grouped counts also receive the active formatting tag as their final optional argument. Hoist override objects outside render, or memoize them when they depend on props, to keep the provider value stable. To customize an imported language, spread that table and any groups you change:
+`strings` merges over the enclosing `StringsProvider` (or English) key by key, so a group can be given in part. Nested providers and `DocViewer` inherit the outer texts and formatting. Undefined values do not replace inherited values: `strings={en}` changes the texts while retaining an enclosing formatting tag; also pass `locale="en-US"` to select US formatting explicitly. A value is a string, or a function where the text takes numbers or names. Count callbacks receive raw numbers for pluralization; callbacks that format grouped counts also receive the active formatting tag as their final optional argument. Hoist override objects outside render, or memoize them when they depend on props, to keep the provider value stable. To customize an imported language, spread that table and any groups you change:
 
 ```tsx
 import { DocViewer } from '@p10node/office-engine'
@@ -238,7 +238,7 @@ const sheetTexts = { ...de, xlsx: { ...de.xlsx, addSheet: 'Neues Blatt' } }
 </StringsProvider>
 ```
 
-For a regional variant, override only the texts that differ. The `locale` prop is a BCP 47 formatting tag and takes precedence over `strings.locale`; otherwise the table or enclosing provider supplies the tag, then the browser default. Malformed tags (for example `de_DE`) fall back to the browser default without throwing. Well-formed but unsupported tags follow `Intl` fallback. For example, a host can use US English as the base and supply British formatting and selected British spellings:
+For a regional variant, override only the texts that differ. The `locale` prop is a BCP 47 formatting tag and takes precedence over `strings.locale`; otherwise the table or enclosing provider supplies the tag, then the browser default. Malformed tags (for example `de_DE`) are ignored: a valid table or inherited tag still applies, otherwise the default formatting above is used. Well-formed but unsupported tags follow `Intl` fallback. For example, a host can use US English as the base and supply British formatting and selected British spellings:
 
 ```tsx
 import { DocViewer, StringsProvider, en, type StringsOverride } from '@p10node/office-engine'

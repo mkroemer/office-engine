@@ -1199,7 +1199,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
         store.clip = { text: local ?? data.text, data, cut }
         if (cut) await sheetOp({ op: 'clear', range })
       })
-      .catch((err: Error) => setToast(local === null && err.name === 'NotAllowedError' ? 'The browser blocked clipboard access: select fewer rows to copy them' : err.message))
+      .catch((err: Error) => setToast(local === null && err.name === 'NotAllowedError' ? str.xlsx.clipboardCopyBlocked : err.message))
   }
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -1473,7 +1473,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
       return
     }
     const cells = parseTsv(raw).flatMap((line, i) => line.map((v, j) => ({ r: at.r + i, c: at.c + j, input: v })))
-    if (cells.length > 100_000) setToast(`Only the first 100,000 of the ${cells.length.toLocaleString()} cells were pasted`)
+    if (cells.length > 100_000) setToast(str.xlsx.pasteLimit(100_000, cells.length, str.locale))
     if (cells.length) void run(client.call('xlsx.set', sheet, cells.slice(0, 100_000)))
   }
   const ctxItems = (): MenuItem[] => {

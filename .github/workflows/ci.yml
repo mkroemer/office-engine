@@ -64,4 +64,5 @@ jobs:
           pip install python-pptx Pillow
           python scripts/fixtures.py --large-deck
 
+      - run: bun run build
       - run: bun run test:e2e

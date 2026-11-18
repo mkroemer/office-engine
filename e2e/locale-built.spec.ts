@@ -1,13 +1,12 @@
-/** Production-artifact checks: run `bun run build` first; skipped in source-only browser runs. */
-import { describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+/** Production-artifact checks: run `bun run build` first, as CI does before browser tests. */
+import { beforeAll, describe, expect, test } from 'bun:test'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { parasToDocx, rowsToXlsx } from '../src/core/convert'
 import { unzipSync, zipSync, strFromU8, strToU8 } from 'fflate'
 import { useBrowser, viewer, type Viewer, SAMPLES } from './harness'
 
 useBrowser()
-const evidence = `${process.cwd()}/artifacts/pr6-validation`
-const packageRoot = process.env.PR6_PACKAGE_ROOT ?? process.cwd()
+const packageRoot = process.env.BUILT_PACKAGE_ROOT ?? process.cwd()
 const pkg = `/@fs${packageRoot}/dist/index.js`
 const german = `/@fs${packageRoot}/dist/locales/de.js`
 
@@ -59,15 +58,22 @@ function emfDeck() {
   return Buffer.from(zipSync(files))
 }
 
-const log: Record<string, unknown>[] = []
-function record(name: string, result: unknown) {
-  mkdirSync(evidence, { recursive: true })
-  log.push({ name, result })
-  writeFileSync(`${evidence}/browser-evidence.json`, JSON.stringify(log, null, 2) + '\n')
+// Refuse missing or stale local output rather than silently skipping or testing an old bundle.
+function newestSource(path: string): number {
+  return Math.max(...readdirSync(path, { withFileTypes: true }).map((entry) => {
+    const file = `${path}/${entry.name}`
+    return entry.isDirectory() ? newestSource(file) : statSync(file).mtimeMs
+  }))
 }
+beforeAll(() => {
+  expect(existsSync(`${packageRoot}/dist/index.js`), 'Run bun run build before browser tests').toBe(true)
+  if (!process.env.BUILT_PACKAGE_ROOT) {
+    expect(statSync(`${packageRoot}/dist/index.js`).mtimeMs, 'dist is stale; run bun run build').toBeGreaterThanOrEqual(newestSource(`${packageRoot}/src`))
+  }
+})
 
-describe.skipIf(!existsSync(`${packageRoot}/dist/index.js`))('built package localization', () => {
-  for (const locale of ['en-GB', 'vi-VN']) {
+describe('built package localization', () => {
+  for (const locale of ['en-GB', 'vi-VN', 'de-DE', 'ar-EG']) {
     test(`default formatting follows the ${locale} browser; invalid tags fall back`, async () => {
       const v = await open({ src: 'samples/sample.docx' }, locale)
       const read = () => v.page.evaluate(() => {
@@ -86,7 +92,8 @@ describe.skipIf(!existsSync(`${packageRoot}/dist/index.js`))('built package loca
       })
       await v.menu('Document details')
       await v.page.locator('[role=dialog] dd', { hasText: created }).first().waitFor()
-      const detailText = await v.page.locator('[role=dialog]').innerText()
+      expect(await v.page.locator('[role=dialog]').innerText()).toContain('8.5 × 11 in')
+      expect(await v.status()).toMatch(/^Page 1 of [0-9]+/)
       await v.page.locator('[role=dialog] button', { hasText: 'Close' }).click()
       expect(initial.locale).toBeUndefined()
       expect(initial.date).toBe(initial.browserDate)
@@ -118,7 +125,6 @@ describe.skipIf(!existsSync(`${packageRoot}/dist/index.js`))('built package loca
       }, { pkg })
       expect(rendered).toContain(initial.browserDate)
       expect(rendered).toContain(initial.browserCount)
-      record(`browser default/fallback ${locale}`, { initial, rendered, created, detailText, optionalGermanRequests, errors: v.errors })
     })
   }
 
@@ -147,14 +153,13 @@ describe.skipIf(!existsSync(`${packageRoot}/dist/index.js`))('built package loca
     await v.page.locator('office-viewer [role=dialog][aria-label="Dokumenteigenschaften"]').waitFor()
     expect((await v.events('load')).length).toBe(1)
     expect(v.errors).toEqual([])
-    record('standalone built embed', { englishDefault: true, malformedLocaleRendered: true, explicitGerman: true, loadEvents: await v.events('load'), errors: v.errors })
   })
 
   test('opt-in German, outer provider, partial overrides, pluralization and live switching', async () => {
     const v = await open({ src: 'samples/sample.xlsx', editable: true, comments: { open: true } }, 'en-GB', true)
     expect(await v.page.locator('.de-file').innerText()).toBe('Datei')
     await v.page.locator('.de-cm-empty', { hasText: 'Zelle' }).waitFor()
-    const result = await v.page.evaluate(async ({ german }) => {
+    await v.page.evaluate(async ({ german }) => {
       const { React, createRoot } = (window as any).__builtRuntime
       const api = (window as any).__builtApi
       const de = (await import(/* @vite-ignore */ german)).de
@@ -167,7 +172,7 @@ describe.skipIf(!existsSync(`${packageRoot}/dist/index.js`))('built package loca
       return { loaded: performance.getEntriesByType('resource').map((e) => e.name).filter((x) => x.includes('/locales/de.js')) }
     }, { german })
     await v.page.locator('#plural-probe', { hasText: '1 Wort|1 Zeile × 1 Spalte|2 Zeilen × 3 Spalten|Folie 1 von 2' }).waitFor()
-    expect(result.loaded.length).toBeGreaterThan(0)
+    expect(await v.page.evaluate(() => performance.getEntriesByType('resource').some((e) => e.name.includes('/locales/de.js')))).toBe(true)
     await update(v, { strings: { file: { menu: 'Ablage' } } })
     await v.page.locator('.de-file', { hasText: 'Ablage' }).waitFor()
     expect(await v.barButton('Ansicht').count()).toBe(1)
@@ -180,7 +185,6 @@ describe.skipIf(!existsSync(`${packageRoot}/dist/index.js`))('built package loca
     await v.page.locator('.de-cm-empty', { hasText: 'Zelle' }).waitFor()
     expect((await v.events('load')).length).toBe(1)
     expect(v.errors).toEqual([])
-    record('provider/plurals/switching', { result, pluralText: await v.page.locator('#plural-probe').innerText(), loadEvents: await v.events('load'), errors: v.errors })
   })
 
 
@@ -202,7 +206,6 @@ describe.skipIf(!existsSync(`${packageRoot}/dist/index.js`))('built package loca
       }
       expect(v.errors).toEqual([])
     }
-    record('running viewer singular/count arguments', statuses)
   })
 
   test('comment navigation survives fresh strings identities on the same sheet', async () => {
@@ -223,7 +226,40 @@ describe.skipIf(!existsSync(`${packageRoot}/dist/index.js`))('built package loca
     await v.page.waitForFunction(() => document.querySelector('.de-fx-ref')?.textContent === 'B3', null, { timeout: 3000 })
     expect(await v.page.locator('.de-fx-ref').innerText()).toBe('B3')
     expect(v.errors).toEqual([])
-    record('comment navigation identity', { selected: 'B3', loadEvents: await v.events('load'), errors: v.errors })
+  })
+
+  test('German clipboard failures and paste limits use the active strings', async () => {
+    const bytes = Buffer.from(await (await rowsToXlsx(Array.from({ length: 6000 }, (_, i) => [String(i)]), 'Data')).arrayBuffer())
+    const v = await viewer({}, { page: 'built-locale.html', wait: false, locale: 'de-DE' })
+    await v.page.route('**/clipboard.xlsx', (route) => route.fulfill({ body: bytes }))
+    await mount(v, { src: '/clipboard.xlsx', editable: true }, true)
+    await v.clickCell('A1')
+    await v.page.keyboard.press('ControlOrMeta+a')
+    await v.page.evaluate(() => {
+      Object.defineProperty(navigator.clipboard, 'writeText', {
+        configurable: true,
+        value: async () => { throw new DOMException('Clipboard denied', 'NotAllowedError') },
+      })
+      const data = new DataTransfer()
+      document.activeElement!.dispatchEvent(new ClipboardEvent('copy', { clipboardData: data, bubbles: true, cancelable: true }))
+    })
+    await v.page.locator('.de-toast', { hasText: 'Der Browser hat den Zugriff auf die Zwischenablage blockiert. Zum Kopieren weniger Zeilen auswählen.' }).waitFor()
+    await v.clickCell('A1')
+    await v.page.evaluate(() => {
+      const client = (window as any).__builtClient
+      const call = client.call.bind(client)
+      client.call = (op: string, ...args: any[]) => {
+        const result = call(op, ...args)
+        if (op === 'xlsx.set') (window as any).__pasteDone = result
+        return result
+      }
+      const data = new DataTransfer()
+      data.setData('text/plain', Array.from({ length: 100001 }, (_, i) => String(i)).join('\n'))
+      document.activeElement!.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }))
+    })
+    await v.page.locator('.de-toast', { hasText: 'Nur die ersten 100.000 von 100.001 Zellen wurden eingefügt' }).waitFor()
+    await v.page.evaluate(() => (window as any).__pasteDone)
+    expect(v.errors).toEqual([])
   })
 
   test('Visio labels use the active table and main keeps the drawing read-only', async () => {
@@ -239,7 +275,6 @@ describe.skipIf(!existsSync(`${packageRoot}/dist/index.js`))('built package loca
     const englishLabel = await v.page.locator('[role=dialog]').innerText()
     expect(englishLabel).toContain('Microsoft Visio drawing')
     expect(v.errors).toEqual([])
-    record('Visio labels', { germanLabel, englishLabel, errors: v.errors })
   })
 
   test('German EMF label survives HTML export/reopen and print/PDF separate roots', async () => {
@@ -255,8 +290,6 @@ describe.skipIf(!existsSync(`${packageRoot}/dist/index.js`))('built package loca
     const html = await v.downloadAs('Webseite')
     expect(html.text.includes('EMF-Bild')).toBe(true)
     expect(html.text.includes('EMF image')).toBe(false)
-    mkdirSync(evidence, { recursive: true })
-    writeFileSync(`${evidence}/german-emf.html`, html.bytes)
     const reopened = await v.ctx.newPage()
     await reopened.setContent(html.text)
     expect(await reopened.locator('.de-ph', { hasText: 'EMF-Bild' }).count()).toBeGreaterThan(0)
@@ -270,13 +303,11 @@ describe.skipIf(!existsSync(`${packageRoot}/dist/index.js`))('built package loca
       })
       const prepared = await captured.jsonValue() as string
       expect(prepared).not.toContain('EMF image')
-      writeFileSync(`${evidence}/${action === 'Drucken' ? 'print' : 'pdf'}-prepared.html`, prepared)
       if (action === 'PDF-Dokument') {
         await reopened.setContent(prepared)
-        await reopened.pdf({ path: `${evidence}/german-emf.pdf`, preferCSSPageSize: true })
+        expect((await reopened.pdf({ preferCSSPageSize: true })).subarray(0, 4).toString()).toBe('%PDF')
       }
     }
     expect(v.errors).toEqual([])
-    record('export roots', { htmlName: html.name, htmlBytes: html.bytes.length, reopened: true, print: true, pdfPrepared: true, pdf: 'german-emf.pdf', errors: v.errors })
   })
 })

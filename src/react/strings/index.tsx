@@ -24,7 +24,7 @@ function merge(base: Record<string, unknown>, over: Record<string, unknown>): Re
   return out
 }
 
-/** Validate once when resolving a table; malformed tags use the runtime's default locale. */
+/** Validate once when resolving a table; malformed tags do not override a valid enclosing tag. */
 function formattingLocale(locale: string | undefined): string | undefined {
   if (!locale) return undefined
   try {
@@ -37,22 +37,24 @@ function formattingLocale(locale: string | undefined): string | undefined {
 /** Merge texts over `base`; an explicit formatting prop takes precedence over the table's locale. */
 export function resolveStrings(locale?: Locale, override?: StringsOverride, base: Strings = en): Strings {
   const value = override ? (merge(base, override as Record<string, unknown>) as Strings) : base
-  const tag = formattingLocale(locale ?? value.locale)
+  const tag = formattingLocale(locale) ?? formattingLocale(value.locale) ?? formattingLocale(base.locale)
   return value.locale === tag ? value : { ...value, locale: tag }
 }
 
 const formats = new Map<string, Intl.NumberFormat>()
 
-/** A number in the texts' locale, without digit grouping unless `opts` asks for it. */
-export function formatNumber(s: Strings, n: number, opts?: Intl.NumberFormatOptions): string {
-  const key = s.locale + JSON.stringify(opts ?? {})
+function number(locale: string | undefined, n: number, opts?: Intl.NumberFormatOptions): string {
+  const key = locale + JSON.stringify(opts ?? {})
   let f = formats.get(key)
-  if (!f) formats.set(key, (f = new Intl.NumberFormat(s.locale, { useGrouping: false, ...opts })))
+  if (!f) formats.set(key, (f = new Intl.NumberFormat(locale, { useGrouping: false, ...opts })))
   return f.format(n)
 }
 
+/** Measurements and controls retain ASCII digits and a decimal point unless a locale is supplied. */
+export const formatNumber = (s: Strings, n: number, opts?: Intl.NumberFormatOptions): string => number(s.locale ?? 'en-US', n, opts)
+
 /** A count (pages, words, rows) with digit grouping. */
-export const formatCount = (s: Strings, n: number) => formatNumber(s, n, { useGrouping: true })
+export const formatCount = (s: Strings, n: number) => number(s.locale, n, { useGrouping: true })
 
 /** A byte count as B / KB / MB. */
 export function formatBytes(s: Strings, n: number): string {

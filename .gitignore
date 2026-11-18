@@ -7,6 +7,3 @@ playground/public/samples/large-*
 dist-site
 packages/*/LICENSE
 __pycache__
-
-# Local production-localization validation logs and generated exports
-/artifacts/pr6-validation/

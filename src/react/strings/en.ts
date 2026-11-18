@@ -1,9 +1,9 @@
 /**
- * The viewer's UI texts in English (the default locale). Every other locale has the same keys (`Strings`);
+ * The viewer's default English UI texts. Every other language has the same keys (`Strings`);
  * values are plain strings, or functions where a text takes numbers or names.
  */
 export const en = {
-  /** BCP 47 tag used for numbers and dates (Intl); undefined preserves the browser default */
+  /** BCP 47 tag; undefined preserves legacy formatting (browser dates/counts, ASCII measurements). */
   locale: undefined as string | undefined,
 
   common: {
@@ -212,8 +212,8 @@ export const en = {
   },
 
   docx: {
-    status: (page: number, pages: number, words: number, locale: string | undefined = undefined) => `Page ${page.toLocaleString(locale)} of ${pages.toLocaleString(locale)} · ${words.toLocaleString(locale)} ${words === 1 ? 'word' : 'words'}`,
-    statusLoading: (page: number, pages: number, locale: string | undefined = undefined) => `Page ${page.toLocaleString(locale)} of ${pages.toLocaleString(locale)}+ · loading…`,
+    status: (page: number, pages: number, words: number, locale: string | undefined = undefined) => `Page ${locale ? page.toLocaleString(locale) : page} of ${locale ? pages.toLocaleString(locale) : pages} · ${words.toLocaleString(locale)} ${words === 1 ? 'word' : 'words'}`,
+    statusLoading: (page: number, pages: number, locale: string | undefined = undefined) => `Page ${locale ? page.toLocaleString(locale) : page} of ${locale ? pages.toLocaleString(locale) : pages}+ · loading…`,
     pages: 'Pages',
     words: 'Words',
     characters: 'Characters',
@@ -353,6 +353,8 @@ export const en = {
   },
 
   xlsx: {
+    clipboardCopyBlocked: 'The browser blocked clipboard access: select fewer rows to copy them',
+    pasteLimit: (max: number, total: number, locale: string | undefined = undefined) => `Only the first ${max.toLocaleString(locale)} of the ${total.toLocaleString(locale)} cells were pasted`,
     status: (rows: number, cols: number, locale: string | undefined = undefined) => `${rows.toLocaleString(locale)} ${rows === 1 ? 'row' : 'rows'} × ${cols.toLocaleString(locale)} ${cols === 1 ? 'col' : 'cols'}`,
     statusLoading: ' · loading…',
     overLimit: (max: number, locale: string | undefined = undefined) => ` · over Excel’s ${max.toLocaleString(locale)}-row limit: save as CSV`,
@@ -509,7 +511,7 @@ export const en = {
   },
 
   pptx: {
-    status: (slide: number, count: number, locale: string | undefined = undefined) => `Slide ${slide.toLocaleString(locale)} of ${count.toLocaleString(locale)}`,
+    status: (slide: number, count: number, locale: string | undefined = undefined) => `Slide ${locale ? slide.toLocaleString(locale) : slide} of ${locale ? count.toLocaleString(locale) : count}`,
     slides: 'Slides',
     slideSize: 'Slide size',
     /** shown in an empty text box while editing */
@@ -555,7 +557,7 @@ export const en = {
       wedgeRoundRectCallout: 'Rounded callout',
     },
     slide: 'Slide',
-    slideNumber: (n: number, locale: string | undefined = undefined) => `Slide ${n.toLocaleString(locale)}`,
+    slideNumber: (n: number, locale: string | undefined = undefined) => `Slide ${locale ? n.toLocaleString(locale) : n}`,
     newSlide: 'New slide',
     duplicateSlide: 'Duplicate slide',
     deleteSlide: 'Delete slide',
