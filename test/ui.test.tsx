@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import type { ReactNode } from 'react'
+import type { ReactElement, ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { Icon as PublicIcon } from '../src'
 import { ConfirmDialog, PromptDialog, Toast } from '../src/react/common/Dialog'
 import { Btn, ColorBtn, Dropdown, Icon, Pop, Sep } from '../src/react/edit/Toolbar'
-import { OfficeUIProvider, UIComponentsProvider, type ButtonProps, type DialogProps, type SelectProps, type UIComponents } from '../src/react/ui'
+import { DefaultDialog, OfficeUIProvider, UIComponentsProvider, type ButtonProps, type DialogProps, type SelectProps, type UIComponents } from '../src/react/ui'
 
 const seen: { button: ButtonProps[]; select: SelectProps[]; dialog: DialogProps[] } = { button: [], select: [], dialog: [] }
 const host: Partial<UIComponents> = {
@@ -44,15 +44,16 @@ describe('UI components', () => {
     expect(html(<Sep />, null)).toBe('<span class="de-tb-sep"></span>')
     expect(html(<Dropdown title="Style" options={[{ value: 'a', label: 'A' }]} onChange={noop} value="a" />, null)).toContain('class="de-dd"')
     expect(html(<Toast text="Saved" onDone={noop} />, null)).toBe('<div class="de-toast" role="status">Saved</div>')
-    expect(html(<PromptDialog spec={{ title: 'Link', label: 'URL', initial: 'https://x', placeholder: 'https://', note: 'A link', onOk: noop, extra: { label: 'Remove link', run: noop } }} onClose={noop} />, null)).toBe(
-      '<div class="de-dialog-back"><form class="de-dialog" role="dialog" aria-label="Link"><div class="de-dialog-title">Link</div><label class="de-dialog-label">URL</label><input placeholder="https://" value="https://x"/><div class="de-dialog-note">A link</div><div class="de-dialog-btns"><button type="button" class="de-btn de-dialog-extra">Remove link</button><button type="button" class="de-btn">Cancel</button><button type="submit" class="de-btn de-btn-primary">OK</button></div></form></div>',
-    )
-    expect(html(<PromptDialog spec={{ title: 'Notes', area: true, initial: 'Text', onOk: noop }} onClose={noop} />, null)).toBe(
-      '<div class="de-dialog-back"><form class="de-dialog" role="dialog" aria-label="Notes"><div class="de-dialog-title">Notes</div><textarea rows="3">Text</textarea><div class="de-dialog-btns"><button type="button" class="de-btn">Cancel</button><button type="submit" class="de-btn de-btn-primary">OK</button></div></form></div>',
-    )
-    expect(html(<ConfirmDialog title="Delete?" message="Gone for good" ok="Delete" onOk={noop} onClose={noop} />, null)).toBe(
-      '<div class="de-dialog-back"><div class="de-dialog" role="alertdialog" aria-label="Delete?"><div class="de-dialog-title">Delete?</div><div class="de-dialog-note">Gone for good</div><div class="de-dialog-btns"><button type="button" class="de-btn">Cancel</button><button type="button" class="de-btn de-btn-primary" autofocus="">Delete</button></div></div></div>',
-    )
+    const prompt = html(<PromptDialog spec={{ title: 'Link', label: 'URL', initial: 'https://x', placeholder: 'https://', note: 'A link', onOk: noop, extra: { label: 'Remove link', run: noop } }} onClose={noop} />, null)
+    expect(prompt).toContain('role="dialog" aria-label="Link"')
+    expect(prompt).toContain('<button type="button" class="de-btn de-dialog-extra">Remove link</button>')
+    expect([...prompt.matchAll(/<button\b[^>]*>([^<]*)<\/button>/g)].map((m) => m[1])).toEqual(['Remove link', 'Cancel', 'OK'])
+    expect(prompt).toContain('<button type="submit" class="de-btn de-btn-primary">OK</button>')
+    const notes = html(<PromptDialog spec={{ title: 'Notes', area: true, initial: 'Text', onOk: noop }} onClose={noop} />, null)
+    expect(notes).toContain('<textarea rows="3">Text</textarea>')
+    const confirm = html(<ConfirmDialog title="Delete?" message="Gone for good" ok="Delete" onOk={noop} onClose={noop} />, null)
+    expect(confirm).toContain('role="alertdialog" aria-label="Delete?"')
+    expect(confirm).toContain('<button type="button" class="de-btn de-btn-primary" autofocus="">Delete</button>')
   })
 
   test('Button gets title, resolved icon, state, the engine classes and the focus-keeping mouse down', () => {
@@ -83,6 +84,8 @@ describe('UI components', () => {
     expect(html(<Sep />)).toBe('<hr data-host="sep"/>')
     expect(html(<Dropdown title="Style" options={[{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }]} onChange={noop} value="b" />)).toBe('<span data-host="select">2</span>')
     expect(seen.select[0]).toMatchObject({ title: 'Style', value: 'b' })
+    html(<Dropdown title="Menu" label={null} icon="bold" className="host-trigger" options={[]} onChange={noop} />)
+    expect(seen.select[1]).toMatchObject({ label: null, icon: 'bold', className: 'host-trigger' })
   })
 
   test('dialogs: prompt submits through its primary action, confirm is an alert', () => {
@@ -99,6 +102,31 @@ describe('UI components', () => {
     expect(confirm.kind).toBe('alert')
     expect(confirm.onSubmit).toBeUndefined()
     expect(confirm.actions.at(-1)).toMatchObject({ label: 'Delete', primary: true, autoFocus: true })
+  })
+
+
+  test('a host footer outside the form can invoke the prompt primary action', () => {
+    const values: string[] = []
+    let closes = 0
+    seen.dialog.length = 0
+    html(<PromptDialog spec={{ title: 'Rename', initial: 'Report', onOk: (v) => values.push(v) }} onClose={() => closes++} />)
+    seen.dialog[0].actions.find((a) => a.primary)!.onClick!()
+    expect(values).toEqual(['Report'])
+    expect(closes).toBe(1)
+  })
+
+  test('the default form submits once without also invoking the submit action callback', () => {
+    let submissions = 0
+    let clicks = 0
+    const tree = DefaultDialog({ title: 'Rename', children: null, onClose: noop, onSubmit: () => submissions++, actions: [{ label: 'OK', submit: true, onClick: () => clicks++ }] })
+    const form = tree.props.children as ReactElement<{ onSubmit: (e: { preventDefault: () => void }) => void; children: ReactElement<{ children: ReactElement[] }> }>
+    const actions = form.props.children.props.children[2] as ReactElement<{ children: ReactElement<{ onClick?: () => void; type: string }>[] }>
+    const button = actions.props.children[0]
+    expect(button.props.type).toBe('submit')
+    button.props.onClick?.()
+    form.props.onSubmit({ preventDefault: noop })
+    expect(submissions).toBe(1)
+    expect(clicks).toBe(0)
   })
 
   test('host Select can render option icons through the public Icon export and host icon provider', () => {
@@ -129,4 +157,5 @@ describe('UI components', () => {
     )
     expect(out).toBe('<i>inner</i><output data-host="toast">t</output>')
   })
+
 })

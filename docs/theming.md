@@ -110,13 +110,20 @@ const components: Partial<UIComponents> = { Button: ViewerButton, Separator: Vie
 />
 ```
 
-| Component | Used for | Props |
-|---|---|---|
-| `Button` | every toolbar button, the toggles that open color, table and border pickers, the overflow button | `ButtonProps`: `title`, `icon` (resolved through `icons`), `iconName`, `label`, `children`, `active`, `expanded`, `disabled`, `wide`, `onClick`, `onMouseDown`, `className` (the built-in classes) |
-| `Select` | font, size list, style, format and menu dropdowns | `SelectProps`: `title`, `options` (`DropOption`: `value`, `label`, `hint`, `icon`, `disabled`, `sep`, `head`, `style`), `value` (undefined for a command menu), `onChange`, `label`, `placeholder`, `width`, `menuWidth`, `disabled`, `alignRight` |
-| `Separator` | between toolbar groups | none |
-| `Dialog` | prompts (link, rename, …) and confirmations | `DialogProps`: `title`, `kind` (`'alert'` for a question), `children` (the body), `actions` (`label`, `onClick`, `extra` for an auxiliary action such as Remove link, `primary`, `submit`, `autoFocus`), `onSubmit` (the body is a form), `onClose` (Escape, backdrop) |
-| `Toast` | short messages at the bottom | `text` (the viewer removes it after a few seconds) |
+| Component   | Used for                                                                                         | Props                                                                                                                                                                                                                                                                                                                                                                                |
+| ----------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Button`    | every toolbar button, the toggles that open color, table and border pickers, the overflow button | `ButtonProps`: `title`, `icon` (resolved through `icons`), `iconName`, `label`, `children`, `active`, `expanded`, `disabled`, `wide`, `onClick`, `onMouseDown`, `className` (the built-in classes)                                                                                                                                                                                   |
+| `Select`    | font, style, format and menu dropdowns                                                           | `SelectProps`: `title`, `options` (`DropOption`: `value`, `label`, `hint`, `icon`, `disabled`, `sep`, `head`, `style`), `value` (undefined for a command menu), `onChange`, `label` (`null` hides the label for an icon-only trigger), `icon` (an `IconName`, not a resolved node), `className` (extra trigger class), `placeholder`, `width`, `menuWidth`, `disabled`, `alignRight` |
+| `Separator` | between toolbar groups                                                                           | none                                                                                                                                                                                                                                                                                                                                                                                 |
+| `Dialog`    | prompts (link, rename, …) and confirmations                                                      | `DialogProps`: `title`, `kind` (`'alert'` for a question), `children` (the body), `actions` (`label`, `onClick`, `extra` for an auxiliary action such as Remove link, `primary`, `submit`, `autoFocus`), `onSubmit` (the body is a form), `onClose` (Escape, backdrop)                                                                                                               |
+| `Toast`     | short messages at the bottom                                                                     | `text` (the viewer removes it after a few seconds)                                                                                                                                                                                                                                                                                                                                   |
+
+The font-size input and its list (`SizeBox`), Page setup, Header / footer and Details dialogs, and the buttons
+inside border pickers retain the built-in markup. `components` replaces the controls listed above.
+
+A host Dialog can put its footer outside the form: call the action's `onClick` from a regular button. Inside
+a form, render `submit` actions as submit buttons and let `onSubmit` run them; do not also call their `onClick`,
+which would submit twice. Keep `onClick` for the other actions.
 
 The document must keep the focus while a toolbar control is used, or the command loses its selection:
 
@@ -125,6 +132,12 @@ The document must keep the focus while a toolbar control is used, or the command
   The built-in one captures the keys at the window while open.
 
 The overflow menu measures each toolbar item from a wrapper of its own, so a host component needs no ref.
+It measures the More button in the same pass and remeasures when Button, Select or Separator is replaced.
+
+Host Select lists rendered with React's `createPortal` remain inside their surrounding overflow menu or popover
+for outside-click handling. The portal must belong to the same React tree as the Select. An independently
+mounted React root or a non-React overlay has no such ownership path; render that list inside the Select's DOM
+subtree instead.
 
 A host `Select` can render its trigger and option icons with the exported `Icon`: `<Icon name={option.icon} size={16} />`
 (when `option.icon` is set). It uses the viewer's `icons` overrides and falls back to the built-in SVGs.

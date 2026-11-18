@@ -42,6 +42,7 @@ export interface SelectProps<T extends string | number = string | number> {
   placeholder?: string
   /** fixed trigger content (menus); null = icon only */
   label?: ReactNode
+  /** Icon name, rendered by the host with `<Icon name={icon} />` (unlike Button's resolved node). */
   icon?: IconName
   width?: number
   menuWidth?: number
@@ -59,7 +60,7 @@ export interface DialogAction {
   extra?: boolean
   /** the main action: styled as such; with `submit`, also what Enter does */
   primary?: boolean
-  /** submits the dialog's form (`onSubmit`) */
+  /** submits the dialog's form (`onSubmit`); hosts with an external footer can call `onClick` instead */
   submit?: boolean
   autoFocus?: boolean
 }
@@ -125,7 +126,7 @@ export function DefaultDialog(props: DialogProps) {
             type={a.submit ? 'submit' : 'button'}
             className={'de-btn' + (a.primary ? ' de-btn-primary' : '') + (a.extra ? ' de-dialog-extra' : '')}
             autoFocus={a.autoFocus}
-            onClick={a.onClick}
+            onClick={a.submit && props.onSubmit ? undefined : a.onClick}
           >
             {a.label}
           </button>

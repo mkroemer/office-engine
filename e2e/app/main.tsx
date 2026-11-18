@@ -51,7 +51,7 @@ const components: Partial<UIComponents> = {
   Separator: () => <i data-host-sep="" />,
   Dialog: (p) => {
     const actions = p.actions.map((a, i) => (
-      <button key={i} type={a.submit ? 'submit' : 'button'} data-primary={a.primary || undefined} autoFocus={a.autoFocus} onClick={a.onClick}>
+      <button key={i} type={a.submit ? 'submit' : 'button'} data-primary={a.primary || undefined} autoFocus={a.autoFocus} onClick={a.submit && p.onSubmit ? undefined : a.onClick}>
         {a.label}
       </button>
     ))

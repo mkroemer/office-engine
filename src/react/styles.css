@@ -688,7 +688,7 @@
   color: var(--de-ink);
 }
 .de-ebar-it { display: inline-flex; align-items: center; flex: none; }
-.de-ebar-morewrap { margin-left: auto; }
+.de-ebar-morewrap { margin-left: auto; flex: none; }
 .de-tb-pop.de-ebar-more {
   left: auto;
   right: 0;
