@@ -2,6 +2,9 @@
 import { expect, test } from 'bun:test'
 import { docxParas, paraText, runsOf, useBrowser, viewer } from './harness'
 
+import { builtModule, useBuiltPackage } from './built-package'
+
+useBuiltPackage()
 useBrowser()
 
 test('built UI inherits German through formatting-only locales and defined components, preserving real edits', async () => {
@@ -29,7 +32,7 @@ test('built UI inherits German through formatting-only locales and defined compo
     }
     ;(window as any).__builtUpdate = (p: any) => { current = { ...current, ...p }; render() }
     render()
-  }, { pkg: `/@fs${process.cwd()}/dist/index.js`, german: `/@fs${process.cwd()}/dist/locales/de.js` })
+  }, { pkg: builtModule('index.js'), german: builtModule('locales/de.js') })
   await v.ready('docx')
   expect(await v.page.locator('.de-file').innerText()).toBe('Ablage')
   await v.selectText('document')
