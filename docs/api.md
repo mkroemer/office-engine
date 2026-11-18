@@ -85,7 +85,6 @@ CSS is auto-injected, no import needed (or import `@p10node/office-engine/styles
 | `onError`          | `(error) => void`                              | –         |                                                                                                                          |
 | `controller`       | `ViewerController`                             | its own   | The viewer's state and commands for the host, see [headless mode](#headless-mode)                                        |
 | `headless`         | `boolean`                                      | `false`   | The document alone: no top bar, zoom control, outline panel, sheet tabs or slide list                                    |
-| `icons`            | `Partial<Record<string, ReactNode>>`           | –         | The host's icons by name (`ICON_NAMES`), sized by font-size (1em), instead of the built-in ones                          |
 
 ### Headless mode
 
@@ -145,6 +144,10 @@ Prevent the default mouse-down action on host outline buttons (as above) to pres
 New/Open replace the document and remain available for a read-only file when `allowOpen` permits them.
 Import requires `allowEdit` and an editable workbook; it remains available with `allowOpen={false}`. Controllers are created with
 `createViewerController()`; publishing and attachment methods are internal to the engine.
+
+Use one controller per mounted viewer. Give a modal or fullscreen viewer its own controller, even when it shows the same file.
+During a temporary overlap, the latest mounted viewer owns a shared controller. Releasing it clears the controller;
+an older viewer that remains mounted does not automatically regain ownership.
 
 ### Comments
 
