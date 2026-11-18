@@ -28,6 +28,8 @@ import { paginate, type PageSlice } from './paginate'
 const PX = 4 / 3
 const GAP = 16
 const PAD = 24
+// Stay below browser element-height limits, as the spreadsheet view does.
+const MAX_SCROLL_PX = 12_000_000
 
 const started = new WeakSet<DocumentClient>()
 
@@ -209,11 +211,37 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   }
   const skeleton = complete ? 0 : 1
   const totalH = acc + skeleton * (pageH * z + GAP) + PAD - GAP
+  const spacerH = Math.min(totalH, MAX_SCROLL_PX)
+  const maxLogicalY = Math.max(0, totalH - size.h)
+  const maxScrollY = Math.max(0, spacerH - size.h)
+  const scrollScale = maxScrollY > 0 ? Math.max(1, maxLogicalY / maxScrollY) : 1
+  const scrollY = Math.min(maxLogicalY, scroll.y * scrollScale)
+  const scrollOffset = scrollY - scroll.y
+  const scrollToY = (y: number) => {
+    if (scrollRef.current) scrollRef.current.scrollTop = Math.max(0, Math.min(maxLogicalY, y)) / scrollScale
+  }
+  const scrollByY = (delta: number) => {
+    if (scrollRef.current) scrollRef.current.scrollTop += delta / scrollScale
+  }
+  const renderedScroll = useRef(scroll.y)
+  useIsoLayoutEffect(() => { renderedScroll.current = scroll.y })
+  // A native scroll changes the viewport before useScroll's frame-batched
+  // update repositions the pages. Measure a target only after that commit.
+  const afterScroll = (run: () => void) => {
+    let frames = 0
+    const tick = () => {
+      const sc = scrollRef.current
+      if (!sc || ++frames > 120) return
+      if (Math.abs(sc.scrollTop - renderedScroll.current) > 1) requestAnimationFrame(tick)
+      else run()
+    }
+    requestAnimationFrame(tick)
+  }
   const totalW = Math.max(size.w, pageW * z + PAD * 2)
   const left = Math.max(PAD, (totalW - pageW * z) / 2)
 
-  const first = tops.length ? lowerIndex(tops, scroll.y - pageH * z) : 0
-  const last = tops.length ? lowerIndex(tops, scroll.y + size.h + 200) : -1
+  const first = tops.length ? lowerIndex(tops, scrollY - pageH * z) : 0
+  const last = tops.length ? lowerIndex(tops, scrollY + size.h + 200) : -1
   const pageCount = complete ? pages.length : 0
   // Both ends of the selection stay mounted, so the DOM selection survives scrolling. A removed page moves its end of
   // the range to the pages container, and a page mounted again there lands after that point: outside a range that ends on it.
@@ -225,7 +253,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   editor.contentW = contentW
   editor.defaultFont = meta?.font
   editor.defaultSz = meta?.sz
-  const cur = tops.length ? lowerIndex(tops, scroll.y + size.h / 3) + 1 : 0
+  const cur = tops.length ? lowerIndex(tops, scrollY + size.h / 3) + 1 : 0
   // word count (debounced, off the typing path)
   const [words, setWords] = useState(0)
   useEffect(() => {
@@ -332,11 +360,15 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   useIsoLayoutEffect(() => {
     const sel = editor.pendingSel
     if (!sel || !pagesRef.current) return
+    const bi = Number(sel.f.pa.split('.')[0])
+    const pi = pages.findIndex((p) => bi >= p.start && bi < p.end)
+    if (pi >= 0 && (pi < first || pi > last)) {
+      scrollToY(tops[pi] - 16)
+      return
+    }
     if (!editor.input.restore(sel)) {
       // caret paragraph not rendered (scrolled away): bring its page into view, retry next render
-      const bi = Number(sel.f.pa.split('.')[0])
-      const pi = pages.findIndex((p) => bi >= p.start && bi < p.end)
-      if (pi >= 0 && scrollRef.current) scrollRef.current.scrollTop = Math.max(0, tops[pi] - 16)
+      if (pi >= 0) scrollToY(tops[pi] - 16)
       if (pi < 0 || (pi >= first && pi <= last)) editor.pendingSel = null
       return
     }
@@ -348,8 +380,8 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     if (range && sc) {
       const r = range.getBoundingClientRect()
       const box = sc.getBoundingClientRect()
-      if (r.height && r.bottom > box.bottom - 24) sc.scrollTop += r.bottom - box.bottom + 48
-      else if (r.height && r.top < box.top + 8) sc.scrollTop -= box.top - r.top + 48
+      if (r.height && r.bottom > box.bottom - 24) scrollByY(r.bottom - box.bottom + 48)
+      else if (r.height && r.top < box.top + 8) scrollByY(-(box.top - r.top + 48))
     }
   })
 
@@ -376,24 +408,22 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     const sc = scrollRef.current
     if (!m || !sc) return
     const pi = pages.findIndex((p) => m.bi >= p.start && m.bi < p.end)
-    if (pi >= 0) sc.scrollTop = Math.max(0, tops[pi] - 16)
+    if (pi >= 0) scrollToY(tops[pi] - 16)
     setFind((f) => ({ ...f, idx }))
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() => {
-        const root = pagesRef.current
-        if (!root) return
-        const a = domFromPos(root, { pa: m.pa, o: m.a })
-        const b = domFromPos(root, { pa: m.pa, o: m.b })
-        if (!a || !b) return
-        const r = document.createRange()
-        r.setStart(a[0], a[1])
-        r.setEnd(b[0], b[1])
-        const rect = r.getBoundingClientRect()
-        const box = sc.getBoundingClientRect()
-        sc.scrollTop += rect.top - box.top - box.height / 3
-        if (isEditing) editor.input.restore({ a: { pa: m.pa, o: m.a }, f: { pa: m.pa, o: m.b } }, false)
-      }),
-    )
+    afterScroll(() => {
+      const root = pagesRef.current
+      if (!root) return
+      const a = domFromPos(root, { pa: m.pa, o: m.a })
+      const b = domFromPos(root, { pa: m.pa, o: m.b })
+      if (!a || !b) return
+      const r = document.createRange()
+      r.setStart(a[0], a[1])
+      r.setEnd(b[0], b[1])
+      const rect = r.getBoundingClientRect()
+      const box = sc.getBoundingClientRect()
+      scrollByY(rect.top - box.top - box.height / 3)
+      if (isEditing) editor.input.restore({ a: { pa: m.pa, o: m.a }, f: { pa: m.pa, o: m.b } }, false)
+    })
   }
 
   // highlight visible matches (CSS Custom Highlight API)
@@ -691,12 +721,12 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
       if (!el) return false
       const r = el.getBoundingClientRect()
       const box = sc.getBoundingClientRect()
-      if (r.top < box.top + 24 || r.bottom > box.bottom - 24) sc.scrollTop += r.top - box.top - box.height / 3
+      if (r.top < box.top + 24 || r.bottom > box.bottom - 24) scrollByY(r.top - box.top - box.height / 3)
       return true
     }
     if (show()) return
-    sc.scrollTop = Math.max(0, tops[pi] - 16)
-    requestAnimationFrame(() => requestAnimationFrame(() => void show()))
+    scrollToY(tops[pi] - 16)
+    afterScroll(() => void show())
   }
   useEffect(() => {
     if (!cm) return
@@ -755,14 +785,12 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     const sc = scrollRef.current
     const pi = pages.findIndex((p) => bi >= p.start && bi < p.end)
     if (!sc || pi < 0) return
-    sc.scrollTop = Math.max(0, tops[pi] - 16)
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() => {
-        const el = pagesRef.current?.querySelector(`[data-pa="${bi}"]`)
-        if (el) sc.scrollTop += el.getBoundingClientRect().top - sc.getBoundingClientRect().top - 24
-        if (isEditing) editor.input.restore({ a: { pa: String(bi), o: 0 }, f: { pa: String(bi), o: 0 } })
-      }),
-    )
+    scrollToY(tops[pi] - 16)
+    afterScroll(() => {
+      const el = pagesRef.current?.querySelector(`[data-pa="${bi}"]`)
+      if (el) scrollByY(el.getBoundingClientRect().top - sc.getBoundingClientRect().top - 24)
+      if (isEditing) editor.input.restore({ a: { pa: String(bi), o: 0 }, f: { pa: String(bi), o: 0 } })
+    })
   }
 
   return (
@@ -788,7 +816,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
         <div
           ref={pagesRef}
           className={isEditing ? 'de-pages de-editing' : 'de-pages'}
-          style={{ height: totalH, width: totalW }}
+          style={{ height: spacerH, width: totalW, overflow: scrollScale > 1 ? 'clip' : undefined }}
           contentEditable={isEditing || undefined}
           suppressContentEditableWarning
           spellCheck={false}
@@ -830,7 +858,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
                 blocks={st.blocks}
                 meta={meta}
                 page={page}
-                top={tops[i]}
+                top={tops[i] - scrollOffset}
                 left={left}
                 height={pageHeights[i]}
                 zoom={z}
@@ -842,7 +870,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
               />
             ),
           )}
-          {skeleton > 0 && <div className="de-page-skeleton" contentEditable={false} style={{ top: acc, left, width: pageW * z, height: pageH * z }} />}
+          {skeleton > 0 && <div className="de-page-skeleton" contentEditable={false} style={{ top: acc - scrollOffset, left, width: pageW * z, height: pageH * z }} />}
         </div>
         {imgBox && (
           <div className="de-img-sel" style={{ left: imgBox.x, top: imgBox.y, width: imgBox.w, height: imgBox.h }}>
