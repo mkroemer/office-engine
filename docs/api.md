@@ -105,7 +105,7 @@ function Viewer({ file }: { file: File }) {
     <>
       <nav>
         {s.outline?.items.map((i) => (
-          <button key={i.id} aria-current={i.current} style={{ paddingLeft: i.level * 12 }} onClick={() => ctl.goto(i.id)}>
+          <button key={i.id} aria-current={i.current} style={{ paddingLeft: i.level * 12 }} onMouseDown={(e) => e.preventDefault()} onClick={() => ctl.goto(i.id)}>
             {i.title}
           </button>
         ))}
@@ -138,10 +138,12 @@ action: `pdf`, `html`, `text:md`, `details`, `rename`…), `toggleComments(open?
 for does nothing. `subscribe(fn)` returns its unsubscribe; `snapshot()` the current state. Without `react`, `mount()`
 returns the controller (`mounted.controller`), and `<office-viewer headless>` has it as `element.controller`.
 
-Controller actions obey `allowEdit`, `allowSave`, `allowDownload` and `allowOpen` even when the File menu is hidden.
+Controller actions obey `allowSave`, `allowDownload` and `allowOpen` even when the File menu is hidden.
 `fileMenu={false}` hides that menu and its keyboard shortcuts; it does not disable a host's controller controls.
+`allowEdit` controls the Edit/View toggle and CSV import; `editable` and `setEditing()` control edit mode, including when the toggle is hidden.
+Prevent the default mouse-down action on host outline buttons (as above) to preserve the editor focus and an open XLSX formula while switching sheets.
 New/Open replace the document and remain available for a read-only file when `allowOpen` permits them.
-Import changes a workbook and additionally requires editing permission. Controllers are created with
+Import requires `allowEdit` and an editable workbook; it remains available with `allowOpen={false}`. Controllers are created with
 `createViewerController()`; publishing and attachment methods are internal to the engine.
 
 ### Comments

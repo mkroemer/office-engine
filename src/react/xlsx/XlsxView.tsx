@@ -7,7 +7,7 @@ import { closeFormula, formulaContext, isFormula, rangeText, type FormulaContext
 import { argSlot, functionInfo, suggestFunctions, type FnInfo } from '../../core/xlsx/formula/catalog'
 import { MAX_COL, MAX_ROW } from '../../core/xlsx/formula/types'
 import type { DocumentClient } from '../../core/worker/client'
-import { getPeers, publishLocal, subscribePeers } from '../../collab/hosts'
+import { getPeers, publishLocal, subscribePeers, getLocalHistory, subscribeLocalHistory } from '../../collab/hosts'
 import { claimFocus, useForceUpdate, useScroll, useSize } from '../common/hooks'
 import { useFileOps, useViewer, useSelectAll } from '../common/Slots'
 import { useViewCommands } from '../controller'
@@ -88,12 +88,21 @@ class XlsxStore {
   /** focus the grid when the next sheet grid mounts */
   focusGrid = false
   /** edits that undo / redo can still take back (counted here: the worker's history says nothing until asked) */
-  history = { undo: 0, redo: 0 }
+  private standaloneHistory = { undo: 0, redo: 0 }
+  get history() { return getLocalHistory(this.client) ?? this.standaloneHistory }
+  set history(history: { undo: number; redo: number }) {
+    if (!getLocalHistory(this.client)) this.standaloneHistory = history
+  }
   private listeners = new Set<() => void>()
+  private editListeners = new Set<() => void>()
   private off: () => void
 
   constructor(private client: DocumentClient) {
     const offs = [
+      subscribeLocalHistory(client, () => {
+        this.standaloneHistory = { undo: 0, redo: 0 }
+        this.emit()
+      }),
       client.on('xlsx:progress', (p) => this.onProgress(p)),
       // edits of collaborators (src/collab)
       client.on('collab:xlsx', (res) => this.applied(res, client.info.xlsx as WorkbookMeta)),
@@ -106,6 +115,16 @@ class XlsxStore {
     return () => {
       this.listeners.delete(fn)
     }
+  }
+
+  onEdit(fn: () => void) {
+    this.editListeners.add(fn)
+    return () => { this.editListeners.delete(fn) }
+  }
+
+  edited() {
+    for (const fn of this.editListeners) fn()
+    this.emit()
   }
 
   emit() {
@@ -270,6 +289,9 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
     : `${str.xlsx.status(state.rows, state.cols, str.locale)}${state.done ? '' : str.xlsx.statusLoading}${state.rows > MAX_ROWS ? str.xlsx.overLimit(MAX_ROWS, str.locale) : ''}`
 
   const viewer = useViewer()
+  // The workbook owns completion publication even when the grid that began the edit changed sheets.
+  // Layout cleanup removes this listener before a replacement document can receive late dirty state.
+  useLayoutEffect(() => store.onEdit(() => viewer.setDirty(true)), [store, viewer.setDirty])
   useFileOps({
     printable: () => sheetPrintable(client, cur, store.sheet(cur), meta, str),
     text: (format) => client.call('xlsx.text', cur, format === 'tsv' ? '\t' : ','),
@@ -406,7 +428,8 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
   const gridCommands = useRef<{ undo: () => void; redo: () => void } | null>(null)
   const sheetItems = meta.sheets.filter((s) => !s.hidden).map((s) => ({ id: String(s.index), title: s.name, level: 0, current: s.index === cur }))
   useEffect(() => {
-    ctl?.update({ outline: { kind: 'sheets', items: sheetItems } })
+    const h = store.history
+    ctl?.update({ outline: { kind: 'sheets', items: sheetItems }, canUndo: viewer.editable && h.undo > 0, canRedo: viewer.editable && h.redo > 0 })
   })
   useViewCommands(ctl, {
     goto: (id) => {
@@ -590,12 +613,6 @@ export function withMerges(r: Range, merges: Merge[]): Range {
 
 function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, gridCommands }: GridProps) {
   const viewer = useViewer()
-  // Async edits may outlive this grid, its document, or the controller / edit mode that started them.
-  const currentViewer = useRef<typeof viewer | null>(null)
-  useLayoutEffect(() => {
-    currentViewer.current = viewer
-    return () => { currentViewer.current = null }
-  }, [viewer])
   const str = useStrings()
   const editable = viewer.editable
   const s = store.sheet(sheet)
@@ -1005,7 +1022,6 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
       store.applied(res, meta)
       const h = store.history
       if (res) {
-        viewer.setDirty(true)
         if (kind === 'edit') store.history = { undo: h.undo + 1, redo: 0 }
         else if (kind === 'undo') store.history = { undo: Math.max(0, h.undo - 1), redo: h.redo + 1 }
         else store.history = { undo: h.undo + 1, redo: Math.max(0, h.redo - 1) }
@@ -1013,10 +1029,9 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
       // nothing to undo or redo: the worker's history is shorter than counted (it keeps the last 200 edits)
       else if (kind === 'undo') store.history = { ...h, undo: 0 }
       else if (kind === 'redo') store.history = { ...h, redo: 0 }
-      const current = currentViewer.current
-      if (current?.client === client) {
-        current.ctl?.update({ canUndo: current.editable && store.history.undo > 0, canRedo: current.editable && store.history.redo > 0 })
-      }
+      // The current workbook view publishes dirty/history; a detached store has no listeners.
+      if (res) store.edited()
+      else store.emit()
       setDetailTick((t) => t + 1)
     } catch (e) {
       console.error('[office-engine]', e)
@@ -1220,8 +1235,6 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
   // the controller's undo / redo: this sheet's grid runs them while it is shown
   useEffect(() => {
     gridCommands.current = { undo: () => editable && undo(), redo: () => editable && redo() }
-    const h = store.history
-    viewer.ctl?.update({ canUndo: editable && h.undo > 0, canRedo: editable && h.redo > 0 })
   })
 
   /** the selection as clipboard text, when all its rows are at hand (else null: the worker has them) */

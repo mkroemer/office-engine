@@ -8,7 +8,7 @@ import { claimFocus, lowerIndex, useForceUpdate, useIsoLayoutEffect, useScroll, 
 import { useFileOps, useSelectAll, useViewer } from '../common/Slots'
 import { Status } from '../common/Status'
 import { ZoomControl, type Zoom } from '../common/ZoomControl'
-import { useViewCommands } from '../controller'
+import { useViewCommands, useControllerObserved } from '../controller'
 import { ContextMenu, MOD, type MenuItem } from '../common/ContextMenu'
 import { PromptDialog, Toast, type PromptSpec } from '../common/Dialog'
 import { domFromPos, getSel, opInsert, posFromDom, selPoints } from '../edit/input'
@@ -778,12 +778,13 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   // ---- controller: zoom, page, headings, undo ----
   const { ctl, headless } = viewer
   // the headings for the controller: read again once the document stops changing, not on every keystroke
+  const observed = useControllerObserved(ctl)
   const [ctlHeadings, setCtlHeadings] = useState<{ bi: number; lvl: number; text: string }[]>([])
   useEffect(() => {
-    if (!ctl) return
+    if (!observed) return
     const id = setTimeout(() => setCtlHeadings(outlineOf(st.blocks, titleId)), 150)
     return () => clearTimeout(id)
-  }, [ctl, version, titleId, st])
+  }, [observed, version, titleId, st])
   const ctlActive = ctlHeadings.reduce((acc, h, i) => (h.bi <= atBlock ? i : acc), -1)
   useEffect(() => {
     ctl?.update({ zoom: { value: zoom, effective: z } })

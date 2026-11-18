@@ -134,9 +134,9 @@ export function useFileActions(o: FileActionsOptions): FileActions {
         return
       }
       case 'rename':
-        return c.rename?.()
+        return c.kind ? c.rename?.() : undefined
       case 'details':
-        return c.details?.()
+        return c.kind ? c.details?.() : undefined
       case 'close':
         return c.close?.()
       case 'save':

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { rebuildZip } from '../src/core/zipwrite'
-import { SAMPLES, useBrowser, viewer } from './harness'
+import { SAMPLES, useBrowser, viewer, fromB64, xlsxSheet } from './harness'
 
 useBrowser()
 
@@ -47,6 +47,40 @@ describe('real-time collaboration', () => {
     expect(await b.shown('J10')).toBe('from Ann')
     await b.typeCell('J11', '=LEN(J10)')
     await a.page.waitForFunction(() => [...document.querySelectorAll('.de-cell')].some((c) => (c as HTMLElement).innerText === '8'), null, { timeout: 20_000 })
+  })
+
+  test('controller history follows collaboration across rename and save/reopen', async () => {
+    const id = await room('sample.xlsx')
+    const v = await viewer({ src: `${HTTP}/rooms/${id}/file?seq=0`, name: 'shared.xlsx', collab: `ws://localhost:${PORT}/collab`, room: id, user: 'Ann', editable: true, controller: true, onSave: true })
+    await v.page.locator('.de-collab-live').waitFor()
+    await v.typeCell('J12', 'before rename')
+    await v.page.waitForFunction(() => window.__ctl.snapshot().canUndo)
+    await v.page.locator('.de-tab[role=tab]').first().dblclick()
+    await v.page.locator('.de-tab-input').fill('Renamed')
+    await v.page.keyboard.press('Enter')
+    await v.page.waitForFunction(() => window.__ctl.snapshot().outline?.items[0].title === 'Renamed')
+    expect(await v.page.evaluate(() => window.__ctl.snapshot().canUndo)).toBe(false)
+    // Verify Ctrl+Z and the controller agree on the actual document, rather than just flags.
+    await v.page.locator('.de-grid').focus()
+    await v.page.keyboard.press('Control+z')
+    await v.page.evaluate(() => window.__ctl.save())
+    let saved = await v.waitEvent('save')
+    expect((await xlsxSheet(fromB64(saved.b64 as string))).cell('J12')).toBe('before rename')
+    await v.typeCell('J12', 'after rename')
+    await v.page.waitForFunction(() => window.__ctl.snapshot().canUndo)
+    await v.page.evaluate(() => window.__ctl.undo())
+    await v.page.waitForFunction(() => window.__ctl.snapshot().canRedo && !window.__ctl.snapshot().canUndo)
+    await v.page.evaluate(() => window.__ctl.save())
+    saved = await v.waitEvent('save', 2)
+    expect((await xlsxSheet(fromB64(saved.b64 as string))).cell('J12')).toBe('before rename')
+    await v.page.evaluate(() => window.__ctl.redo())
+    await v.page.waitForFunction(() => window.__ctl.snapshot().canUndo && !window.__ctl.snapshot().canRedo)
+    await v.page.evaluate(() => window.__ctl.save())
+    saved = await v.waitEvent('save', 3)
+    const reopened = await xlsxSheet(fromB64(saved.b64 as string))
+    expect(reopened.names[0]).toBe('Renamed')
+    expect(reopened.cell('J12')).toBe('after rename')
+    expect(v.errors).toEqual([])
   })
 
   test('a newcomer opens the latest snapshot and only replays later edits', async () => {

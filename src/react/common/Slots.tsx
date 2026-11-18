@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { ToolbarRow } from '../edit/Toolbar'
 import type { DocumentClient } from '../../core/worker/client'
 import type { Printable } from '../file/print'
-import type { InternalViewerController } from '../controller'
+import type { ViewController } from '../controller'
 
 /** What the active view offers to the File menu. */
 export interface FileOps {
@@ -35,7 +35,7 @@ export interface ViewerApi {
   /** set by the mounted view (see useSelectAll): Ctrl/⌘+A */
   selectAll: { current: (() => void) | null }
   /** the viewer's controller: the view publishes its state and registers its commands there */
-  ctl: InternalViewerController | null
+  ctl: ViewController | null
   /** the host draws the controls: the view shows no zoom, outline, sheet tabs or slide list of its own */
   headless: boolean
 }

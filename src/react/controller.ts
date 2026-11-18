@@ -67,6 +67,18 @@ export interface ViewerCommands {
   toggleComments(open?: boolean): void
 }
 
+type ViewState = Pick<ViewerState, 'canUndo' | 'canRedo' | 'zoom' | 'page' | 'outline' | 'status'>
+type ViewerPublication = Omit<ViewerState, keyof ViewState | 'rev'>
+
+/** Internal, document-scoped publication and command registration. Never part of the host API. */
+export interface ViewController {
+  activate(): () => void
+  update(state: Partial<ViewState>): void
+  attachView(commands: ViewCommands): () => void
+  readonly observed: boolean
+  watchObserved(fn: () => void): () => void
+}
+
 /** the view's part of the state, cleared when a view goes */
 const VIEW_STATE = { canUndo: false, canRedo: false, zoom: null, page: null, outline: null, status: '' } as const
 
@@ -82,12 +94,17 @@ function same(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b)
 }
 
+const controllerBrand: unique symbol = Symbol('ViewerController')
+
 export class InternalViewerController {
+  readonly [controllerBrand] = true as const
   private state: ViewerState = EMPTY
   private subs = new Set<() => void>()
   private watchers = new Set<() => void>()
   private view: ViewCommands | null = null
   private viewer: ViewerCommands | null = null
+  private owner: object | null = null
+  private viewOwner: object | null = null
 
   subscribe = (fn: () => void) => {
     const first = this.subs.size === 0
@@ -116,61 +133,62 @@ export class InternalViewerController {
 
   // ---------------------------------------------------------------- commands
 
-  setEditing(on: boolean) {
+  setEditing = (on: boolean) => {
     this.viewer?.setEditing(on)
   }
 
   /** builds the edited file and hands it to `onSave` (or downloads it) */
-  save(): Promise<void> {
+  save = (): Promise<void> => {
     return this.viewer?.save() ?? Promise.resolve()
   }
 
-  undo() {
+  undo = () => {
     this.view?.undo?.()
   }
 
-  redo() {
+  redo = () => {
     this.view?.redo?.()
   }
 
-  setZoom(z: Zoom) {
-    this.view?.setZoom?.(z)
+  setZoom = (z: Zoom) => {
+    if (z === 'fit') this.view?.setZoom?.(z)
+    else if (Number.isFinite(z)) this.view?.setZoom?.(Math.min(3, Math.max(0.25, z)))
   }
 
-  zoomIn() {
+  zoomIn = () => {
     this.zoomStep(1)
   }
 
-  zoomOut() {
+  zoomOut = () => {
     this.zoomStep(-1)
   }
 
   /** shows an outline entry: scrolls to a heading, shows a sheet or a slide */
-  goto(id: string) {
+  goto = (id: string) => {
     this.view?.goto?.(id)
   }
 
   /** scrolls to a page or slide, from 1 */
-  gotoPage(n: number) {
+  gotoPage = (n: number) => {
     this.view?.gotoPage?.(n)
   }
 
   /** a presentation as a slideshow, from the slide in view */
-  present() {
+  present = () => {
     this.view?.present?.()
   }
 
-  print() {
+  print = () => {
     this.fileAction('print')
   }
 
   /** a File menu action by its id: 'pdf', 'html', 'text:md', 'details', 'rename'… (see FileMenu) */
-  fileAction(id: string) {
+  fileAction = (id: string) => {
     this.viewer?.fileAction(id)
   }
 
   /** the comments panel open (true), closed (false) or the other way round */
-  toggleComments(open?: boolean) {
+  toggleComments = (open?: boolean) => {
     this.viewer?.toggleComments(open)
   }
 
@@ -183,7 +201,7 @@ export class InternalViewerController {
   // ---------------------------------------------------------------- published by the viewer and its view
 
   /** @internal the state changed: only what differs counts as a change */
-  update(p: Partial<Omit<ViewerState, 'rev'>>) {
+  private update(p: Partial<Omit<ViewerState, 'rev'>>) {
     let changed = false
     for (const k of Object.keys(p) as (keyof typeof p)[]) {
       if (!same(this.state[k], p[k])) {
@@ -196,38 +214,78 @@ export class InternalViewerController {
     for (const fn of this.subs) fn()
   }
 
-  /** @internal releases only this registration, so an exiting viewer cannot detach its successor. */
-  attachView(c: ViewCommands): () => void {
-    this.view = c
-    return () => {
-      if (this.view !== c) return
-      this.view = null
-      this.update(VIEW_STATE)
-    }
-  }
-
-  /** @internal releases only this registration. */
-  attachViewer(c: ViewerCommands): () => void {
-    this.viewer = c
-    return () => {
-      if (this.viewer !== c) return
-      this.viewer = null
-      this.update(VIEWER_STATE)
+  /** A viewer claims ownership when it mounts, before any async document can finish loading.
+   * A later document attach/update can only use that claim; it cannot take ownership back.
+   * Each document also gets a separate publication scope, invalidated on replacement.
+   */
+  createBinding() {
+    const controller = this
+    const owner = {}
+    const owns = () => this.owner === owner
+    return {
+      attachViewer: (commands: ViewerCommands) => {
+        this.owner = owner
+        this.viewer = commands
+        this.viewOwner = null
+        this.view = null
+        this.update({ ...VIEWER_STATE, ...VIEW_STATE })
+        return () => {
+          if (!owns() || this.viewer !== commands) return
+          this.owner = this.viewOwner = null
+          this.viewer = this.view = null
+          this.update({ ...VIEWER_STATE, ...VIEW_STATE })
+        }
+      },
+      update: (state: Partial<ViewerPublication>) => {
+        if (owns()) this.update(state)
+      },
+      createView: (): ViewController => {
+        const viewOwner = {}
+        const current = () => owns() && this.viewOwner === viewOwner
+        return {
+          activate: () => {
+            if (!owns()) return () => {}
+            this.viewOwner = viewOwner
+            this.view = null
+            this.update(VIEW_STATE)
+            return () => {
+              if (!current()) return
+              this.viewOwner = null
+              this.view = null
+              this.update(VIEW_STATE)
+            }
+          },
+          update: (state) => { if (current()) this.update(state) },
+          attachView: (commands) => {
+            if (!current()) return () => {}
+            this.view = commands
+            return () => {
+              if (!current() || this.view !== commands) return
+              this.view = null
+            }
+          },
+          get observed() { return controller.observed },
+          watchObserved: (fn) => this.watchObserved(fn),
+        }
+      },
     }
   }
 }
 
 /** Host API; publishing and lifecycle methods belong to the engine. */
-export type ViewerController = Pick<InternalViewerController,
+export type ViewerController = { readonly [controllerBrand]: true } & Pick<InternalViewerController,
   'subscribe' | 'snapshot' | 'setEditing' | 'save' | 'undo' | 'redo' | 'setZoom' | 'zoomIn' | 'zoomOut' |
   'goto' | 'gotoPage' | 'present' | 'print' | 'fileAction' | 'toggleComments'>
 
 export const createViewerController = (): ViewerController => new InternalViewerController()
 /** @internal controllers supplied to viewers originate from createViewerController(). */
-export const internalController = (ctl: ViewerController): InternalViewerController => ctl as InternalViewerController
+export const internalController = (ctl: ViewerController): InternalViewerController => {
+  if (!(ctl instanceof InternalViewerController)) throw new TypeError('DocViewer controller must be created by createViewerController()')
+  return ctl
+}
 
 /** @internal follows both subscription transitions, including a replacement controller. */
-export function useControllerObserved(ctl: InternalViewerController | null): boolean {
+export function useControllerObserved(ctl: ViewController | null): boolean {
   return useSyncExternalStore(
     (fn) => ctl?.watchObserved(fn) ?? (() => {}),
     () => !!ctl?.observed,
@@ -241,7 +299,7 @@ export function useViewerState(ctl: ViewerController): ViewerState {
 }
 
 /** Registers a view's commands (the latest closures each render) while it is mounted. */
-export function useViewCommands(ctl: InternalViewerController | null, commands: ViewCommands) {
+export function useViewCommands(ctl: ViewController | null, commands: ViewCommands) {
   const latest = useLatest(commands)
   useEffect(() => {
     if (!ctl) return

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { getLocalHistory, subscribeLocalHistory } from '../src/collab/hosts'
 import { DocumentClient } from '../src/core/worker/client'
 import { CollabHub } from '../src/collab/hub'
 import { startCollab, type Collab } from '../src/collab'
@@ -44,6 +45,34 @@ async function dump(client: DocumentClient) {
 }
 
 describe('collab xlsx', () => {
+  test('local history reports the session stack across rename, new edits and undo/redo', async () => {
+    const hub = new CollabHub()
+    const a = await open(hub, 'Ann', () => 0)
+    await settle([a.collab])
+    let notifications = 0
+    const off = subscribeLocalHistory(a.client, () => notifications++)
+    await a.client.call('xlsx.set', 0, [{ r: 11, c: 9, input: 'before rename' }])
+    await settle([a.collab])
+    expect(getLocalHistory(a.client)).toEqual({ undo: 1, redo: 0 })
+    await a.client.call('xlsx.bookOp', { op: 'rename', index: 0, name: 'Renamed' })
+    await settle([a.collab])
+    // Sheet-list operations invalidate the worker's shared undo records as well as its local history.
+    expect(getLocalHistory(a.client)).toEqual({ undo: 0, redo: 0 })
+    expect(await a.client.call('xlsx.undo')).toBeNull()
+    await a.client.call('xlsx.set', 0, [{ r: 11, c: 9, input: 'after rename' }])
+    await settle([a.collab])
+    expect(getLocalHistory(a.client)).toEqual({ undo: 1, redo: 0 })
+    await a.client.call('xlsx.undo')
+    expect(getLocalHistory(a.client)).toEqual({ undo: 0, redo: 1 })
+    expect((await a.client.call('xlsx.cell', 0, 11, 9))?.value).toBe('before rename')
+    await a.client.call('xlsx.redo')
+    expect(getLocalHistory(a.client)).toEqual({ undo: 1, redo: 0 })
+    expect((await a.client.call('xlsx.cell', 0, 11, 9))?.value).toBe('after rename')
+    expect(notifications).toBeGreaterThan(4)
+    off(); a.collab.close(); a.client.destroy()
+    expect(getLocalHistory(a.client)).toBeUndefined()
+  })
+
   for (const start of [7, 11, 23, 42, 99]) test(`concurrent cell edits, formatting, structure and undo converge (seed ${start})`, async () => {
     let seed = start
     const rand = () => ((seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296)

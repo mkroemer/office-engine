@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { ViewerController, ViewerState } from '../src'
-import { fromB64, useBrowser, viewer, xlsxSheet, type Viewer } from './harness'
+import { docxBlocks, fromB64, useBrowser, viewer, xlsxSheet, type Viewer } from './harness'
 
 useBrowser()
 
@@ -96,6 +96,128 @@ describe('controller and headless mode', () => {
     await until(v, 's.kind === "docx" && s.zoom.value === 1.25')
     await v.page.evaluate(() => window.__ctl.setEditing(true))
     await until(v, 's.editing')
+    expect(v.errors).toEqual([])
+  })
+
+  for (const kind of ['docx', 'xlsx', 'pptx'] as const) {
+    test(`StrictMode loading overlap: late docx cannot steal the newer ${kind} controller`, async () => {
+      const v = await viewer({ controller: true, headless: true, editable: true, strict: true, onSave: true }, { wait: false })
+      let oldRequest: import('playwright-core').Route | undefined
+      await v.page.route('**/slow-old.docx', (route) => { oldRequest = route })
+      await v.page.waitForFunction(() => !!window.__setProps)
+      await v.page.evaluate(() => window.__setProps({ src: 'samples/slow-old.docx' }))
+      await v.page.waitForFunction(() => window.__ctl.snapshot().loading)
+      for (let i = 0; !oldRequest && i < 50; i++) await v.page.waitForTimeout(10)
+      expect(oldRequest).toBeDefined()
+      await v.page.evaluate((kind) => window.__overlap(1, { src: `samples/sample.${kind}` }), kind)
+      await v.waitEvent('load')
+      await until(v, `s.kind === '${kind}' && !s.loading && s.outline && s.outline.items.length > 0`)
+      await oldRequest!.fulfill({ path: process.cwd() + '/playground/public/samples/sample.docx' })
+      await v.waitEvent('load', 2)
+      await v.page.locator('.de-pages').first().waitFor()
+      await v.page.evaluate(() => window.__overlap(2))
+      await v.page.waitForTimeout(200)
+      expect((await state(v)).kind).toBe(kind)
+      if (kind === 'xlsx') {
+        expect(await state(v)).toMatchObject({ zoom: null, page: null })
+        await v.page.evaluate(() => window.__ctl.goto(window.__ctl.snapshot().outline!.items[1].id))
+        await until(v, 's.outline.items[1].current')
+        await v.typeCell('J12', 'new viewer')
+        await until(v, 's.canUndo')
+        await v.page.evaluate(() => window.__ctl.undo())
+        await until(v, 's.canRedo')
+        expect(await v.shown('J12')).toBe('')
+      } else {
+        await v.page.evaluate(() => { const { setZoom, gotoPage } = window.__ctl; setZoom(1.25); gotoPage(2) })
+        await until(v, 's.zoom.value === 1.25 && s.page.current === 2')
+      }
+      expect(v.errors).toEqual([])
+    })
+  }
+
+  test('bound React callbacks and destructured commands mutate and save the document', async () => {
+    const v = await viewer({ controller: true, src: 'samples/sample.xlsx', headless: true, editable: true, onSave: true, hostControls: true })
+    await v.typeCell('J12', 'bound callback')
+    await until(v, 's.canUndo')
+    await v.page.getByRole('button', { name: 'Host undo', exact: true }).click()
+    await until(v, 's.canRedo && !s.canUndo')
+    expect((await saveXlsx(v)).cell('J12')).toBe('')
+    await v.page.getByRole('button', { name: 'Host redo', exact: true }).click()
+    await until(v, 's.canUndo')
+    expect((await saveXlsx(v)).cell('J12')).toBe('bound callback')
+    expect(v.errors).toEqual([])
+  })
+
+  for (const editable of [false, true]) for (const allowEdit of [false, true]) {
+    test(`editable=${editable}, allowEdit=${allowEdit}: toggle visibility and actual edits remain independent`, async () => {
+      const v = await viewer({ controller: true, src: 'samples/sample.xlsx', editable, allowEdit, onSave: true })
+      await until(v, 's.kind === "xlsx" && !s.loading')
+      expect((await state(v)).editing).toBe(editable)
+      expect((await state(v)).canEdit).toBe(true)
+      expect(await v.barButton(editable ? 'View' : 'Edit').count()).toBe(allowEdit ? 1 : 0)
+      await v.page.evaluate(() => window.__ctl.setEditing(true))
+      await until(v, 's.editing')
+      await v.typeCell('J12', 'editable without toggle')
+      await until(v, 's.canUndo && s.dirty')
+      expect((await saveXlsx(v)).cell('J12')).toBe('editable without toggle')
+      await v.page.evaluate(() => window.__ctl.setEditing(false))
+      await until(v, '!s.editing && !s.canUndo')
+      await v.page.evaluate(() => window.__ctl.undo())
+      expect((await saveXlsx(v)).cell('J12')).toBe('editable without toggle')
+      expect(v.errors).toEqual([])
+    })
+  }
+
+  test('DOCX editable with a hidden toggle: edit, clamp zoom and save/reopen', async () => {
+    const v = await viewer({ controller: true, src: 'samples/sample.docx', editable: true, allowEdit: false, onSave: true })
+    await until(v, 's.editing && s.canEdit')
+    expect(await v.barButton('View').count()).toBe(0)
+    await v.selectText('Quarterly Report', 'end')
+    await v.page.keyboard.type(' hidden-toggle-proof')
+    await until(v, 's.dirty && s.canUndo')
+    await v.page.evaluate(() => window.__ctl.save())
+    const saved = await v.waitEvent('save')
+    expect(JSON.stringify(await docxBlocks(fromB64(saved.b64 as string)))).toContain('hidden-toggle-proof')
+    await v.page.evaluate(() => { const { setZoom } = window.__ctl; setZoom(0) })
+    await until(v, 's.zoom.value === 0.25')
+    await v.page.evaluate(() => { const { setZoom, zoomIn } = window.__ctl; setZoom(NaN); zoomIn() })
+    await until(v, 's.zoom.value > 0.25')
+    await v.page.evaluate(() => window.__ctl.setZoom(150))
+    await until(v, 's.zoom.value === 3')
+    expect(v.errors).toEqual([])
+  })
+
+  test('host outline mouse-down preserves an open cross-sheet formula', async () => {
+    const v = await viewer({ controller: true, src: 'samples/sample.xlsx', headless: true, editable: true, onSave: true, hostControls: true })
+    await v.clickCell('J12')
+    await v.page.keyboard.type('=SUM(')
+    await v.page.getByRole('button', { name: 'Host second sheet', exact: true }).click()
+    await until(v, 's.outline.items[1].current')
+    await v.clickCell('A1')
+    await v.page.keyboard.press('Enter')
+    await until(v, 's.canUndo && s.dirty')
+    const saved = await saveXlsx(v)
+    const detail = await saved.engine.call('xlsx.cell', [0, 11, 9]) as { formula?: string }
+    expect(detail.formula).toMatch(/^=SUM\(Notes!A1\)$/)
+    expect(v.errors).toEqual([])
+  })
+
+  test('CSV import remains available when Open is disabled; no-document dialogs do not latch', async () => {
+    const v = await viewer({ controller: true, allowOpen: false, onSave: true }, { wait: false })
+    await v.page.waitForFunction(() => !!window.__setProps)
+    await v.page.evaluate(() => { window.__ctl.fileAction('rename'); window.__ctl.fileAction('details') })
+    await v.page.evaluate(() => window.__setProps({ src: 'samples/sample.xlsx' }))
+    await v.ready('xlsx')
+    expect(await v.page.getByRole('dialog').count()).toBe(0)
+    expect(await v.menuLabels()).toContain('Import CSV into new sheet…')
+    const chooser = v.page.waitForEvent('filechooser')
+    await v.page.evaluate(() => window.__ctl.fileAction('import'))
+    await (await chooser).setFiles({ name: 'imported.csv', mimeType: 'text/csv', buffer: Buffer.from('imported,value\nproof,42') })
+    await until(v, 's.outline.items.some(i => i.title === "imported")')
+    const saved = await v.events('save')
+    await saveXlsx(v)
+    const imported = await v.waitEvent('save', saved.length + 1)
+    expect((await xlsxSheet(fromB64(imported.b64 as string), 1)).cell('B2')).toBe('42')
     expect(v.errors).toEqual([])
   })
 
@@ -213,7 +335,7 @@ describe('controller and headless mode', () => {
         window.__ctl.subscribe(() => window.__xlsxHistory.publications.push(window.__ctl.snapshot()))
         window.__xlsxHistory.release!()
       })
-      // Dirty is published by run after the held response resumes, so the assertion cannot pass before completion.
+      // Dirty is published by the mounted workbook after the held response resumes; this waits for completion.
       await until(v, 's.dirty')
       expect(await state(v)).toMatchObject({ editing: false, canUndo: false, canRedo: false })
       expect(await v.page.evaluate(() => window.__xlsxHistory.publications.some((s) => s.canUndo || s.canRedo))).toBe(false)
@@ -224,16 +346,16 @@ describe('controller and headless mode', () => {
     })
   }
 
-  test('xlsx: an unmounted view cannot publish its delayed history over the current view', async () => {
+  for (const replacement of ['docx', 'xlsx'] as const) test(`xlsx: an unmounted view cannot publish delayed dirty/history over replacement ${replacement}`, async () => {
     const v = await delayedXlsx()
     await holdHistory(v, 'xlsx.set')
     await v.clickCell('J12')
     await v.page.keyboard.type('old workbook')
     await v.page.keyboard.press('Enter')
     await pendingHistory(v)
-    await v.page.evaluate(() => window.__setProps({ src: 'samples/sample.docx', onLoad: undefined }))
-    await v.page.locator('.de-pages').waitFor()
-    await until(v, "s.kind === 'docx' && !s.loading && !s.canUndo && !s.canRedo")
+    await v.page.evaluate((kind) => window.__setProps({ src: `samples/sample.${kind}?replacement=1`, onLoad: () => window.__events.push({ type: 'replacement-load' }) }), replacement)
+    await v.waitEvent('replacement-load')
+    await until(v, `s.kind === '${replacement}' && !s.loading && !s.dirty && !s.canUndo && !s.canRedo`)
     await v.page.evaluate(async () => {
       window.__ctl.subscribe(() => window.__xlsxHistory.publications.push(window.__ctl.snapshot()))
       window.__xlsxHistory.release!()
@@ -241,7 +363,26 @@ describe('controller and headless mode', () => {
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
     })
     expect(await v.page.evaluate(() => window.__xlsxHistory.publications.some((s) => s.canUndo || s.canRedo))).toBe(false)
-    expect(await state(v)).toMatchObject({ kind: 'docx', canUndo: false, canRedo: false })
+    expect(await state(v)).toMatchObject({ kind: replacement, dirty: false, canUndo: false, canRedo: false })
+    if (replacement === 'xlsx') expect((await saveXlsx(v)).cell('J12')).toBe('')
+    expect(v.errors).toEqual([])
+  })
+
+  test('fully unmounted viewer rejects delayed completion and keeps empty defaults', async () => {
+    const v = await delayedXlsx()
+    await holdHistory(v, 'xlsx.set')
+    await v.clickCell('J12')
+    await v.page.keyboard.type('unmounted')
+    await v.page.keyboard.press('Enter')
+    await pendingHistory(v)
+    await v.page.evaluate(() => window.__overlap(3))
+    await until(v, 's.kind === null && !s.dirty && !s.canUndo')
+    const detached = await state(v)
+    await v.page.evaluate(async () => {
+      window.__xlsxHistory.release!()
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    })
+    expect(await state(v)).toEqual(detached)
     expect(v.errors).toEqual([])
   })
 
@@ -258,7 +399,7 @@ describe('controller and headless mode', () => {
     expect(pickers).toEqual([])
     expect(downloads).toEqual([])
     expect(await v.events('save')).toEqual([])
-    expect((await state(v)).editing).toBe(false)
+    expect((await state(v)).editing).toBe(true)
     expect((await state(v)).kind).toBe('xlsx')
     await v.page.evaluate(() => window.__setProps({ allowDownload: true }))
     const dl = await v.download(() => v.page.evaluate(() => window.__ctl.fileAction('text:csv')))

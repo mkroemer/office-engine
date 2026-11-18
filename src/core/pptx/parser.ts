@@ -167,7 +167,7 @@ const plainTitle = (paras: string[]) => paras.join(' ').replace(/[\uF000-\uF0FF]
 /** the text of the title placeholder in a slide's shape tree (groups included), or '' */
 function titleOf(tree: XEl | undefined): string {
   for (const c of tree?.c ?? []) {
-    const t = c.n === 'grpSp' ? titleOf(c) : c.n === 'sp' && ['title', 'ctrTitle'].includes(phOf(c)?.type ?? '') ? plainTitle(kids(kid(c, 'txBody'), 'p').map(textOf)) : ''
+    const t = c.n === 'grpSp' ? titleOf(c) : c.n === 'sp' && ['title', 'ctrTitle'].includes(phOf(c)?.type ?? '') ? plainTitle(kids(kid(c, 'txBody'), 'p').map((p) => p.c.map((c) => c.n === 'br' ? ' ' : textOf(c)).join(''))) : ''
     if (t) return t
   }
   return ''
@@ -901,7 +901,7 @@ class SlideRenderer {
     const text = el.n === 'sp' ? this.textBody(kid(el, 'txBody'), chain, ph, kid(style, 'fontRef'), part, sid) : undefined
     // the slide's own title placeholder names the slide (outline, slide list)
     if (text && part === this.slide && this.title === undefined && (ph?.type === 'title' || ph?.type === 'ctrTitle')) {
-      const t = plainTitle(text.paras.map((p) => p.runs.map((r) => r.text).join('')))
+      const t = plainTitle(text.paras.map((p) => p.runs.map((r) => r.br ? ' ' : r.text).join('')))
       if (t) this.title = t
     }
     if ((!fill || fill.t === 'none') && !stroke && !text) return

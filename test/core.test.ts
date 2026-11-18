@@ -4,6 +4,11 @@ import { Engine } from '../src/core/worker/engine'
 import type { Block, DocxMeta, Paragraph } from '../src/core/docx/types'
 import type { SheetProgress } from '../src/core/xlsx/types'
 import { formatValue } from '../src/core/xlsx/numfmt'
+import { OpcPackage } from '../src/core/opc'
+import { ZipArchive } from '../src/core/zip'
+import { openSource } from '../src/core/source'
+import type { SlideModel } from '../src/core/pptx/types'
+import { rebuildZip } from '../src/core/zipwrite'
 import { SaxParser, TreeBuilder } from '../src/core/xml'
 
 const S = (n: string) => `${import.meta.dir}/../playground/public/samples/${n}`
@@ -217,6 +222,16 @@ describe('xlsx', () => {
 })
 
 describe('pptx', () => {
+  test('slide title line breaks separate words in both the outline and rendered model', async () => {
+    const pkg = new OpcPackage(await ZipArchive.open(await openSource(file('sample.pptx'))))
+    const xml = (await pkg.text('ppt/slides/slide1.xml')).replace('office-engine', 'Annual Report</a:t></a:r><a:br/><a:r><a:t>Q3 Results')
+    const blob = await rebuildZip(pkg.zip, new Map([['ppt/slides/slide1.xml', xml]]))
+    const { engine } = collect()
+    await engine.open(blob, {})
+    expect((await engine.call('pptx.titles', []) as string[])[0]).toBe('Annual Report Q3 Results')
+    expect((await engine.call('pptx.slide', [0]) as SlideModel).title).toBe('Annual Report Q3 Results')
+  })
+
   test('sample.pptx slides', async () => {
     const { engine } = collect()
     const info = await engine.open(file('sample.pptx'), {})

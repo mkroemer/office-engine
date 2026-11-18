@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useInsertionEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useInsertionEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import type { DocSource } from '../core/source'
 import type { DocumentClient, OpenOptions } from '../core/worker/client'
 import type { Zoom } from './common/ZoomControl'
@@ -170,7 +170,8 @@ function Viewer(props: DocViewerProps) {
   const toolbar = props.toolbar ?? !headless
   // without a controller from the host the viewer keeps its own: the view publishes to one either way
   const ownCtl = useMemo(() => createViewerController(), [])
-  const ctl = internalController(props.controller ?? ownCtl)
+  const controller = internalController(props.controller ?? ownCtl)
+  const ctl = useMemo(() => controller.createBinding(), [controller])
   const root = useThemeRoot(theme, style)
   const { allowEdit = true, allowSave = true, allowDownload = true, fileMenu = true, allowOpen = true, captureSelectAll = true, onSave, onDirtyChange } = props
   const [editing, setEditing] = useState(!!props.editable)
@@ -204,6 +205,7 @@ function Viewer(props: DocViewerProps) {
       saveSession.live = false
     }
   }, [saveSession])
+  const viewCtl = useMemo(() => ctl.createView(), [ctl, client])
   const docName = renamed ?? loadName
   const collab = useCollab(client, props.collab)
   const srcFormat = client?.info?.imported
@@ -403,10 +405,10 @@ function Viewer(props: DocViewerProps) {
   )
   const selectAll = useRef<(() => void) | null>(null)
   // next to its source, the document is a preview: it is edited through the source
-  const docEditable = editing && allowEdit && canEdit && !codeShown
+  const docEditable = editing && canEdit && !codeShown
   const api = useMemo<ViewerApi>(
-    () => ({ bar: barEl, editable: docEditable, setDirty: setDocDirty, save, canDownload: allowDownload, client, fileOps, selectAll, ctl, headless }),
-    [barEl, docEditable, setDocDirty, save, allowDownload, client, ctl, headless],
+    () => ({ bar: barEl, editable: docEditable, setDirty: setDocDirty, save, canDownload: allowDownload, client, fileOps, selectAll, ctl: viewCtl, headless }),
+    [barEl, docEditable, setDocDirty, save, allowDownload, client, viewCtl, headless],
   )
 
   const editSource = (text: string) => {
@@ -504,7 +506,7 @@ function Viewer(props: DocViewerProps) {
     ext: officeExt,
     base: baseName,
     canOpen,
-    canImport: allowOpen && allowEdit && canEdit,
+    canImport: allowEdit && canEdit,
     canSave,
     canDownload: allowDownload && !!client,
     ops: fileOps,
@@ -562,13 +564,13 @@ function Viewer(props: DocViewerProps) {
   const title = renamed ?? client?.name ?? docName ?? (typeof src === 'string' ? decodeURIComponent(src.split(/[?#]/)[0].split('/').pop() ?? '') : (src as File | undefined)?.name) ?? ''
 
   // ---- controller: the viewer's part of the state, and its commands ----
-  const editAllowed = allowEdit && !readOnly && !codeShown
+  const editAllowed = !readOnly && !codeShown
   useEffect(() => {
     ctl.update({ kind: client?.kind ?? null, loading: busy, editing: docEditable, canEdit: !!client && editAllowed && canEdit, dirty, saving })
   }, [ctl, client, busy, docEditable, editAllowed, canEdit, dirty, saving])
   const commands = useRef({ editAllowed, save, fileActions, cmCtl })
   commands.current = { editAllowed, save, fileActions, cmCtl }
-  useEffect(() => {
+  useLayoutEffect(() => {
     return ctl.attachViewer({
       setEditing: (on) => {
         if (!on || commands.current.editAllowed) setEditing(on)
@@ -578,6 +580,7 @@ function Viewer(props: DocViewerProps) {
       toggleComments: (open) => commands.current.cmCtl?.toggle(open),
     })
   }, [ctl])
+  useLayoutEffect(() => viewCtl.activate(), [viewCtl])
 
   let body: ReactNode
   if (error) {
