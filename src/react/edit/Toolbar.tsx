@@ -495,19 +495,24 @@ export function Select<T extends string | number>(props: {
 export function SizeBox(props: { value?: number; placeholder?: number; sizes?: number[]; onChange: (n: number) => void; title?: string; disabled?: boolean }) {
   const sizes = props.sizes ?? SIZES
   const [text, setText] = useState<string | null>(null)
+  const draft = useRef<string | null>(null)
+  const editText = (value: string | null) => {
+    draft.current = value
+    setText(value)
+  }
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLSpanElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const onMouseDownCapture = useDismiss(ref, open, () => setOpen(false))
   const base = props.value ?? props.placeholder ?? 11
   const set = (n: number) => {
-    setText(null)
+    editText(null)
     setOpen(false)
     const value = fontSize(n)
     if (value !== null) props.onChange(value)
   }
   const done = () => {
-    if (text !== null) set(parseFloat(text))
+    if (draft.current !== null) set(parseFloat(draft.current))
     inputRef.current?.blur()
   }
   const t = useStrings()
@@ -529,25 +534,25 @@ export function SizeBox(props: { value?: number; placeholder?: number; sizes?: n
           setOpen(true)
         }}
         // a decimal comma is a decimal point (12,5 is not 125)
-        onChange={(e) => setText(e.target.value.replace(/,/g, '.').replace(/[^\d.]/g, '').replace(/^(\d*\.\d*)\..*$/, '$1'))}
+        onChange={(e) => editText(e.target.value.replace(/,/g, '.').replace(/[^\d.]/g, '').replace(/^(\d*\.\d*)\..*$/, '$1'))}
         onKeyDown={(e) => {
           if (e.key === 'Enter') {
             e.preventDefault()
             done()
           } else if (e.key === 'Escape') {
             e.preventDefault()
-            setText(null)
+            editText(null)
             setOpen(false)
             inputRef.current?.blur()
           } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
             e.preventDefault()
             const cur = parseFloat(text ?? String(base))
             const next = e.key === 'ArrowUp' ? sizes.find((n) => n > cur) : [...sizes].reverse().find((n) => n < cur)
-            if (next !== undefined) setText(String(next))
+            if (next !== undefined) editText(String(next))
           }
         }}
         onBlur={() => {
-          if (text !== null) set(parseFloat(text))
+          if (draft.current !== null) set(parseFloat(draft.current))
           setOpen(false)
         }}
       />
