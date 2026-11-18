@@ -168,7 +168,7 @@ describe('UI components', () => {
   test('nested OfficeUIProvider inherits texts and merges only defined string overrides', () => {
     texts.length = 0
     renderToStaticMarkup(
-      <OfficeUIProvider locale="de-CH" strings={{ ...de, common: { ok: 'Outer OK' }, file: { menu: 'Ablage' } }}>
+      <OfficeUIProvider locale="de-CH" strings={{ ...de, common: { ...de.common, ok: 'Outer OK' }, file: { ...de.file, menu: 'Ablage' } }}>
         <TextProbe />
         <OfficeUIProvider components={host}><TextProbe /></OfficeUIProvider>
         <OfficeUIProvider strings={{ common: { cancel: 'Inner cancel', ok: undefined } }}><TextProbe /></OfficeUIProvider>
