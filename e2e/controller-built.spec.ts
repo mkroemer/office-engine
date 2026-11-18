@@ -2,6 +2,9 @@
 import { expect, test } from 'bun:test'
 import { fromB64, useBrowser, viewer, xlsxSheet } from './harness'
 
+import { builtModule, useBuiltPackage } from './built-package'
+
+useBuiltPackage()
 useBrowser()
 
 test('built controller uses current callbacks across locale/UI updates, replacement and save', async () => {
@@ -35,7 +38,7 @@ test('built controller uses current callbacks across locale/UI updates, replacem
     ;(window as any).__builtUpdate = (p: any) => { current = { ...current, ...p }; generation = 'updated'; render() }
     ;(window as any).__builtUnmount = () => root.unmount()
     render()
-  }, { pkg: `/@fs${process.cwd()}/dist/index.js`, german: `/@fs${process.cwd()}/dist/locales/de.js` })
+  }, { pkg: builtModule('index.js'), german: builtModule('locales/de.js') })
   await v.ready('xlsx')
   await v.page.locator('button[data-built-host][aria-label^="Fett"]').waitFor()
   await v.page.waitForFunction(() => (window as any).__builtControllers.ctl.snapshot().status.includes('Zeilen'))
