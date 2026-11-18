@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { ReactElement, ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { Icon as PublicIcon } from '../src'
+import { parseXml, textOf, type XEl } from '../src/core/xml'
 import { ConfirmDialog, PromptDialog, Toast } from '../src/react/common/Dialog'
 import { Btn, ColorBtn, Dropdown, Icon, Pop, Sep } from '../src/react/edit/Toolbar'
 import { useStrings, type Strings } from '../src/react/strings'
@@ -38,6 +39,11 @@ const host: Partial<UIComponents> = {
 }
 /** renders with the host components, or with `null` with the built-in ones */
 const html = (node: ReactNode, components: Partial<UIComponents> | null = host) => renderToStaticMarkup(<UIComponentsProvider components={components ?? undefined}>{node}</UIComponentsProvider>)
+/** React's static markup is XML-compatible; inspect its elements rather than its serialization. */
+const tree = (markup: string) => parseXml(`<root>${markup}</root>`)
+const elements = (el: XEl): XEl[] => el.c.flatMap((child) => [child, ...elements(child)])
+const tagged = (el: XEl, name: string) => elements(el).filter((child) => child.n === name)
+const classes = (el: XEl) => el.a.class?.split(/\s+/) ?? []
 const noop = () => {}
 const texts: Strings[] = []
 function TextProbe() {
@@ -46,28 +52,41 @@ function TextProbe() {
 }
 
 describe('UI components', () => {
-  test('without host components the built-in markup is unchanged', () => {
-    expect(html(<Btn icon="bold" title="Bold" active onClick={noop} />, null)).toStartWith('<button type="button" class="de-tb de-tb-on" title="Bold" aria-label="Bold" aria-pressed="true">')
-    expect(html(<Sep />, null)).toBe('<span class="de-tb-sep"></span>')
-    expect(html(<Dropdown title="Style" options={[{ value: 'a', label: 'A' }]} onChange={noop} value="a" />, null)).toContain('class="de-dd"')
-    expect(html(<Toast text="Saved" onDone={noop} />, null)).toBe('<div class="de-toast" role="status">Saved</div>')
-    const prompt = html(<PromptDialog spec={{ title: 'Link', label: 'URL', initial: 'https://x', placeholder: 'https://', note: 'A link', onOk: noop, extra: { label: 'Remove link', run: noop } }} onClose={noop} />, null)
-    expect(prompt).toContain('role="dialog" aria-label="Link"')
-    expect(prompt).toContain('<button type="button" class="de-btn de-dialog-extra">Remove link</button>')
-    expect([...prompt.matchAll(/<button\b[^>]*>([^<]*)<\/button>/g)].map((m) => m[1])).toEqual(['Remove link', 'Cancel', 'OK'])
-    expect(prompt).toContain('<button type="submit" class="de-btn de-btn-primary">OK</button>')
-    const notes = html(<PromptDialog spec={{ title: 'Notes', area: true, initial: 'Text', onOk: noop }} onClose={noop} />, null)
-    expect(notes).toContain('<textarea rows="3">Text</textarea>')
-    const confirm = html(<ConfirmDialog title="Delete?" message="Gone for good" ok="Delete" onOk={noop} onClose={noop} />, null)
-    expect(confirm).toContain('role="alertdialog" aria-label="Delete?"')
-    expect(confirm).toContain('<button type="button" class="de-btn de-btn-primary" autofocus="">Delete</button>')
+  test('built-in controls retain their roles, classes and action order', () => {
+    const button = tagged(tree(html(<Btn icon="bold" title="Bold" active onClick={noop} />, null)), 'button')[0]
+    expect(button.a).toMatchObject({ type: 'button', title: 'Bold', 'aria-label': 'Bold', 'aria-pressed': 'true' })
+    expect(classes(button)).toEqual(expect.arrayContaining(['de-tb', 'de-tb-on']))
+    expect(classes(tagged(tree(html(<Sep />, null)), 'span')[0])).toContain('de-tb-sep')
+    expect(elements(tree(html(<Dropdown title="Style" options={[{ value: 'a', label: 'A' }]} onChange={noop} value="a" />, null))).some((el) => classes(el).includes('de-dd'))).toBe(true)
+    const toast = tagged(tree(html(<Toast text="Saved" onDone={noop} />, null)), 'div')[0]
+    expect(toast.a.role).toBe('status')
+    expect(classes(toast)).toContain('de-toast')
+    expect(textOf(toast)).toBe('Saved')
+    const prompt = tree(html(<PromptDialog spec={{ title: 'Link', label: 'URL', initial: 'https://x', placeholder: 'https://', note: 'A link', onOk: noop, extra: { label: 'Remove link', run: noop } }} onClose={noop} />, null))
+    expect(elements(prompt).find((el) => el.a.role === 'dialog')?.a['aria-label']).toBe('Link')
+    const actions = tagged(prompt, 'button')
+    expect(actions.map(textOf)).toEqual(['Remove link', 'Cancel', 'OK'])
+    expect(actions[0].a.type).toBe('button')
+    expect(classes(actions[0])).toEqual(expect.arrayContaining(['de-btn', 'de-dialog-extra']))
+    expect(actions[2].a.type).toBe('submit')
+    expect(classes(actions[2])).toContain('de-btn-primary')
+    const notes = tagged(tree(html(<PromptDialog spec={{ title: 'Notes', area: true, initial: 'Text', onOk: noop }} onClose={noop} />, null)), 'textarea')[0]
+    expect(notes.a.rows).toBe('3')
+    expect(textOf(notes)).toBe('Text')
+    const confirm = tree(html(<ConfirmDialog title="Delete?" message="Gone for good" ok="Delete" onOk={noop} onClose={noop} />, null))
+    expect(elements(confirm).find((el) => el.a.role === 'alertdialog')?.a['aria-label']).toBe('Delete?')
+    const primary = tagged(confirm, 'button').find((el) => classes(el).includes('de-btn-primary'))!
+    expect(primary.a.type).toBe('button')
+    expect(primary.a).toHaveProperty('autofocus')
+    expect(textOf(primary)).toBe('Delete')
   })
 
   test('Button gets title, resolved icon, state, the engine classes and the focus-keeping mouse down', () => {
     seen.button.length = 0
     const out = html(<Btn icon="bold" title="Bold" active onClick={noop} />)
-    expect(out).toContain('data-host="button"')
-    expect(out).toContain('<svg')
+    const rendered = tree(out)
+    expect(tagged(rendered, 'button')[0].a['data-host']).toBe('button')
+    expect(tagged(rendered, 'svg').length).toBeGreaterThan(0)
     const p = seen.button[0]
     expect(p).toMatchObject({ title: 'Bold', iconName: 'bold', active: true, className: 'de-tb de-tb-on' })
     let prevented = false
@@ -88,8 +107,10 @@ describe('UI components', () => {
 
   test('Separator and Select are replaced; Select gets the options and value', () => {
     seen.select.length = 0
-    expect(html(<Sep />)).toBe('<hr data-host="sep"/>')
-    expect(html(<Dropdown title="Style" options={[{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }]} onChange={noop} value="b" />)).toBe('<span data-host="select">2</span>')
+    expect(tagged(tree(html(<Sep />)), 'hr')[0].a['data-host']).toBe('sep')
+    const select = tagged(tree(html(<Dropdown title="Style" options={[{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }]} onChange={noop} value="b" />)), 'span')[0]
+    expect(select.a['data-host']).toBe('select')
+    expect(textOf(select)).toBe('2')
     expect(seen.select[0]).toMatchObject({ title: 'Style', value: 'b' })
     html(<Dropdown title="Menu" label={null} icon="bold" className="host-trigger" options={[]} onChange={noop} />)
     expect(seen.select[1]).toMatchObject({ label: null, icon: 'bold', className: 'host-trigger' })
@@ -98,9 +119,9 @@ describe('UI components', () => {
   test('dialogs: prompt submits through its primary action, confirm is an alert', () => {
     seen.dialog.length = 0
     const out = html(<PromptDialog spec={{ title: 'Link', initial: 'https://x', onOk: noop, extra: { label: 'Remove link', run: noop } }} onClose={noop} />)
-    expect(out).toContain('aria-label="Link"')
-    expect(out).toContain('value="https://x"')
-    expect(out).toContain('Remove link|Cancel|OK')
+    const rendered = tree(out)
+    expect(tagged(rendered, 'section')[0].a['aria-label']).toBe('Link')
+    expect(tagged(rendered, 'input')[0].a.value).toBe('https://x')
     html(<ConfirmDialog title="Delete?" message="Gone for good" ok="Delete" onOk={noop} onClose={noop} />)
     const [prompt, confirm] = seen.dialog
     expect(prompt.onSubmit).toBeFunction()
@@ -145,12 +166,18 @@ describe('UI components', () => {
         <Dropdown title="Format" options={[{ value: 'b', label: 'Bold', icon: 'bold' }, { value: 'i', label: 'Italic', icon: 'italic' }]} onChange={noop} />
       </OfficeUIProvider>,
     )
-    expect(out).toContain('<span class="de-icon" style="font-size:16px;width:16px;height:16px" aria-hidden="true"><b>host bold</b></span>')
-    expect(out).toContain('<svg width="16" height="16"')
+    const rendered = tree(out)
+    const custom = tagged(rendered, 'span').find((el) => classes(el).includes('de-icon'))!
+    expect(custom.a['aria-hidden']).toBe('true')
+    expect(textOf(custom)).toBe('host bold')
+    expect(tagged(custom, 'b').length).toBe(1)
+    expect(tagged(rendered, 'svg')[0].a).toMatchObject({ width: '16', height: '16' })
   })
 
   test('Toast', () => {
-    expect(html(<Toast text="Saved" onDone={noop} />)).toBe('<output data-host="toast">Saved</output>')
+    const toast = tagged(tree(html(<Toast text="Saved" onDone={noop} />)), 'output')[0]
+    expect(toast.a['data-host']).toBe('toast')
+    expect(textOf(toast)).toBe('Saved')
   })
 
   test('nested providers: inner components win, the outer ones stay for the rest', () => {
@@ -162,7 +189,11 @@ describe('UI components', () => {
         </UIComponentsProvider>
       </UIComponentsProvider>,
     )
-    expect(out).toBe('<i>inner</i><output data-host="toast">t</output>')
+    const rendered = tree(out)
+    expect(textOf(tagged(rendered, 'i')[0])).toBe('inner')
+    const toast = tagged(rendered, 'output')[0]
+    expect(toast.a['data-host']).toBe('toast')
+    expect(textOf(toast)).toBe('t')
   })
 
   test('nested OfficeUIProvider inherits texts and merges only defined string overrides', () => {
