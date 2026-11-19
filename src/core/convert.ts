@@ -221,6 +221,78 @@ export function textToParas(text: string): ImportPara[] {
 
 const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
+/** a space-like character (JS `\s`) */
+const isSp = (c: string) => /\s/.test(c)
+
+/**
+ * Emphasis spans in one left-to-right pass. `close[k][i]` is the first index >= i where a valid closer of mark k starts, so
+ * an opener with no closer costs O(1): the lazy regexes this replaces rescanned the rest of the line from every opener (quadratic).
+ * Same matching as `(mark)(?=\S)(.+?)(?<=\S)mark` with an optional `(^|[^mark\w])` before the opener.
+ */
+function spans(s: string, marks: string[], prefix: RegExp | null, closeOk: (next: string | undefined) => boolean, wrap: (inner: string) => string): string {
+  const n = s.length
+  if (!marks.some((m) => s.includes(m))) return s
+  const close = marks.map((m) => {
+    const a = new Int32Array(n + 2).fill(-1)
+    for (let i = n - 1; i >= 0; i--) a[i] = i >= 1 && s.startsWith(m, i) && !isSp(s[i - 1]) && closeOk(s[i + m.length]) ? i : a[i + 1]
+    return a
+  })
+  let out = ''
+  let last = 0
+  let p = 0
+  while (p < n) {
+    let hit = false
+    if (!prefix || p === 0 || (p - 1 >= last && prefix.test(s[p - 1]))) {
+      for (let k = 0; k < marks.length && !hit; k++) {
+        const m = marks[k]
+        if (!s.startsWith(m, p) || p + m.length >= n || isSp(s[p + m.length])) continue
+        const q = close[k][p + m.length + 1]
+        if (q < 0) continue
+        out += s.slice(last, p) + wrap(s.slice(p + m.length, q))
+        p = last = q + m.length
+        hit = true
+      }
+    }
+    if (!hit) p++
+  }
+  return out + s.slice(last)
+}
+
+/** `[text](url …)` links, or `![alt](url …)` images; one pass, the `]` and `)` searches are remembered so unclosed ones stay linear */
+function links(s: string, image: boolean, repl: (text: string, url: string) => string): string {
+  const open = image ? '![' : '['
+  let out = ''
+  let last = 0
+  let p = s.indexOf(open)
+  const memo = { b: [-2, -2], r: [-2, -2] }
+  const find = (ch: string, from: number, c: number[]) => {
+    if (c[0] <= from && (c[1] === -1 || c[1] >= from)) return c[1]
+    c[0] = from
+    return (c[1] = s.indexOf(ch, from))
+  }
+  while (p >= 0) {
+    const t = p + open.length
+    const q = find(']', t, memo.b)
+    if (q < 0) break
+    const u = q + 2
+    if ((image || q > t) && s[q + 1] === '(' && u < s.length && s[u] !== ')' && !isSp(s[u])) {
+      const r = find(')', u, memo.r)
+      if (r < 0) {
+        // no `)` anywhere after: nothing later can match either
+        break
+      }
+      let e = u
+      while (e < r && !isSp(s[e])) e++
+      out += s.slice(last, p) + repl(s.slice(t, q), s.slice(u, e))
+      last = r + 1
+      p = s.indexOf(open, last)
+      continue
+    }
+    p = s.indexOf(open, p + 1)
+  }
+  return out + s.slice(last)
+}
+
 /** inline Markdown: code, links, bold, italic, strikethrough (input already HTML-escaped) */
 function mdInline(s: string): string {
   const code: string[] = []
@@ -228,13 +300,21 @@ function mdInline(s: string): string {
   // a backslash before punctuation: the character itself, never markup (an entity of the escaping stays whole)
   const lit: string[] = []
   s = s.replace(/\\(&(?:amp|lt|gt|quot);|[!-/:-@[-`{-~])/g, (_, c: string) => `\u0001${lit.push(c) - 1}\u0001`)
-  s = s
-    .replace(/!\[([^\]]*)\]\(([^)\s]+)[^)]*\)/g, '$1')
-    .replace(/\[([^\]]+)\]\(([^)\s]+)[^)]*\)/g, (_, t: string, u: string) => (safeHref(u) ? `<a href="${u}">${t}</a>` : t))
-    .replace(/(\*\*|__)(?=\S)(.+?)(?<=\S)\1/g, '<b>$2</b>')
-    .replace(/(^|[^*\w])\*(?=\S)(.+?)(?<=\S)\*(?!\*)/g, '$1<i>$2</i>')
-    .replace(/(^|[^_\w])_(?=\S)(.+?)(?<=\S)_(?!\w)/g, '$1<i>$2</i>')
-    .replace(/~~(?=\S)(.+?)(?<=\S)~~/g, '<s>$1</s>')
+  s = links(s, true, (t) => t)
+  s = links(s, false, (t, u) => (safeHref(u) ? `<a href="${u}">${t}</a>` : t))
+  if (/[\n\r\u2028\u2029]/.test(s)) {
+    // `.` stops at a line terminator, which the one-pass scanner does not model: the plain regexes (a line never has one here)
+    s = s
+      .replace(/(\*\*|__)(?=\S)(.+?)(?<=\S)\1/g, '<b>$2</b>')
+      .replace(/(^|[^*\w])\*(?=\S)(.+?)(?<=\S)\*(?!\*)/g, '$1<i>$2</i>')
+      .replace(/(^|[^_\w])_(?=\S)(.+?)(?<=\S)_(?!\w)/g, '$1<i>$2</i>')
+      .replace(/~~(?=\S)(.+?)(?<=\S)~~/g, '<s>$1</s>')
+  } else {
+    s = spans(s, ['**', '__'], null, () => true, (x) => `<b>${x}</b>`)
+    s = spans(s, ['*'], /[^*\w]/, (c) => c !== '*', (x) => `<i>${x}</i>`)
+    s = spans(s, ['_'], /[^_\w]/, (c) => c === undefined || !/\w/.test(c), (x) => `<i>${x}</i>`)
+    s = spans(s, ['~~'], null, () => true, (x) => `<s>${x}</s>`)
+  }
   return s.replace(/\u0000(\d+)\u0000/g, (_, i: string) => `<code>${code[Number(i)]}</code>`).replace(/\u0001(\d+)\u0001/g, (_, i: string) => lit[Number(i)])
 }
 
@@ -268,8 +348,12 @@ export function markdownToHtml(md: string): string {
       closeList()
       continue
     }
-    const h = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/.exec(line)
+    const h = /^\s{0,3}(#{1,6})\s+(.*)$/.exec(line)
     if (h) {
+      // closing #s and the spaces around them off, by hand: a lazy `(.*?)\s*#*\s*$` is quadratic on a long run of spaces
+      let e = h[2].trimEnd().length
+      while (e > 0 && h[2][e - 1] === '#') e--
+      h[2] = h[2].slice(0, e).trimEnd()
       flush()
       closeList()
       out.push(`<h${h[1].length}>${mdInline(escHtml(h[2]))}</h${h[1].length}>`)

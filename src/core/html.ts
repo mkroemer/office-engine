@@ -14,9 +14,24 @@ export interface PastedPara {
   runs: Inline[]
   heading?: number
   list?: 'bullet' | 'number'
+  /** nesting of the list item (0: first level), when deeper */
+  level?: number
+  /** `rich` only: a table, in place of a paragraph (`runs` is empty) */
+  table?: PastedCell[][]
 }
 
-type StyleKey = 'fontWeight' | 'fontStyle' | 'textDecoration' | 'textDecorationLine' | 'color' | 'backgroundColor' | 'fontSize' | 'fontFamily' | 'verticalAlign'
+/** a cell of a pasted table, with the paragraphs it holds */
+export interface PastedCell {
+  colSpan: number
+  rowSpan: number
+  paras: PastedPara[]
+}
+
+/** `rich` only: pictures are runs with the data: URL as `target` (size 0 when the HTML gives none) */
+const DATA_IMG = /^data:image\/(?:png|jpe?g|gif|webp|bmp|svg\+xml)[;,]/i
+const MAX_IMG = 25_000_000
+
+type StyleKey = 'fontWeight' | 'fontStyle' | 'textDecoration' | 'textDecorationLine' | 'color' | 'backgroundColor' | 'fontSize' | 'fontFamily' | 'verticalAlign' | 'width' | 'height'
 type HStyle = Partial<Record<StyleKey, string>>
 
 /** What the conversion reads of a node: a DOM node, or one of the light parser's */
@@ -141,9 +156,30 @@ function toRun(text: string, c: Ctx): Inline {
   return { t: 'text', text, s, d: Object.keys(d).length ? d : undefined, href } as Inline
 }
 
-/** Converts HTML (clipboard from Word, Google Docs, web pages; .html files) into paragraphs of formatted runs (`dom`: false reads it with the light parser also where DOMParser exists, as the worker does). */
-export function htmlToParas(html: string, dom = true): PastedPara[] {
+/** the text of a node and what is inside it (the light parser's elements have no textContent) */
+function textOf(n: HNode): string {
+  return n.nodeType === 3 ? (n.textContent ?? '') : Array.from(n.childNodes).map(textOf).join('')
+}
+
+/** whether the marker text Word writes in front of a list paragraph ("1.", "a)", "(i)") numbers, as opposed to a bullet ("·", "o", "§") */
+const NUMBERED = /^\(?[\dA-Za-z]{1,4}[.)]$/
+
+/** a size in an attribute or style: px or pt (no unit: px), in points */
+function lengthPt(v: string | null | undefined): number {
+  const m = /^\s*([\d.]+)\s*(px|pt)?\s*$/i.exec(v ?? '')
+  return m ? Math.round(Number(m[1]) * (m[2]?.toLowerCase() === 'pt' ? 1 : 0.75) * 10) / 10 : 0
+}
+
+/**
+ * Converts HTML (clipboard from Word, Google Docs, web pages; .html files) into paragraphs of formatted runs (`dom`: false reads it with the light parser also where DOMParser exists, as the worker does).
+ * `rich` (the clipboard): data: pictures come out as picture runs and, with `tables`, tables as `table` paragraphs; else a table is flattened to tab-separated lines and pictures are left out.
+ */
+export function htmlToParas(html: string, dom = true, rich?: { tables: boolean }): PastedPara[] {
   const body: HNode = dom && typeof DOMParser !== 'undefined' ? new DOMParser().parseFromString(html, 'text/html').body : parseHtml(html)
+  return convert(body, {}, !!rich, !!rich?.tables)
+}
+
+function convert(root: HNode, base: Ctx, rich: boolean, tables: boolean): PastedPara[] {
   const out: PastedPara[] = []
   let cur: PastedPara | null = null
   const para = (props: Partial<PastedPara> = {}) => {
@@ -151,7 +187,7 @@ export function htmlToParas(html: string, dom = true): PastedPara[] {
     out.push(cur)
     return cur
   }
-  const walk = (node: HNode, c: Ctx, list: 'bullet' | 'number' | undefined, pre: boolean) => {
+  const walk = (node: HNode, c: Ctx, list: 'bullet' | 'number' | undefined, depth: number, pre: boolean) => {
     for (const child of Array.from(node.childNodes)) {
       if (child.nodeType === 3) {
         let text = child.textContent ?? ''
@@ -163,30 +199,59 @@ export function htmlToParas(html: string, dom = true): PastedPara[] {
       if (child.nodeType !== 1) continue
       const el = child as HElement
       if (SKIP.has(el.tagName)) continue
+      const css = el.getAttribute('style') ?? ''
+      // Word writes the list marker as text of its own, in an element it marks to be ignored: the paragraph is the item
+      if (/mso-list:\s*ignore/i.test(css)) {
+        if (cur) markers.set(cur, textOf(el).replace(/\s+/g, ''))
+        continue
+      }
       if (el.tagName === 'BR') {
         ;(cur ?? para()).runs.push(toRun('\n', c))
         continue
       }
+      if (el.tagName === 'IMG' && rich) {
+        const src = (el.getAttribute('src') ?? '').trim()
+        if (DATA_IMG.test(src) && src.length <= MAX_IMG) {
+          const st = el.style
+          ;(cur ?? para()).runs.push({ t: 'img', target: src, w: lengthPt(el.getAttribute('width') ?? st.width), h: lengthPt(el.getAttribute('height') ?? st.height), alt: el.getAttribute('alt') || undefined } as Inline)
+        }
+        continue
+      }
+      if (el.tagName === 'TABLE' && tables) {
+        cur = null
+        out.push({ runs: [], table: tableOf(el, c, rich) })
+        continue
+      }
       if (el.tagName === 'TD' || el.tagName === 'TH') {
         if (cur && (cur as PastedPara).runs.length) (cur as PastedPara).runs.push(toRun('\t', c))
-        walk(el, styleOf(el, c), list, pre)
+        walk(el, styleOf(el, c), list, depth, pre)
         continue
       }
       const st = styleOf(el, c)
       if (BLOCK.has(el.tagName)) {
+        const isList = el.tagName === 'UL' || el.tagName === 'OL'
         const nextList = el.tagName === 'UL' ? 'bullet' : el.tagName === 'OL' ? 'number' : list
-        if (el.tagName !== 'UL' && el.tagName !== 'OL' && el.tagName !== 'TABLE' && el.tagName !== 'TBODY' && el.tagName !== 'THEAD') {
+        const nextDepth = isList ? depth + 1 : depth
+        let made: PastedPara | undefined
+        if (!isList && el.tagName !== 'TABLE' && el.tagName !== 'TBODY' && el.tagName !== 'THEAD') {
           const h = /^H([1-6])$/.exec(el.tagName)
-          para({ heading: h ? Number(h[1]) : undefined, list: el.tagName === 'LI' ? nextList ?? 'bullet' : undefined })
+          made = para({ heading: h ? Number(h[1]) : undefined, list: el.tagName === 'LI' ? nextList ?? 'bullet' : undefined, level: el.tagName === 'LI' && depth > 1 ? depth - 1 : undefined })
         }
-        walk(el, st, nextList, pre || el.tagName === 'PRE')
+        walk(el, st, nextList, nextDepth, pre || el.tagName === 'PRE')
+        // a Word list paragraph: "mso-list: l0 level2 lfo1"
+        const mso = made && !made.list && !made.heading ? /mso-list:\s*[^;]*?level(\d+)/i.exec(css) : null
+        if (made && mso) {
+          made.list = NUMBERED.test(markers.get(made) ?? '') ? 'number' : 'bullet'
+          if (Number(mso[1]) > 1) made.level = Math.min(8, Number(mso[1]) - 1)
+        }
         cur = null
         continue
       }
-      walk(el, st, list, pre)
+      walk(el, st, list, depth, pre)
     }
   }
-  walk(body, {}, undefined, false)
+  const markers = new Map<PastedPara, string>()
+  walk(root, base, undefined, 0, false)
   // trim whitespace-only edges
   for (const p of out) {
     const first = p.runs[0]
@@ -195,9 +260,35 @@ export function htmlToParas(html: string, dom = true): PastedPara[] {
     if (last?.t === 'text') last.text = last.text.replace(/ +$/, '')
     p.runs = p.runs.filter((r) => r.t !== 'text' || r.text)
   }
-  while (out.length && !out[0].runs.length) out.shift()
-  while (out.length && !out[out.length - 1].runs.length) out.pop()
+  const empty = (p: PastedPara) => !p.runs.length && !p.table
+  while (out.length && empty(out[0])) out.shift()
+  while (out.length && empty(out[out.length - 1])) out.pop()
   return out
+}
+
+/** the rows of a table (its TR elements, not those of tables inside its cells) */
+function tableOf(table: HElement, c: Ctx, rich: boolean): PastedCell[][] {
+  const rows: HElement[] = []
+  const find = (n: HNode) => {
+    for (const k of Array.from(n.childNodes)) {
+      if (k.nodeType !== 1) continue
+      const t = (k as HElement).tagName
+      if (t === 'TR') rows.push(k as HElement)
+      else if (t === 'THEAD' || t === 'TBODY' || t === 'TFOOT') find(k)
+    }
+  }
+  find(table)
+  const span = (el: HElement, name: string, max: number) => Math.max(1, Math.min(max, parseInt(el.getAttribute(name) ?? '1', 10) || 1))
+  const tc = styleOf(table, c)
+  return rows.map((tr) =>
+    Array.from(tr.childNodes)
+      .filter((k) => k.nodeType === 1 && ((k as HElement).tagName === 'TD' || (k as HElement).tagName === 'TH'))
+      .map((k) => {
+        const el = k as HElement
+        // a table inside a cell comes out as lines of text
+        return { colSpan: span(el, 'colspan', 64), rowSpan: span(el, 'rowspan', 1000), paras: convert(el, styleOf(el, tc), rich, false) }
+      }),
+  )
 }
 
 // ---------------------------------------------------------------- DOM-free parser (worker)

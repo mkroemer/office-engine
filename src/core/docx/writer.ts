@@ -36,11 +36,13 @@ const PPR_ORDER = [
 const RPR_ORDER = [
   'rStyle', 'rFonts', 'b', 'bCs', 'i', 'iCs', 'caps', 'smallCaps', 'strike', 'dstrike', 'outline', 'shadow', 'emboss', 'imprint',
   'noProof', 'snapToGrid', 'vanish', 'webHidden', 'color', 'spacing', 'w', 'kern', 'position', 'sz', 'szCs', 'highlight', 'u',
-  'effect', 'bdr', 'shd', 'fitText', 'vertAlign', 'rtl', 'cs', 'em', 'lang', 'eastAsianLayout', 'specVanish', 'oMath',
+  'effect', 'bdr', 'shd', 'fitText', 'vertAlign', 'rtl', 'cs', 'em', 'lang', 'eastAsianLayout', 'specVanish', 'oMath', 'rPrChange',
 ]
-// move ranges are dropped: a regenerated paragraph writes moved text back as plain w:ins / w:del
-const START_MARKS = new Set(['bookmarkStart', 'commentRangeStart', 'permStart'])
-const END_MARKS = new Set(['bookmarkEnd', 'commentRangeEnd', 'permEnd'])
+// move ranges stay with the paragraph (they pair by id / name), at its start and end
+const START_MARKS = new Set(['bookmarkStart', 'commentRangeStart', 'permStart', 'moveFromRangeStart', 'moveToRangeStart'])
+const END_MARKS = new Set(['bookmarkEnd', 'commentRangeEnd', 'permEnd', 'moveFromRangeEnd', 'moveToRangeEnd'])
+/** inline elements around runs that the model does not hold: kept around the runs they held, from the source paragraph */
+const WRAPPERS = new Set(['sdt', 'smartTag', 'customXml', 'bdo', 'dir'])
 const RUN_STOP = new Set(['p', 'oMath', 'oMathPara', 'pPr', 'rPr', 'r', 'fldSimple'])
 // what counts as a run for the ordinals (as the converter's collectRuns): equations and simple fields are kept whole
 const RUN_LIKE = new Set(['r', 'oMath', 'oMathPara', 'fldSimple'])
@@ -97,7 +99,52 @@ export function origPara(doc: DocxDocument, pid: number): RNode | undefined {
   return itemParas(doc, loc.item)[loc.ord]?.node
 }
 
+/** for each run of a source paragraph, the wrapper elements (content control, smart tag, direction…) it lies in, outermost first */
+const wrapCache = new WeakMap<RNode, Map<RNode, RNode[]>>()
+function wrapChains(p: RNode): Map<RNode, RNode[]> {
+  let m = wrapCache.get(p)
+  if (m) return m
+  m = new Map()
+  const parent = new Map<RNode, RNode>()
+  walkOoxml(p, (c, par) => {
+    parent.set(c, par)
+    const l = local(c.q)
+    if (RUN_LIKE.has(l)) {
+      const chain: RNode[] = []
+      for (let n: RNode | undefined = par; n && n !== p; n = parent.get(n)) if (WRAPPERS.has(local(n.q))) chain.unshift(n)
+      m!.set(c, chain)
+    }
+    return RUN_STOP.has(l)
+  }, DOCX_UNDERSTOOD)
+  wrapCache.set(p, m)
+  return m
+}
+
+/** the opening of a wrapper element: its own properties come with it */
+function wrapOpen(n: RNode): string {
+  const l = local(n.q)
+  const q = n.q
+  if (l === 'sdt') {
+    const pr = kidOf(n, 'sdtPr')
+    return `<${q}${n.a}>${pr ? serialize(pr) : ''}<${prefixOf(q)}sdtContent>`
+  }
+  const pr = kidsOf(n).filter((c) => local(c.q) === 'smartTagPr' || local(c.q) === 'customXmlPr')
+  return `<${q}${n.a}>${pr.map((c) => serialize(c)).join('')}`
+}
+function wrapClose(n: RNode): string {
+  if (local(n.q) !== 'sdt') return `</${n.q}>`
+  const end = kidOf(n, 'sdtEndPr')
+  return `</${prefixOf(n.q)}sdtContent>${end ? serialize(end) : ''}</${n.q}>`
+}
+
 const runCache = new WeakMap<RNode, RNode[]>()
+/** the wrappers of the source run `src` points to */
+function wrapsOf(doc: DocxDocument, src: SrcRef | undefined): RNode[] {
+  const run = origRun(doc, src)
+  const p = src && origPara(doc, src[0])
+  return (run && p && wrapChains(p).get(run)) || []
+}
+
 function origRun(doc: DocxDocument, src: SrcRef | undefined): RNode | undefined {
   if (!src) return undefined
   const p = origPara(doc, src[0])
@@ -484,7 +531,7 @@ function delTextXml(text: string, W: string): string {
 
 /** a run wrapped in its tracked change (fresh ids: a change split by editing must not repeat one) */
 function trackXml(doc: DocxDocument, W: string, tc: TrackMark, run: string): string {
-  const tag = tc.k === 'ins' ? 'ins' : 'del'
+  const tag = tc.k === 'ins' ? (tc.mv ? 'moveTo' : 'ins') : tc.mv ? 'moveFrom' : 'del'
   const attrs = ` ${W}id="${doc.nextTrackId++}"` + (tc.author ? ` ${W}author="${escText(tc.author).replace(/"/g, '&quot;')}"` : '') + (tc.date ? ` ${W}date="${escText(tc.date)}"` : '')
   const out = `<${W}${tag}${attrs}>${run}</${W}${tag}>`
   // text deleted after someone inserted it: the deletion inside the insertion, as Word writes it
@@ -508,14 +555,29 @@ export async function genParagraph(doc: DocxDocument, spec: ParaSpec): Promise<{
     if (openLink !== undefined) body += `</${W}hyperlink>`
     openLink = undefined
   }
+  // content controls, smart tags… around the runs, as the source had them
+  const openWraps: RNode[] = []
+  const syncWrap = (chain: RNode[]) => {
+    let k = 0
+    while (k < openWraps.length && k < chain.length && openWraps[k] === chain[k]) k++
+    if (k === openWraps.length && k === chain.length) return
+    closeLink()
+    while (openWraps.length > k) body += wrapClose(openWraps.pop()!)
+    for (const n of chain.slice(k)) {
+      body += wrapOpen(n)
+      openWraps.push(n)
+    }
+  }
   const runXml = (rPr: RNode | undefined, content: string) => `<${W}r>${rPr && rPr.c.length ? serialize(rPr) : ''}${content}</${W}r>`
   const baseRPr = (src: SrcRef | undefined) => {
     const sr = origRun(doc, src)
-    const r = kidOf(sr, 'rPr') ?? markRPr
+    const own = kidOf(sr, 'rPr')
+    const r = own ?? markRPr
     if (!r) return undefined
     const c = clone(r)
     c.q = W + 'rPr'
-    removeKids(c, (l) => l === 'rPrChange' || l === 'ins' || l === 'del' || l === 'moveFrom' || l === 'moveTo')
+    // a format change of the run's own properties is the file's (someone else's, to review); the paragraph mark's is not the run's
+    removeKids(c, (l) => (!own && l === 'rPrChange') || l === 'ins' || l === 'del' || l === 'moveFrom' || l === 'moveTo')
     return c
   }
 
@@ -545,12 +607,14 @@ export async function genParagraph(doc: DocxDocument, spec: ParaSpec): Promise<{
   spec.parts.forEach((part, pi) => {
     if (pi > 0) {
       closeLink()
+      syncWrap([])
       body += `<${W}r><${W}br ${W}type="page"/></${W}r>`
       map.push({})
     }
     for (const run of part as SpecRun[]) {
       if ('obj' in run) {
         closeLink()
+        syncWrap('src' in run ? wrapsOf(doc, run.src) : [])
         openMarks(run)
         if (run.obj === 'field') {
           let rPr = baseRPr(undefined)
@@ -587,6 +651,7 @@ export async function genParagraph(doc: DocxDocument, spec: ParaSpec): Promise<{
         closeMarks(run)
         continue
       }
+      if (run.text) syncWrap(wrapsOf(doc, run.src))
       if (run.lk !== openLink) {
         closeLink()
         if (run.lk) {
@@ -605,6 +670,7 @@ export async function genParagraph(doc: DocxDocument, spec: ParaSpec): Promise<{
     }
   })
   closeLink()
+  syncWrap([])
 
   // bookmarks (and other ranges) of the source paragraphs; comment ranges come from the runs' marks
   let starts = ''
@@ -1052,7 +1118,7 @@ const isFooter = (k: HFKind) => k === 'footer' || k === 'firstFooter'
 const hfType = (k: HFKind) => (k === 'firstHeader' || k === 'firstFooter' ? 'first' : 'default')
 
 /** a header / footer paragraph; {PAGE} / {NUMPAGES} become fields Word updates */
-function hfParaXml(doc: DocxDocument, k: HFKind, line: HFLine): string {
+function hfParaXml(doc: DocxDocument, k: HFKind, line: HFLine, carry: string[] = []): string {
   const style = isFooter(k) ? 'Footer' : 'Header'
   const ppr = (doc.styles.has(style) ? `<w:pStyle w:val="${style}"/>` : '') + (line.align && line.align !== 'left' ? `<w:jc w:val="${line.align}"/>` : '')
   const rpr = (line.b ? '<w:b/>' : '') + (line.sz ? `<w:sz w:val="${Math.round(line.sz * 2)}"/><w:szCs w:val="${Math.round(line.sz * 2)}"/>` : '')
@@ -1063,7 +1129,25 @@ function hfParaXml(doc: DocxDocument, k: HFKind, line: HFLine): string {
     if (part === '{PAGE}' || part === '{NUMPAGES}') runs += `<w:fldSimple w:instr=" ${part.slice(1, -1)} "><w:r>${R}<w:t>1</w:t></w:r></w:fldSimple>`
     else runs += `<w:r>${R}${textContentXml(part, 'w:')}</w:r>`
   }
-  return `<w:p>${ppr ? `<w:pPr>${ppr}</w:pPr>` : ''}${runs}</w:p>`
+  // comments anchored in the part before: the range covers the paragraph now (the text it covered may be gone)
+  const starts = carry.map((id) => `<w:commentRangeStart w:id="${id}"/>`).join('')
+  const ends = carry.map((id) => `<w:commentRangeEnd w:id="${id}"/><w:r><w:commentReference w:id="${id}"/></w:r>`).join('')
+  return `<w:p>${ppr ? `<w:pPr>${ppr}</w:pPr>` : ''}${starts}${runs}${ends}</w:p>`
+}
+
+/** the comments a header / footer part anchors that `now` (what it is rewritten as: no anchor of the old part) does not, with the text each covered */
+function lostAnchors(was: string, now: string): Map<string, string> {
+  const out = new Map<string, string>()
+  const has = (xml: string, id: string) => new RegExp(`(?:commentRangeStart|commentReference)\\b[^>]*\\bid="${id}"`).test(xml)
+  for (const m of was.matchAll(/<([\w.-]+):(?:commentRangeStart|commentReference)\b[^>]*?\bid="([^"]*)"/g)) {
+    const id = m[2]
+    if (out.has(id) || has(now, id)) continue
+    const from = was.indexOf('>', m.index) + 1
+    const end = new RegExp(`<${m[1]}:commentRangeEnd\\b[^>]*\\bid="${id}"`).exec(was.slice(from))
+    const covered = end ? was.slice(from, from + end.index) : ''
+    out.set(id, [...covered.matchAll(/<[\w.-]+:t\b[^>]*>([^<]*)</g)].map((t) => t[1]).join(''))
+  }
+  return out
 }
 
 /** the whole part: the original root element (namespaces) kept when there is one */
@@ -1073,7 +1157,18 @@ function hfXml(doc: DocxDocument, k: HFKind, lines: HFLine[], was?: string): str
   const head = was ? (/^[\s\S]*?<w:(hdr|ftr)\b[^>]*>/.exec(was)?.[0] ?? '').replace(/\s*\/>$/, '>') : ''
   const open = head || `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<${tag} ${HF_NS}>`
   const end = head ? `</w:${/<w:(hdr|ftr)\b/.exec(head)![1]}>` : `</${tag}>`
-  return open + (lines.length ? lines.map((l) => hfParaXml(doc, k, l)).join('') : '<w:p/>') + end
+  // comments anchored in the part are kept (a comment without its anchor would be left in comments.xml for nothing)
+  const carry: string[][] = lines.map(() => [])
+  const extra: string[] = []
+  if (was) {
+    for (const [id, text] of lostAnchors(was, '')) {
+      const at = text ? lines.findIndex((l) => l.text.includes(text)) : -1
+      if (at >= 0) carry[at].push(id)
+      else if (lines.length) carry[0].push(id)
+      else extra.push(id)
+    }
+  }
+  return open + (lines.length ? lines.map((l, i) => hfParaXml(doc, k, l, carry[i])).join('') : extra.length ? hfParaXml(doc, k, { text: '' }, extra) : '<w:p/>') + end
 }
 
 /** Changes the headers / footers ("different first page" too); resolves to them converted again and the undo. */

@@ -4,7 +4,8 @@ import type { CanonStyle, EditOp, HFSet, PageSet, ParaSpec, StyleLook, TableOp }
 import { OpcPackage, type DocKind } from '../opc'
 import { PptxPresentation } from '../pptx/parser'
 import { BlobSource, openSource, type DocSource } from '../source'
-import { decodeText, extOf, HAS_SOURCE, mayBePlain, plainFormat, plainToOffice, ungzipped } from '../plain'
+import { decodeText, HAS_SOURCE, isMhtml, mayBePlain, mhtmlToHtml, plainFormat, plainToOffice, ungzipped } from '../plain'
+import { knownEncoding } from '../encoding'
 import { XlsxWorkbook } from '../xlsx/workbook'
 import { XlsxEditor } from '../xlsx/editor'
 import { readSheetDrawings } from '../xlsx/drawings'
@@ -15,7 +16,7 @@ import { addSlideImage, shapeOps, slideOp, undoShapes } from '../pptx/edit'
 import { ZipArchive } from '../zip'
 import { isIworkZip, isLegacyIwork, openIwork } from '../iwork'
 import { isVisioZip, openVisio } from '../visio'
-import { convertBiff, convertCfb, convertFlatOdf, convertOdfZip, convertRtf, LEGACY_EXT, legacyFormatOf, type Converted } from '../legacy'
+import { convertBiff, convertCfb, convertFlatOdf, convertOdfZip, convertRtf, legacyFormatOf, type Converted } from '../legacy'
 import { XlsxCollabWorker } from '../../collab/xlsx-worker'
 import type { XOp } from '../../collab/xlsx-ops'
 import { PptxCollabWorker } from '../../collab/pptx-worker'
@@ -47,6 +48,7 @@ export class Engine {
   constructor(private emit: Emit) {}
 
   async open(src: DocSource, params: OpenParams = {}): Promise<OpenResult> {
+    if (params.encoding && !knownEncoding(params.encoding)) throw new Error(`Unknown text encoding “${params.encoding}”`)
     let source = await openSource(src, {
       ...params,
       signal: this.abort.signal,
@@ -54,8 +56,9 @@ export class Engine {
     })
     const name = params.name ?? source.name
     const size = source.size
-    // the first bytes say the format, unless the name says an Office Open XML or iWork package
-    const head = mayBePlain(name) || LEGACY_EXT[extOf(name)] ? await source.read(0, Math.min(source.size, 4096)) : null
+    // the first bytes say the format, whatever the name says (a real .doc named .docx, a web page named .xls): a ZIP is a package
+    const first = source.size ? await source.read(0, Math.min(source.size, 4096)) : new Uint8Array(0)
+    const head = first[0] === 0x50 && first[1] === 0x4b && !mayBePlain(name) ? null : first
     // Word / Excel / PowerPoint 97-2003, RTF, flat OpenDocument: converted to the Office Open XML file they open as (editable)
     const legacy = head && legacyFormatOf(head)
     let converted: Converted | null = null
@@ -69,7 +72,9 @@ export class Engine {
     if (imported) source = await ungzipped(source)
     // CSV / TSV: an empty workbook whose sheet streams the rows in when it is loaded (the text is never read whole)
     const tabular = imported === 'csv' || imported === 'tsv'
-    const text = imported && !tabular ? decodeText(await source.read(0, source.size), source.type) : null
+    let text = imported && !tabular ? decodeText(await source.read(0, source.size), source.type, params.encoding) : null
+    // a web page saved as one file (MHTML, often named .doc): its HTML
+    if (imported === 'html' && text && isMhtml(text)) text = mhtmlToHtml(text)
     // kept for the source view: formats whose text is worth reading next to the document
     this.plainText = imported && HAS_SOURCE.has(imported) ? text : null
     let zip = converted
@@ -90,6 +95,7 @@ export class Engine {
     else if (isVisioZip(zip)) ({ zip, from } = await openVisio(zip))
     const pkg = (this.pkg = new OpcPackage(zip))
     const main = await pkg.mainPart()
+    await pkg.assertXml(main.path)
     this.kind = main.kind
     const flavor = await pkg.flavor()
     const res: OpenResult = {
@@ -99,8 +105,9 @@ export class Engine {
     if (main.kind === 'docx') this.docx = await DocxDocument.open(pkg, main.path)
     else if (main.kind === 'xlsx') {
       const wb = (this.xlsx = await XlsxWorkbook.open(pkg, main.path))
+      wb.onValues = (p) => this.emit('xlsx:progress', p)
       if (tabular) {
-        const imp = { source, sep: imported === 'tsv' ? '\t' : undefined, budget: params.residentCells, pageRows: params.pageRows }
+        const imp = { source, sep: imported === 'tsv' ? '\t' : undefined, budget: params.residentCells, pageRows: params.pageRows, encoding: params.encoding, onWarning: (text: string) => this.emit('warning', { text }) }
         wb.loaders.set(wb.sheets[0].path, (d, report) => loadDelimited(d, imp, report))
       }
       res.xlsx = wb.meta()
@@ -199,9 +206,9 @@ export class Engine {
       case 'xlsx.bookOp':
         return this.xed().bookOp(args[0] as BookOp)
       case 'xlsx.import': {
-        const p = (args[2] ?? {}) as { name?: string; sep?: string; residentCells?: number; pageRows?: number }
+        const p = (args[2] ?? {}) as { name?: string; sep?: string; residentCells?: number; pageRows?: number; encoding?: string }
         const source = await ungzipped(await openSource(args[1] as DocSource, { signal: this.abort.signal }))
-        return this.xed().importText(args[0] as number, { source, sep: p.sep, budget: p.residentCells, pageRows: p.pageRows }, p.name)
+        return this.xed().importText(args[0] as number, { source, sep: p.sep, budget: p.residentCells, pageRows: p.pageRows, encoding: p.encoding, onWarning: (text) => this.emit('warning', { text }) }, p.name)
       }
       case 'xlsx.undo':
         return this.xed().undo()
@@ -229,7 +236,7 @@ export class Engine {
       case 'xlsx.text':
         return this.need(this.xlsx).text(args[0] as number, args[1] as string)
       case 'pptx.setText':
-        return this.need(this.pptx).setText(args[0] as number, args[1] as number, args[2] as PParaSpec[])
+        return this.need(this.pptx).setText(args[0] as number, args[1] as number, args[2] as PParaSpec[], args[3] as [number, number] | undefined)
       case 'pptx.shapes':
         return shapeOps(this.need(this.pptx), args[0] as number, args[1] as ShapeOp[])
       case 'pptx.slides':

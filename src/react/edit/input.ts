@@ -34,6 +34,12 @@ export interface RichHost<P extends RichPara = RichPara> {
   backspaceAtStart?(pa: string, p: P): boolean
   /** Tab inside a paragraph (e.g. indent list); true when handled */
   tab?(sel: Sel, shift: boolean): boolean
+  /** Enter in an empty paragraph (e.g. leave a list); true when handled */
+  enterAtEmpty?(pa: string, p: P): boolean
+  /** ArrowRight / ArrowLeft with a caret that may have to leave a container (a table); true when handled */
+  arrow?(sel: Sel, dir: 1 | -1): boolean
+  /** copy / cut: puts the selection on the clipboard from the model; true when handled (the browser's own copy is skipped) */
+  copy?(sel: Sel, data: DataTransfer, cut: boolean): boolean
   undo(): void
   redo(): void
   toggle?(key: 'b' | 'i' | 'u'): void
@@ -51,6 +57,8 @@ export interface RichHost<P extends RichPara = RichPara> {
   /** deletes a range that spans other blocks (tables): applies the change and returns the caret, or null when unsupported */
   deleteAcross?(s: Pos, e: Pos): Pos | null
 }
+
+const NAV = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'])
 
 export function ordered(host: RichHost, s: Sel): [Pos, Pos] {
   const c = host.cmp(s.a.pa, s.f.pa)
@@ -163,6 +171,8 @@ export function opEnter(host: RichHost, sel: Sel) {
   })() : planDelete(host, sel)
   if (!plan) return
   const p = plan.paras[0]
+  // Enter in an empty paragraph of a list ends the list (Word, Docs)
+  if (collapsed(sel) && !plen(p.runs) && host.enterAtEmpty?.(sel.a.pa, p)) return
   const [l, r] = splitRuns(p.runs, plan.at.o)
   const [a, b] = host.split(p, l, r, plan.at.o >= plen(p.runs))
   host.replace(plan.pas, [a, b], caret({ pa: shiftPa(plan.at.pa, 1), o: 0 }), { label: 'enter' })
@@ -338,9 +348,24 @@ export class RichInput {
   private composing: Sel | null = null
   private justComposed = ''
   private raf = 0
-  lastSel: Sel | null = null
+  private last: Sel | null = null
+  /** the last selection known; assigning it makes it the selection (what an edit asked for no longer holds) */
+  get lastSel(): Sel | null {
+    return this.last
+  }
+  set lastSel(sel: Sel | null) {
+    this.last = sel
+    this.expected = null
+  }
   /** select all: the model selection covers every paragraph, the DOM one only what is rendered */
   private override: { model: Sel; dom: Sel } | null = null
+  /**
+   * The caret an edit asked for, until the DOM shows it: the next key press can come before the view is rebuilt, and
+   * the DOM caret is then still where the edit was made (typing without a pause across a paragraph break).
+   */
+  private expected: Sel | null = null
+  /** where the DOM selection last was in a paragraph: a view update that removes this node leaves the caret on the page element */
+  private seen: Node | null = null
 
   constructor(private host: RichHost) {}
 
@@ -352,6 +377,9 @@ export class RichInput {
     root.addEventListener('compositionstart', this.onCompStart)
     root.addEventListener('compositionend', this.onCompEnd)
     root.addEventListener('keydown', this.onKeyDown)
+    root.addEventListener('mousedown', this.onMouseDown)
+    root.addEventListener('copy', this.onCopy)
+    root.addEventListener('cut', this.onCopy)
     document.addEventListener('selectionchange', this.onSelChange)
   }
 
@@ -362,11 +390,16 @@ export class RichInput {
     r.removeEventListener('compositionstart', this.onCompStart)
     r.removeEventListener('compositionend', this.onCompEnd)
     r.removeEventListener('keydown', this.onKeyDown)
+    r.removeEventListener('mousedown', this.onMouseDown)
+    r.removeEventListener('copy', this.onCopy)
+    r.removeEventListener('cut', this.onCopy)
     document.removeEventListener('selectionchange', this.onSelChange)
     cancelAnimationFrame(this.raf)
     this.raf = 0 // or the next selection change waits forever for a frame that was cancelled
     this.root = null
     this.override = null
+    this.expected = null
+    this.seen = null
   }
 
   get isComposing() {
@@ -380,7 +413,37 @@ export class RichInput {
     if (!root.contains(s.anchorNode) || !root.contains(s.focusNode)) return null
     const a = posFromDom(root, s.anchorNode, s.anchorOffset)
     const f = posFromDom(root, s.focusNode, s.focusOffset)
+    if (a && f) this.seen = s.anchorNode
     return a && f ? { a, f } : null
+  }
+
+  /** the caret an edit asked for, which key presses go by until the view shows it (see `expected`) */
+  expect(sel: Sel) {
+    this.expected = sel
+  }
+
+  /** where the caret is going to be: the one an edit asked for, else the last known */
+  get caret(): Sel | null {
+    return this.expected ?? this.last
+  }
+
+  /** the selection a key press acts on */
+  private live(): Sel | null {
+    return this.override?.model ?? this.expected ?? this.sel()
+  }
+
+  /**
+   * After the view was rebuilt: a caret whose paragraph was removed from the DOM (it moved to another page) sits on the
+   * page element, outside every paragraph. Puts it back at the last known place.
+   */
+  repair(): boolean {
+    const root = this.root
+    const seen = this.seen
+    if (!root || this.composing || this.override || !seen || seen.isConnected || !this.lastSel) return false
+    const s = selPoints(root)
+    if (!s?.anchorNode || !root.contains(s.anchorNode) || this.readSel()) return false
+    this.seen = null
+    return this.restore(this.lastSel, false)
   }
 
   /** current selection, falling back to the last known one (e.g. after focusing a toolbar control) */
@@ -418,7 +481,9 @@ export class RichInput {
     const a = domFromPos(root, sel.a)
     const f = domFromPos(root, sel.f)
     if (!a || !f) {
-      this.lastSel = sel
+      // not in the DOM (its page is not shown): the DOM caret is somewhere else, and key presses go by this one
+      this.last = sel
+      this.expected = sel
       return false
     }
     const active = (root.getRootNode() as Document | ShadowRoot).activeElement
@@ -430,6 +495,7 @@ export class RichInput {
       /* node vanished */
     }
     this.lastSel = sel
+    this.expected = null
     return true
   }
 
@@ -446,7 +512,7 @@ export class RichInput {
     if (t === 'deleteCompositionText' || t === 'insertFromComposition') {
       if (e.cancelable) e.preventDefault()
       if (t === 'insertFromComposition' && e.data && e.data !== this.justComposed) {
-        const sel = this.sel()
+        const sel = this.live()
         if (sel) opInsert(this.host, sel, e.data, { remount: true })
       }
       this.justComposed = ''
@@ -454,7 +520,7 @@ export class RichInput {
     }
     e.preventDefault()
     const target = this.rangeSel(e.getTargetRanges?.()[0])
-    const sel = this.sel()
+    const sel = this.live()
     if (!sel) return
     const h = this.host
     switch (t) {
@@ -520,7 +586,7 @@ export class RichInput {
   }
 
   private onCompStart = () => {
-    this.composing = this.sel()
+    this.composing = this.live()
   }
 
   private onCompEnd = (e: CompositionEvent) => {
@@ -564,12 +630,29 @@ export class RichInput {
         return
       }
     }
+    if (NAV.has(e.key)) this.expected = null
+    if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft') && !mod && !e.shiftKey && !e.altKey) {
+      const sel = this.live()
+      if (sel && collapsed(sel) && this.host.arrow?.(sel, e.key === 'ArrowRight' ? 1 : -1)) e.preventDefault()
+      return
+    }
     if (e.key === 'Tab' && !mod) {
       e.preventDefault()
-      const sel = this.sel()
+      const sel = this.live()
       if (!sel) return
       if (!this.host.tab?.(sel, e.shiftKey) && !e.shiftKey) opInsert(this.host, sel, '\t')
     }
+  }
+
+  /** a click moves the caret: what an edit asked for no longer holds */
+  private onMouseDown = () => {
+    this.expected = null
+  }
+
+  private onCopy = (e: ClipboardEvent) => {
+    const sel = this.live()
+    if (!e.clipboardData || !sel || collapsed(sel)) return
+    if (this.host.copy?.(sel, e.clipboardData, e.type === 'cut')) e.preventDefault()
   }
 
   private onSelChange = () => {
@@ -584,8 +667,9 @@ export class RichInput {
         this.host.onSelection?.(ov.model)
         return
       }
-      if (s) this.lastSel = s
-      this.host.onSelection?.(s)
+      if (s && this.expected && sameSel(s, this.expected)) this.expected = null
+      if (s && !this.expected) this.lastSel = s
+      this.host.onSelection?.(this.expected ?? s)
     })
   }
 }

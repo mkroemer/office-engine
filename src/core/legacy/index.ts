@@ -16,6 +16,7 @@ import { biffToXlsx, xlsToXlsx } from './xls'
 
 export { isCfb } from './cfb'
 import { dict } from '../dict'
+import { PASSWORD_MESSAGE } from '../filetype'
 
 export type LegacyFormat = 'doc' | 'xls' | 'ppt' | 'rtf' | OdfFormat
 
@@ -82,8 +83,13 @@ export interface Converted {
 
 /** Converts a compound file: a Word, Excel or PowerPoint 97-2003 file (also 95 and older where supported). */
 export async function convertCfb(bytes: Uint8Array): Promise<Converted> {
-  const cfb = Cfb.open(bytes)
-  if (cfb.has('EncryptedPackage') || cfb.has('EncryptionInfo')) throw new Error('Password-protected Office files are not supported')
+  let cfb: Cfb
+  try {
+    cfb = Cfb.open(bytes)
+  } catch (e) {
+    throw new Error(`The file is damaged: ${(e as Error).message.replace(/^Compound file:?\s*/, '').replace(/^./, (c) => c.toLowerCase())} (an incomplete download or copy?)`)
+  }
+  if (cfb.has('EncryptedPackage') || cfb.has('EncryptionInfo')) throw new Error(PASSWORD_MESSAGE)
   if (cfb.has('WordDocument')) return { file: await docToDocx(cfb), format: 'doc' }
   if (cfb.has('Workbook') || cfb.has('Book')) return { file: await xlsToXlsx(cfb), format: 'xls' }
   if (cfb.has('PowerPoint Document')) return { file: await pptToPptx(cfb), format: 'ppt' }

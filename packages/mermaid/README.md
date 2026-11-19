@@ -34,7 +34,7 @@ From a CDN, no build step:
 
 ## What is drawn
 
-flowchart / graph (subgraphs, `classDef`, `style`, `linkStyle`), sequence (activations, notes, loop / alt / opt / par / critical / break / rect), class, state (composite states, fork / join / choice), ER (crow's foot), pie, Gantt, mind map.
+flowchart / graph (subgraphs, `classDef`, `style`, `linkStyle`, markdown strings ``"`text`"`` read as their text, quoted edge labels, edge ids `A e1@--> B`), sequence (activations, notes, loop / alt / opt / par / critical / break / rect, `box` groups), class, state (composite states, fork / join / choice), ER (crow's foot), pie, Gantt, mind map. A flowchart or sequence line that cannot be read throws a `DiagramError` naming the line.
 
 Laid out by a built-in layered layout, so drawings look close to, not exactly like, the original tool's. Not drawn yet: git graph, journey, timeline, quadrant, requirement, C4, Sankey, XY chart, block, packet, kanban, architecture.
 

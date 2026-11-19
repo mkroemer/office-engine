@@ -3,7 +3,7 @@
  * merges, sizes. Formulas (this sheet and others pointing at it) are shifted.
  */
 import { shiftFormula, translateFormula, translator } from './formula'
-import type { ColInfo, Merge, Range } from './types'
+import type { ColInfo, Merge, Range, RowAttrs } from './types'
 import type { Shift } from './follow'
 import { MAX_COL, MAX_ROWS, T_EMPTY, type SheetData } from './workbook'
 
@@ -14,16 +14,23 @@ export interface Snapshot {
   shifts: Shift[]
   merges: Merge[]
   colInfo: ColInfo[]
-  rowAttrs: Map<number, { ht?: number; hidden?: boolean }>
+  rowAttrs: Map<number, RowAttrs>
   autoRowH: Map<number, number>
   maxRow: number
   maxCol: number
   frozen: { rows: number; cols: number }
 }
 
+/**
+ * The state of a sheet, to go back to. The rows are the sheet's own, not copies (a sheet of 300 000 rows was copied
+ * twice per inserted row, for Undo): they are marked as held, and what changes a row in place copies a held one
+ * first (`ownRow`).
+ */
 export function snapshot(d: SheetData): Snapshot {
+  const held = (d.held ??= new WeakSet())
+  for (const row of d.rows) if (row) held.add(row)
   return {
-    rows: d.rows.map((r) => (r ? r.slice() : r)),
+    rows: d.rows.slice(),
     formulas: new Map(d.formulas),
     arrays: new Map(d.arrays),
     shifts: d.shifts.slice(),
@@ -38,7 +45,8 @@ export function snapshot(d: SheetData): Snapshot {
 }
 
 export function restore(d: SheetData, s: Snapshot) {
-  d.rows = s.rows.map((r) => (r ? r.slice() : r))
+  // (the rows of the snapshot themselves: they are held, a change copies them)
+  d.rows = s.rows.slice()
   d.formulas = new Map(s.formulas)
   d.arrays = new Map(s.arrays)
   d.shifts = s.shifts.slice()
@@ -156,7 +164,7 @@ export function shiftSheet(d: SheetData, sheetName: string, axis: 'row' | 'col',
     else d.rows.splice(at, -delta)
     if (d.rows.length > MAX_ROWS) d.rows.length = MAX_ROWS
     d.maxRow = Math.min(MAX_ROWS - 1, Math.max(-1, d.maxRow + (d.maxRow >= at ? delta : 0)))
-    const attrs = new Map<number, { ht?: number; hidden?: boolean }>()
+    const attrs = new Map<number, RowAttrs>()
     for (const [r, v] of d.rowAttrs) {
       if (delta < 0 && r >= at && r < end) continue
       const to = r >= at ? r + delta : r
@@ -272,22 +280,72 @@ export function setMerge(d: SheetData, range: Range, merge: boolean) {
 }
 
 export function setColWidth(d: SheetData, c0: number, c1: number, px: number) {
+  const w = Math.max(0, Math.round(px))
   const out: ColInfo[] = []
+  const covered: [number, number][] = []
   for (const ci of d.colInfo) {
     if (ci.max < c0 || ci.min > c1) out.push(ci)
     else {
       if (ci.min < c0) out.push({ ...ci, max: c0 - 1 })
       if (ci.max > c1) out.push({ ...ci, min: c1 + 1 })
+      // the columns keep their style, outline level…: only their width is new
+      const { prevW: _p, ...rest } = ci
+      const lo = Math.max(ci.min, c0)
+      const hi = Math.min(ci.max, c1)
+      covered.push([lo, hi])
+      out.push({ ...rest, min: lo, max: hi, w })
     }
   }
-  out.push({ min: c0, max: c1, w: Math.max(0, Math.round(px)) })
+  covered.sort((x, y) => x[0] - y[0])
+  let from = c0
+  for (const [lo, hi] of [...covered, [c1 + 1, c1 + 1] as [number, number]]) {
+    if (lo > from) out.push({ min: from, max: Math.min(lo - 1, c1), w })
+    from = Math.max(from, hi + 1)
+  }
   d.colInfo = out.sort((a, b) => a.min - b.min)
+  d.dirtyCols = true
+}
+
+/** gives columns c0..c1 the format `style` makes of the one they have (0: none), keeping their widths */
+export function setColStyle(d: SheetData, c0: number, c1: number, style: (st: number) => number) {
+  const out: ColInfo[] = []
+  const covered: [number, number][] = []
+  const withStyle = (ci: ColInfo): ColInfo => {
+    const st = style(Number(ci.x?.style ?? 0) || 0)
+    const { style: _s, ...rest } = ci.x ?? {}
+    const x = st ? { ...rest, style: String(st) } : rest
+    const { x: _x, ...bare } = ci
+    return Object.keys(x).length ? { ...bare, x } : bare
+  }
+  for (const ci of d.colInfo) {
+    if (ci.max < c0 || ci.min > c1) out.push(ci)
+    else {
+      if (ci.min < c0) out.push({ ...ci, max: c0 - 1 })
+      if (ci.max > c1) out.push({ ...ci, min: c1 + 1 })
+      const lo = Math.max(ci.min, c0)
+      const hi = Math.min(ci.max, c1)
+      covered.push([lo, hi])
+      out.push(withStyle({ ...ci, min: lo, max: hi }))
+    }
+  }
+  // the columns without a record: one of the default width
+  covered.sort((x, y) => x[0] - y[0])
+  let from = c0
+  for (const [lo, hi] of [...covered, [c1 + 1, c1 + 1] as [number, number]]) {
+    if (lo > from) {
+      const ci = withStyle({ min: from, max: Math.min(lo - 1, c1), w: d.defaultColW })
+      if (ci.x) out.push(ci)
+    }
+    from = Math.max(from, hi + 1)
+  }
+  d.colInfo = out.sort((x, y) => x.min - y.min)
   d.dirtyCols = true
 }
 
 export function setRowHeight(d: SheetData, r0: number, r1: number, px: number) {
   for (let r = r0; r <= r1; r++) {
-    d.rowAttrs.set(r, px > 0 ? { ht: +(px * 0.75).toFixed(2) } : { ...(d.rowAttrs.get(r) ?? {}), hidden: true })
+    const cur = d.rowAttrs.get(r)
+    d.rowAttrs.set(r, px > 0 ? { ht: +(px * 0.75).toFixed(2), ...(cur?.x && { x: cur.x }) } : { ...(cur ?? {}), hidden: true })
     d.dirtyRows.add(r)
   }
 }

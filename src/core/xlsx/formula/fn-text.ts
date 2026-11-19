@@ -6,6 +6,9 @@ import { bool, num, parseNumberText, str, wildcardRe } from './values'
 
 const MAX_TEXT = 32767
 
+/** what the Windows-1252 code page has at 128-159 (Excel's CHAR / CODE); the five it leaves empty are the control codes */
+const CP1252 = [...'€\u0081‚ƒ„…†‡ˆ‰Š‹Œ\u008DŽ\u008F\u0090‘’“”•–—˜™š›œ\u009DžŸ']
+
 function len(n: number): number {
   const k = Math.trunc(n)
   if (k < 0) throw ERR.VALUE
@@ -65,9 +68,12 @@ export const TEXT: Record<string, FnDef> = {
     return s.slice(Math.max(0, s.length - len(opt(a, 1, 1))))
   }),
   MID: S(3, 3, ([t, st, n]) => {
+    // all three read first: an error in an argument is the result, ahead of what is wrong with another
+    const s = str(t)
     const start = Math.trunc(num(st))
+    const k = num(n)
     if (start < 1) throw ERR.VALUE
-    return str(t).substr(start - 1, len(num(n)))
+    return s.substr(start - 1, len(k))
   }),
   LEN: S(1, 1, ([x]) => str(x).length),
   UPPER: S(1, 1, ([x]) => str(x).toUpperCase()),
@@ -92,9 +98,11 @@ export const TEXT: Record<string, FnDef> = {
   REPLACE: S(4, 4, ([t, st, n, nw]) => {
     const s = str(t)
     const start = Math.trunc(num(st))
+    const count = num(n)
+    const by = str(nw)
     if (start < 1) throw ERR.VALUE
-    const k = len(num(n))
-    return s.slice(0, start - 1) + str(nw) + s.slice(start - 1 + k)
+    const k = len(count)
+    return s.slice(0, start - 1) + by + s.slice(start - 1 + k)
   }),
   REPT: S(2, 2, ([t, n]) => {
     const s = str(t)
@@ -119,11 +127,13 @@ export const TEXT: Record<string, FnDef> = {
   CHAR: S(1, 1, ([x]) => {
     const n = Math.trunc(num(x))
     if (n < 1 || n > 255) throw ERR.VALUE
-    return String.fromCharCode(n)
+    return n >= 128 && n < 160 ? CP1252[n - 128] : String.fromCharCode(n)
   }),
   CODE: S(1, 1, ([x]) => {
     const s = str(x)
     if (!s) throw ERR.VALUE
-    return s.charCodeAt(0)
+    const c = s.charCodeAt(0)
+    const k = c >= 128 ? CP1252.indexOf(s[0]) : -1
+    return k >= 0 ? 128 + k : c
   }),
 }
