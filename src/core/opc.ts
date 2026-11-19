@@ -1,7 +1,7 @@
 import { el, getAttr, isNode, kidsOf, parseRaw, rootEl, serialize } from './raw'
 import { normalize, ZipArchive } from './zip'
 import { rebuildZip, type PartData } from './zipwrite'
-import { kids, parseXml, type XEl } from './xml'
+import { decodeXml, kids, parseXml, utf8Declaration, type XEl } from './xml'
 import { dict } from './dict'
 
 export type DocKind = 'docx' | 'xlsx' | 'pptx'
@@ -113,7 +113,7 @@ export class OpcPackage {
     if (ch) {
       if (ch.data === null) throw new Error(`Missing part: ${path}`)
       if (typeof ch.data === 'string') return ch.data
-      if (ch.data instanceof Uint8Array) return new TextDecoder().decode(ch.data)
+      if (ch.data instanceof Uint8Array) return decodeXml(ch.data)
       throw new Error(`Part ${path} is a stream`)
     }
     return this.zip.text(path)
@@ -148,6 +148,23 @@ export class OpcPackage {
   }
 
   /**
+   * Refuses a main part that is not XML: a tool that wrote something else there leaves a blank document, and the
+   * garbage would be saved back as the document.
+   */
+  async assertXml(path: string): Promise<void> {
+    const reader = (await this.stream(path)).getReader()
+    const first = await reader.read()
+    await reader.cancel().catch(() => {})
+    const b = first.value ?? new Uint8Array(0)
+    let i = b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf ? 3 : 0
+    // UTF-16 (a byte order mark) is read by the parts' reader
+    if ((b[0] === 0xff && b[1] === 0xfe) || (b[0] === 0xfe && b[1] === 0xff)) return
+    // (UTF-16 without a mark has a zero byte beside every character)
+    while (i < b.length && (b[i] === 0x20 || b[i] === 0x09 || b[i] === 0x0a || b[i] === 0x0d || b[i] === 0)) i++
+    if (b[i] !== 0x3c) throw new Error(`The file is damaged: its main part “${path}” is ${b.length ? 'not XML' : 'empty'}`)
+  }
+
+  /**
    * The format of the package as its main part declares it: a workbook with macros is an .xlsm, a template an .xltx…
    * A file named or typed otherwise is one Excel / Word / PowerPoint refuse to open. Undefined for a plain document.
    */
@@ -160,8 +177,9 @@ export class OpcPackage {
   /** Builds the edited package; unchanged entries are copied without recompression. `type`: of a plain document of its kind. */
   async save(type: string): Promise<Blob> {
     type = (await this.flavor())?.mime ?? type
+    await this.ensureContentTypes()
     const m = new Map<string, PartData | null>()
-    for (const { path, data } of this.changes.values()) m.set(path, data)
+    for (const { path, data } of this.changes.values()) m.set(path, typeof data === 'string' ? utf8Declaration(data) : data)
     return rebuildZip(this.zip, m, type)
   }
 
@@ -192,8 +210,44 @@ export class OpcPackage {
     this.setPart(rp, serialize(nodes))
   }
 
+  /**
+   * A package without `[Content_Types].xml` (some tools leave it out) opens, but is not one Office opens: the part is
+   * written from what the relationships say each part is, when the package is edited or saved.
+   */
+  private async ensureContentTypes(): Promise<void> {
+    if (this.has('[Content_Types].xml')) return
+    const kind = (await this.mainPart()).kind
+    const types = new Map<string, string>()
+    const seen = new Set<string>([''])
+    const queue = ['']
+    while (queue.length) {
+      const part = queue.pop()!
+      for (const r of (await this.rels(part)).values()) {
+        if (r.external || seen.has(r.target) || !this.has(r.target)) continue
+        seen.add(r.target)
+        queue.push(r.target)
+        const t = r.type.endsWith('/officeDocument') ? MAIN_TYPE[kind] : (REL_TYPE[kind + ':' + r.type.split('/').pop()] ?? REL_TYPE[r.type.split('/').pop()!])
+        if (t) types.set(r.target, t)
+      }
+    }
+    const esc = (v: string) => v.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+    const exts = new Map<string, string>([['rels', 'application/vnd.openxmlformats-package.relationships+xml'], ['xml', 'application/xml']])
+    for (const p of this.paths()) {
+      const ext = (p.split('.').pop() ?? '').toLowerCase()
+      if (!exts.has(ext) && mimeOf(p) !== 'application/octet-stream') exts.set(ext, mimeOf(p))
+      else if (!exts.has(ext) && ext === 'vml') exts.set(ext, 'application/vnd.openxmlformats-officedocument.vmlDrawing')
+    }
+    const xml =
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      [...exts].map(([e, t]) => `<Default Extension="${esc(e)}" ContentType="${esc(t)}"/>`).join('') +
+      [...types].map(([p, t]) => `<Override PartName="/${esc(p)}" ContentType="${esc(t)}"/>`).join('') +
+      '</Types>'
+    this.setPart('[Content_Types].xml', xml)
+  }
+
   /** Ensures a <Default Extension=…> entry exists (for new media types). */
   async ensureDefaultType(ext: string, contentType: string): Promise<void> {
+    await this.ensureContentTypes()
     const ct = '[Content_Types].xml'
     const nodes = parseRaw(await this.text(ct))
     const root = rootEl(nodes)!
@@ -211,6 +265,7 @@ export class OpcPackage {
   }
 
   async setContentType(partName: string, contentType: string | null): Promise<void> {
+    await this.ensureContentTypes()
     const ct = '[Content_Types].xml'
     const nodes = parseRaw(await this.text(ct))
     const root = rootEl(nodes)!
@@ -287,7 +342,7 @@ export class OpcPackage {
       ['ppt/presentation.xml', 'pptx'],
     ]
     if (!path) path = candidates.find(([p]) => this.zip.has(p))?.[0]
-    if (!path) throw new Error('Not an Office Open XML document (no main part found)')
+    if (!path || !this.has(path)) throw new Error('The file is a ZIP archive but not an Office document: it has no Word, Excel or PowerPoint main part (a damaged file, or another kind of archive)')
     const ct = (await this.contentType(path)) ?? ''
     let kind: DocKind | undefined
     if (ct.includes('wordprocessingml')) kind = 'docx'
@@ -297,6 +352,50 @@ export class OpcPackage {
     if (!kind) throw new Error(`Unsupported document type (${ct || path})`)
     return { path, kind }
   }
+}
+
+const OOXML = 'application/vnd.openxmlformats-officedocument.'
+const MAIN_TYPE: Record<DocKind, string> = {
+  docx: OOXML + 'wordprocessingml.document.main+xml',
+  xlsx: OOXML + 'spreadsheetml.sheet.main+xml',
+  pptx: OOXML + 'presentationml.presentation.main+xml',
+}
+/** the content type of a part by the type of the relationship to it (`kind:` first, for a type the formats share) */
+const REL_TYPE: Record<string, string> = {
+  theme: OOXML + 'theme+xml',
+  'core-properties': 'application/vnd.openxmlformats-package.core-properties+xml',
+  'extended-properties': OOXML + 'extended-properties+xml',
+  'custom-properties': OOXML + 'custom-properties+xml',
+  drawing: OOXML + 'drawing+xml',
+  chart: OOXML + 'drawingml.chart+xml',
+  'docx:styles': OOXML + 'wordprocessingml.styles+xml',
+  'docx:settings': OOXML + 'wordprocessingml.settings+xml',
+  'docx:numbering': OOXML + 'wordprocessingml.numbering+xml',
+  'docx:fontTable': OOXML + 'wordprocessingml.fontTable+xml',
+  'docx:webSettings': OOXML + 'wordprocessingml.webSettings+xml',
+  'docx:footnotes': OOXML + 'wordprocessingml.footnotes+xml',
+  'docx:endnotes': OOXML + 'wordprocessingml.endnotes+xml',
+  'docx:comments': OOXML + 'wordprocessingml.comments+xml',
+  'docx:header': OOXML + 'wordprocessingml.header+xml',
+  'docx:footer': OOXML + 'wordprocessingml.footer+xml',
+  'xlsx:styles': OOXML + 'spreadsheetml.styles+xml',
+  'xlsx:worksheet': OOXML + 'spreadsheetml.worksheet+xml',
+  'xlsx:sharedStrings': OOXML + 'spreadsheetml.sharedStrings+xml',
+  'xlsx:calcChain': OOXML + 'spreadsheetml.calcChain+xml',
+  'xlsx:table': OOXML + 'spreadsheetml.table+xml',
+  'xlsx:comments': OOXML + 'spreadsheetml.comments+xml',
+  'xlsx:externalLink': OOXML + 'spreadsheetml.externalLink+xml',
+  'pptx:slide': OOXML + 'presentationml.slide+xml',
+  'pptx:slideMaster': OOXML + 'presentationml.slideMaster+xml',
+  'pptx:slideLayout': OOXML + 'presentationml.slideLayout+xml',
+  'pptx:notesSlide': OOXML + 'presentationml.notesSlide+xml',
+  'pptx:notesMaster': OOXML + 'presentationml.notesMaster+xml',
+  'pptx:handoutMaster': OOXML + 'presentationml.handoutMaster+xml',
+  'pptx:presProps': OOXML + 'presentationml.presProps+xml',
+  'pptx:viewProps': OOXML + 'presentationml.viewProps+xml',
+  'pptx:tableStyles': OOXML + 'presentationml.tableStyles+xml',
+  'pptx:commentAuthors': OOXML + 'presentationml.commentAuthors+xml',
+  'pptx:comments': OOXML + 'presentationml.comments+xml',
 }
 
 /** the formats other than the plain document (docx, xlsx, pptx), by the content type of the main part: extension, media type */

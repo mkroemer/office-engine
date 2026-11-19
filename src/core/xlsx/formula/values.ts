@@ -1,6 +1,6 @@
 /** Runtime values (references, arrays), coercions, comparison, wildcard & criteria matching. */
 import { parseDateText } from './dates'
-import { ERR, ERROR_CODES, FormulaError, type ErrorCode, type Value } from './types'
+import { ERR, ERROR_CODES, ERROR_TYPE_EXTRA, FormulaError, type ErrorCode, type Value } from './types'
 
 /** Reference to a rectangular block of cells (0-based inclusive). */
 export class RangeV {
@@ -41,12 +41,28 @@ export const isErr = (v: unknown): v is FormulaError => v instanceof FormulaErro
 
 // ---------------------------------------------------------------- numbers <-> text
 
+/** a mixed number: 1 1/2, -3 3/4 */
+const MIXED_RE = /^([+-])?\s*(\d+)\s+(\d+)\/(\d+)$/
+
 const NUM_RE = /^([+-])?\s*\$?\s*((?:\d{1,3}(?:,\d{3})+|\d*)(?:\.\d*)?(?:[eE][+-]?\d+)?)\s*(%?)$/
 
-/** Numeric text -> number (plain, 1,234.5, 50%, $3, 1E3, dates, times); null when not numeric. */
+/** Numeric text -> number (plain, 1,234.5, (5), 50%, $3, 1E3, 1 1/2, dates, times); null when not numeric. */
 export function parseNumberText(s: string): number | null {
   const t = s.trim()
   if (!t) return null
+  // (5) is -5, the way accounting writes a negative
+  if (t[0] === '(' && t[t.length - 1] === ')' && t.length > 2) {
+    const inner = t.slice(1, -1).trim()
+    const n = /^[+-]/.test(inner) ? null : parseNumberText(inner)
+    return n === null ? null : -n
+  }
+  const mixed = MIXED_RE.exec(t)
+  if (mixed) {
+    const den = Number(mixed[4])
+    if (den === 0) return null
+    const n = Number(mixed[2]) + Number(mixed[3]) / den
+    return mixed[1] === '-' ? -n : n
+  }
   const m = NUM_RE.exec(t)
   if (m && /\d/.test(m[2])) {
     const n = Number(m[2].replace(/,/g, ''))
@@ -137,6 +153,31 @@ export function numEq(a: number, b: number): boolean {
   return a === b || Math.abs(a - b) <= Math.max(Math.abs(a), Math.abs(b)) * 1e-15
 }
 
+/**
+ * Excel's text order: by letters, then accents, never by case; punctuation before digits before letters, and `đ`
+ * between `d` and `e`. One collator for the whole run (building one costs far more than a comparison).
+ */
+const collator = new Intl.Collator('vi', { sensitivity: 'accent' })
+
+const plain = (s: string) => {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i)
+    if (!(c >= 97 && c <= 122) && !(c >= 65 && c <= 90) && !(c >= 48 && c <= 57) && c !== 32) return false
+  }
+  return true
+}
+
+/** text order: plain ASCII (letters, digits, spaces) sorts as its lower case does, the rest by collation */
+export function compareText(a: string, b: string): number {
+  if (a === b) return 0
+  if (plain(a) && plain(b)) {
+    const x = a.toLowerCase()
+    const y = b.toLowerCase()
+    return x < y ? -1 : x > y ? 1 : 0
+  }
+  return collator.compare(a, b)
+}
+
 const rank = (v: number | string | boolean) => (typeof v === 'number' ? 0 : typeof v === 'string' ? 1 : 2)
 
 /** Excel ordering: numbers < text < booleans; text case-insensitive; empty adopts the other side's type. Errors not allowed. */
@@ -151,11 +192,7 @@ export function compare(a: Value, b: Value): number {
     const y = b as number
     return numEq(a, y) ? 0 : a < y ? -1 : 1
   }
-  if (typeof a === 'string') {
-    const x = a.toLowerCase()
-    const y = (b as string).toLowerCase()
-    return x < y ? -1 : x > y ? 1 : 0
-  }
+  if (typeof a === 'string') return compareText(a, b as string)
   return (a ? 1 : 0) - (b ? 1 : 0)
 }
 
@@ -201,7 +238,10 @@ function cmpOp(op: string, c: number): boolean {
   }
 }
 
-const errCode = (s: string): ErrorCode | undefined => ERROR_CODES.find((c) => c === s.toUpperCase())
+const errCode = (s: string): ErrorCode | undefined => {
+  const up = s.toUpperCase()
+  return ERROR_CODES.find((c) => c === up) ?? (Object.hasOwn(ERROR_TYPE_EXTRA, up) ? (up as ErrorCode) : undefined)
+}
 
 /** Criteria of COUNTIF/SUMIF/...: "<5", ">=10", "<>x", "=abc", "a*c", 3, TRUE, "" (blank). */
 export function criteria(crit: Value): Matcher {
@@ -231,7 +271,8 @@ export function criteria(crit: Value): Matcher {
   const n = parseNumberText(rest)
   if (n !== null) {
     if (eq) return (v) => (typeof v === 'number' && numEq(v, n)) || (typeof v === 'string' && parseNumberText(v) === n)
-    if (op === '<>') return (v) => !(typeof v === 'number' && numEq(v, n))
+    // a number kept as text is equal to it (as for =), so it is not <> it
+    if (op === '<>') return (v) => !((typeof v === 'number' && numEq(v, n)) || (typeof v === 'string' && parseNumberText(v) === n))
     return (v) => typeof v === 'number' && cmpOp(op, compare(v, n))
   }
   const up = rest.toUpperCase()

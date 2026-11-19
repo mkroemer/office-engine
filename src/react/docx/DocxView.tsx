@@ -18,12 +18,13 @@ import { markCss, useCommentsCtl, useCommentsState, type CommentHost, type Place
 import { COMMENT_KEYS } from '../comments/CommentsPanel'
 import { DocxToolbar, styleChoices, type ImageActions } from './DocxToolbar'
 import { FindBar, type Match } from './FindBar'
+import { findAll } from './find'
 import { HeaderFooterDialog } from './HeaderFooterDialog'
 import { PageSetupDialog } from './PageSetupDialog'
 import { mergeSource } from '../../core/plainmerge'
 import { docxBodyHtml, docxToHtml, docxToMarkdown, docxToText, pictureData } from '../file/text'
 import { BlockView, contextual, type RenderCtx } from './render'
-import { paginate, type PageSlice } from './paginate'
+import { pageHF, paginate, type PageSlice } from './paginate'
 
 const PX = 4 / 3
 const GAP = 16
@@ -359,7 +360,11 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
 
   useIsoLayoutEffect(() => {
     const sel = editor.pendingSel
-    if (!sel || !pagesRef.current) return
+    if (!sel || !pagesRef.current) {
+      // a paragraph that moved to another page took the caret with it: it goes back to where it was
+      if (isEditing) editor.input.repair()
+      return
+    }
     const bi = Number(sel.f.pa.split('.')[0])
     const pi = pages.findIndex((p) => bi >= p.start && bi < p.end)
     if (pi >= 0 && (pi < first || pi > last)) {
@@ -387,12 +392,11 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
 
   // ---- find ----
   const matches = useMemo<Match[]>(() => {
-    const q = find.q.toLowerCase()
+    const q = find.q
     if (!find.open || !q) return []
     const out: Match[] = []
     const scan = (p: Paragraph, pa: string, bi: number) => {
-      const t = runsText(p.runs as RRun[]).toLowerCase()
-      for (let i = t.indexOf(q); i >= 0 && out.length < 5000; i = t.indexOf(q, i + q.length)) out.push({ pa, a: i, b: i + q.length, bi })
+      for (const [a, b] of findAll(runsText(p.runs as RRun[]), q, 5000 - out.length)) out.push({ pa, a, b, bi })
     }
     st.blocks.forEach((b, bi) => {
       if (editable(b)) scan(b, String(bi), bi)
@@ -466,11 +470,17 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
       return {
         size: `${page.w}pt ${page.h}pt`,
         margin: '0',
-        node: pages.map((p, i) => (
-          <div key={i} className="de-print-page" style={{ width: `${page.w}pt`, height: `${page.h}pt` }}>
-            <PageView index={i} count={pages.length} slice={p} blocks={st.blocks} meta={meta} page={page} top={0} left={0} height={pageH} zoom={1} client={client} docStyle={docStyle} editing={false} />
-          </div>
-        )),
+        node: pages.map((p, i) => {
+          // a page whose content is taller than the sheet (a table row taller than a page) is as tall as it is, and the
+          // browser cuts it into sheets: nothing is clipped at the sheet's edge
+          const h = Math.max(pageH, (page.mt + page.mb) * PX + p.used)
+          const tall = h > pageH
+          return (
+            <div key={i} className={tall ? 'de-print-page de-print-tall' : 'de-print-page'} style={{ width: `${page.w}pt`, height: tall ? `${h}px` : `${page.h}pt` }}>
+              <PageView index={i} count={pages.length} slice={p} blocks={st.blocks} meta={meta} page={page} top={0} left={0} height={h} zoom={1} client={client} docStyle={docStyle} editing={false} />
+            </div>
+          )
+        }),
       }
     },
     text: async (format, base) => {
@@ -506,14 +516,16 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
 
   // ---- dialogs / clipboard ----
   const askLink = () => {
-    const cur = editor.state()?.link
+    // the selection now: the dialog takes the focus
+    const at = editor.input.sel()
+    const cur = editor.state(at)?.link
     setPrompt({
       title: cur ? 'Edit link' : 'Insert link',
       placeholder: 'https://…',
       initial: cur,
       ok: 'Apply',
-      onOk: (v) => void editor.setLink(v.trim() || null).catch((e: Error) => setToast(e.message)),
-      extra: cur ? { label: 'Remove', run: () => void editor.setLink(null) } : undefined,
+      onOk: (v) => void editor.setLink(v.trim() || null, at).catch((e: Error) => setToast(e.message)),
+      extra: cur ? { label: 'Remove', run: () => void editor.setLink(null, at) } : undefined,
     })
   }
   const askAlt = () => {
@@ -979,11 +991,8 @@ function PageView({ index, count, slice, blocks, meta, page, top, left, height, 
     [client, index, count, editing, colResize],
   )
   const hfCtx = useMemo<RenderCtx>(() => ({ ...ctx, editable: false }), [ctx])
-  const first = index === 0 && meta?.titlePg
-  const header = first ? meta?.firstHeader : meta?.header
-  const footer = first ? meta?.firstFooter : meta?.footer
-  const hk: HFKind = first ? 'firstHeader' : 'header'
-  const fk: HFKind = first ? 'firstFooter' : 'footer'
+  // the first page's, the even pages' (when the file has different odd and even ones) or the default
+  const { header, footer, hk, fk } = pageHF(meta ?? undefined, index)
   const items = []
   for (let i = slice.start; i < slice.end; i++) {
     const b = blocks[i]

@@ -13,8 +13,8 @@ import type { CommentOp } from './comments'
 export type POp =
   /** a comment set / deleted */
   | (CommentOp & { id: string })
-  /** whole text of shape `sid` (last writer wins per shape) */
-  | { t: 'text'; id: string; slide: string; sid: number; paras: PParaSpec[] }
+  /** whole text of shape `sid`, or of its table cell `cell` (last writer wins per shape) */
+  | { t: 'text'; id: string; slide: string; sid: number; cell?: [number, number]; paras: PParaSpec[] }
   /** shape edits; an inserted picture refers to its image by `key` */
   | { t: 'shapes'; id: string; slide: string; ops: (ShapeOp & { key?: string })[] }
   | { t: 'image'; id: string; key: string; slide: string; bytes: Uint8Array; ext: string }

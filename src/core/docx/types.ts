@@ -76,6 +76,8 @@ export interface TrackMark {
   date?: string
   /** a deletion of text someone inserted (Word's w:ins around w:del): that insertion, still to be accepted or rejected */
   ins?: TrackMark
+  /** the change is a move (w:moveFrom / w:moveTo), written back as one */
+  mv?: boolean
 }
 
 /**
@@ -273,7 +275,7 @@ export interface StyleLook {
   after?: number | null
 }
 
-export type HeaderFooters = Pick<DocxMeta, 'header' | 'footer' | 'firstHeader' | 'firstFooter'>
+export type HeaderFooters = Pick<DocxMeta, 'header' | 'footer' | 'firstHeader' | 'firstFooter' | 'evenHeader' | 'evenFooter'>
 
 export type HFKind = 'header' | 'footer' | 'firstHeader' | 'firstFooter'
 
@@ -411,7 +413,12 @@ export interface DocxMeta {
   footer?: Block[]
   firstHeader?: Block[]
   firstFooter?: Block[]
+  /** the header / footer of even pages (used when `evenOdd`) */
+  evenHeader?: Block[]
+  evenFooter?: Block[]
   titlePg?: boolean
+  /** different headers / footers for odd and even pages (w:evenAndOddHeaders) */
+  evenOdd?: boolean
   /** body default font (CSS) and size */
   font?: string
   sz?: number

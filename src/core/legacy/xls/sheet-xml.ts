@@ -105,7 +105,8 @@ export function sheetXml(env: SheetEnv, m: SheetModel, index: number, extra: She
             }
             return `<c r="${ref}"${sAttr} t="str">${fx}<v>${xstr(f.value as string)}</v></c>`
           case 2:
-            return `<c r="${ref}"${sAttr} t="b">${fx}<v>${f.value}</v></c>`
+            // TRUE / FALSE typed in a cell (some writers store a constant as a formula): a boolean, not `=TRUE`
+            return `<c r="${ref}"${sAttr} t="b">${text !== undefined && /^(?:TRUE|FALSE)(?:\(\))?$/.test(text) ? '' : fx}<v>${f.value}</v></c>`
           default:
             return `<c r="${ref}"${sAttr} t="e">${fx}<v>${f.value}</v></c>`
         }

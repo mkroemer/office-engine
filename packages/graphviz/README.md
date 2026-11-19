@@ -35,7 +35,9 @@ From a CDN, no build step:
 
 ## What is drawn
 
-graph / digraph / strict, subgraphs and `cluster_*` boxes, `node` / `edge` / `graph` defaults, edge chains and `{a b} -> c`, `rank=same`, shapes (box, ellipse, circle, diamond, record, cylinder, note…), styles (filled, dashed, dotted, bold, rounded, invis), colors (names, `#rgb`, HSV, X11 grays), arrowheads, `dir`, labels (`\n` `\l`, record fields, HTML labels as text).
+graph / digraph / strict (duplicate edges merged), subgraphs and `cluster_*` boxes, `node` / `edge` / `graph` defaults, edge chains and `{a b} -> c`, `rank=same`, shapes (box, ellipse, circle, diamond, record, cylinder, note…), styles (filled, dashed, dotted, bold, rounded, invis), colors (names, `#rgb`, HSV, X11 grays), arrowheads, `dir`, labels (`\n` `\l`, record fields, HTML labels as text).
+
+A syntax error (unclosed `[` / `{` / string, a missing node after `->`, `--` in a digraph, a stray character) throws a `DiagramError` naming the line.
 
 Laid out by a built-in layered layout, so drawings look close to, not exactly like, the original tool's. Not drawn yet: layout engines other than `dot` (`neato`, `circo`, `fdp`… are laid out as `dot`), ports (edges meet the node), HTML table layouts (their text is shown).
 

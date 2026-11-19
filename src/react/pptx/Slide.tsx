@@ -153,6 +153,8 @@ function Marker({ id, s }: { id: string; s: Stroke }) {
 
 export interface SlideEditing {
   sid: number
+  /** [row, column]: the text is a cell's of table `sid` */
+  cell?: [number, number]
   text: TextBody
   edit: TextEdit
 }
@@ -214,7 +216,7 @@ function ShapeView({ el, client, live, editing }: { el: Extract<SlideEl, { t: 's
           )}
         </>
       )}
-      {editing && editing.sid === el.sid ? <TextView text={editing.text} edit={editing.edit} /> : el.text && <TextView text={el.text} />}
+      {editing && !editing.cell && editing.sid === el.sid ? <TextView text={editing.text} edit={editing.edit} /> : el.text && <TextView text={el.text} />}
     </div>
   )
 }
@@ -252,20 +254,23 @@ function PicView({ el, client, live }: { el: Extract<SlideEl, { t: 'pic' }>; cli
 
 const strokeCss = (s: Stroke | undefined) => (s ? `${Math.max(1, s.w)}px solid ${cssColor(s.c) ?? 'transparent'}` : undefined)
 
-function CellView({ cell, client, live, h }: { cell: TCell; client: DocumentClient; live: boolean; h: number }) {
+function CellView({ cell, client, live, h, sid, at, editing }: { cell: TCell; client: DocumentClient; live: boolean; h: number; sid?: number; at: [number, number]; editing?: SlideEditing }) {
   const fill = useFillCss(client, cell.fill, live)
+  const own = editing && editing.sid === sid && editing.cell?.[0] === at[0] && editing.cell[1] === at[1]
   return (
     <td
+      data-sid={sid !== undefined && cell.text ? sid : undefined}
+      data-cell={sid !== undefined && cell.text ? `${at[0]},${at[1]}` : undefined}
       colSpan={cell.colSpan > 1 ? cell.colSpan : undefined}
       rowSpan={cell.rowSpan > 1 ? cell.rowSpan : undefined}
       style={{ ...(fill ?? {}), borderLeft: strokeCss(cell.bl), borderRight: strokeCss(cell.br), borderTop: strokeCss(cell.bt), borderBottom: strokeCss(cell.bb), height: h }}
     >
-      {cell.text && <TextView text={cell.text} flow />}
+      {own ? <TextView text={editing.text} flow edit={editing.edit} /> : cell.text && !cell.text.empty && <TextView text={cell.text} flow />}
     </td>
   )
 }
 
-function TableView({ el, client, live }: { el: Extract<SlideEl, { t: 'table' }>; client: DocumentClient; live: boolean }) {
+function TableView({ el, client, live, editing }: { el: Extract<SlideEl, { t: 'table' }>; client: DocumentClient; live: boolean; editing?: SlideEditing }) {
   return (
     <div className="de-el" style={{ ...boxStyle(el.box), height: 'auto' }} data-top={el.top}>
       <table className="de-stbl">
@@ -277,7 +282,7 @@ function TableView({ el, client, live }: { el: Extract<SlideEl, { t: 'table' }>;
         <tbody>
           {el.rows.map((r, ri) => (
             <tr key={ri}>
-              {r.cells.map((c, ci) => (c.hidden ? null : <CellView key={ci} cell={c} client={client} live={live} h={r.h} />))}
+              {r.cells.map((c, ci) => (c.hidden ? null : <CellView key={ci} cell={c} client={client} live={live} h={r.h} sid={el.sid} at={[ri, ci]} editing={editing} />))}
             </tr>
           ))}
         </tbody>
@@ -293,7 +298,7 @@ function ElView({ el, client, live, editing }: { el: SlideEl; client: DocumentCl
     case 'pic':
       return <PicView el={el} client={client} live={live} />
     case 'table':
-      return <TableView el={el} client={client} live={live} />
+      return <TableView el={el} client={client} live={live} editing={editing} />
     case 'placeholder':
       return (
         <div className="de-el de-ph" style={{ ...boxStyle(el.box), display: 'flex' }} data-top={el.top}>

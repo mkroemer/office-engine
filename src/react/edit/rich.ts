@@ -124,6 +124,29 @@ export function runAt<R extends RRun>(runs: R[], o: number): R | undefined {
   return r.find((x) => x.t === 'text')
 }
 
+/**
+ * [start, end) of the link a caret at `o` is in: the text run it follows (or the first one at 0) and the runs around it
+ * with the same target; null when that run is no link.
+ */
+export function linkSpan(runs: RRun[], o: number): [number, number] | null {
+  let pos = 0
+  const at: { a: number; b: number; href?: string }[] = []
+  for (const r of runs) {
+    const n = rlen(r)
+    at.push({ a: pos, b: pos + n, href: r.t === 'text' ? r.href : undefined })
+    pos += n
+  }
+  let k = runs.findIndex((r, i) => r.t === 'text' && at[i].a < o && o <= at[i].b)
+  if (k < 0) k = runs.findIndex((r) => r.t === 'text')
+  const href = k >= 0 ? at[k].href : undefined
+  if (!href || (o < at[k].a || o > at[k].b)) return null
+  let i = k
+  let j = k
+  while (i > 0 && at[i - 1].href === href) i--
+  while (j < at.length - 1 && at[j + 1].href === href) j++
+  return [at[i].a, at[j].b]
+}
+
 export function insertText<R extends RRun>(runs: R[], o: number, text: string, style?: Partial<R>, fallback?: Partial<R>): R[] {
   if (!text) return runs
   const [l, r] = splitRuns(runs, o)

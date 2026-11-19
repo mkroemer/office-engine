@@ -67,7 +67,7 @@ describe('compound file reader', () => {
 
   test('a compound file without a document stream, and an encrypted package, say so', async () => {
     await expect(convertCfb(writeCfb({ Other: bytes(10) }))).rejects.toThrow(/Not a Word, Excel or PowerPoint file/)
-    await expect(convertCfb(writeCfb({ EncryptionInfo: bytes(10), EncryptedPackage: bytes(5000) }))).rejects.toThrow(/Password-protected/)
+    await expect(convertCfb(writeCfb({ EncryptionInfo: bytes(10), EncryptedPackage: bytes(5000) }))).rejects.toThrow('This file is password-protected (encrypted): open it in Office and save it without a password')
     await expect(convertCfb(writeCfb({ PP40: bytes(100) }))).rejects.toThrow(/PowerPoint 95 and older/)
   })
 })

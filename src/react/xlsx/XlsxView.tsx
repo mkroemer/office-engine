@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type MutableRefObject, type ReactNode } from 'react'
-import type { BookOp, CellDetail, CellInput, CellOut, FindMatch, FindOptions, FmtPatch, Merge, Range, SheetOp, SheetProgress, WorkbookMeta, XlsxClip, XlsxEditResult } from '../../core/xlsx/types'
+import type { BookOp, CellDetail, ClipCell, CellInput, CellOut, FindMatch, FindOptions, FmtPatch, Merge, Range, SheetOp, SheetProgress, TextRun, WorkbookMeta, XlsxClip, XlsxEditResult } from '../../core/xlsx/types'
 import { parseTsv, tsvCell } from '../../core/xlsx/clip'
 import { colName, MAX_ROWS } from '../../core/xlsx/workbook'
 import { detectSeparator, parseCsv } from '../../core/convert'
 import { closeFormula, formulaContext, isFormula, rangeText, type FormulaContext } from '../../core/xlsx/formula/assist'
+import { translateFormula } from '../../core/xlsx/formula'
 import { argSlot, functionInfo, suggestFunctions, type FnInfo } from '../../core/xlsx/formula/catalog'
 import { MAX_COL, MAX_ROW } from '../../core/xlsx/formula/types'
 import type { DocumentClient } from '../../core/worker/client'
@@ -19,11 +20,14 @@ import { Icon } from '../edit/Toolbar'
 import { Axis } from './axis'
 import { drawingBox, drawingEl, drawingExtent, useSheetDrawings } from './drawings'
 import { fitNumber, fontPx } from './fit'
+import { htmlToTsv } from './html'
+import { fontOf, rotatedHeight, textWidth, wrapHeight } from './measure'
 import { sheetPrintable } from './print'
 import { useCommentsCtl, useCommentsState, type CommentsCtl, type PlacedThread } from '../comments/Comments'
 import { COMMENT_KEYS } from '../comments/CommentsPanel'
 import type { CommentThread } from '../../core/comments'
 import { cssColor, cssPaint } from '../../core/color'
+import { cssFont } from '../../core/fonts'
 import { dict } from '../../core/dict'
 
 const BLOCK = 128
@@ -32,6 +36,8 @@ const MAX_SCROLL_PX = 12_000_000
 
 interface CachedBlock {
   rows: Map<number, CellOut[]>
+  /** the format (style index) of the rows that have one of their own */
+  own: Map<number, number>
   complete: boolean
   rowsAt: number
 }
@@ -45,6 +51,8 @@ class SheetState {
   rowAxis = new Axis(20)
   colAxis = new Axis(64)
   merges: Merge[] = []
+  /** the columns that have a format of their own: [first, last, style index] */
+  colStyles: [number, number, number][] = []
   frozen = { rows: 0, cols: 0 }
   gridLines = true
   blocks = new Map<number, CachedBlock>()
@@ -54,6 +62,23 @@ class SheetState {
   scrollPos?: { x: number; y: number }
   /** a cell to select and scroll to (a comment shown from the panel); `n` changes every time */
   goto?: { r: number; c: number; n: number }
+}
+
+/** the columns of a sheet that have a format of their own (`<col style>`) */
+function colStylesOf(cols: SheetProgress['colInfo']): [number, number, number][] {
+  const out: [number, number, number][] = []
+  for (const ci of cols ?? []) {
+    const st = Number(ci.x?.style ?? 0)
+    if (st > 0) out.push([ci.min, ci.max, st])
+  }
+  return out
+}
+
+/** whether a format shows in a cell that holds nothing: a fill, a border */
+function shows(css: unknown): boolean {
+  if (!css || typeof css !== 'object') return false
+  for (const k in css as object) if (k.startsWith('background') || k.startsWith('border')) return true
+  return false
 }
 
 /**
@@ -129,6 +154,7 @@ class XlsxStore {
       s.rowAxis.def = p.defaultRowH || 20
       s.colAxis.def = p.defaultColW || 64
       for (const ci of p.colInfo ?? []) s.colAxis.setRange(ci.min, ci.max, ci.w)
+      s.colStyles = colStylesOf(p.colInfo)
       s.frozen = p.frozen ?? s.frozen
       s.gridLines = p.gridLines ?? true
     }
@@ -156,8 +182,12 @@ class XlsxStore {
         .call('xlsx.block', sheet, b * BLOCK, (b + 1) * BLOCK)
         .then((res) => {
           const rows = new Map<number, CellOut[]>()
-          for (const r of res.rows) rows.set(r.r, r.cells)
-          s.blocks.set(b, { rows, complete: res.complete, rowsAt })
+          const own = new Map<number, number>()
+          for (const r of res.rows) {
+            rows.set(r.r, r.cells)
+            if (r.s) own.set(r.r, r.s)
+          }
+          s.blocks.set(b, { rows, own, complete: res.complete, rowsAt })
           if (s.blocks.size > 400) {
             const firstKey = s.blocks.keys().next().value as number
             s.blocks.delete(firstKey)
@@ -199,6 +229,7 @@ class XlsxStore {
       s.rowAxis = new Axis(l.defaultRowH || s.rowAxis.def)
       s.colAxis = new Axis(l.defaultColW || s.colAxis.def)
       for (const ci of l.colInfo ?? []) s.colAxis.setRange(ci.min, ci.max, ci.w)
+      s.colStyles = colStylesOf(l.colInfo)
       for (const [r, px] of l.rowSizes) s.rowAxis.set(r, px)
       s.merges = l.merges ?? []
       s.frozen = l.frozen ?? s.frozen
@@ -209,12 +240,26 @@ class XlsxStore {
       this.emit()
       return
     }
-    s.cols = Math.max(s.cols, res.range.c1 + 1)
+    // (a range of whole rows reaches the last column of the sheet, not of what there is)
+    if (res.range.c1 < 16383) s.cols = Math.max(s.cols, res.range.c1 + 1)
     this.invalidate(res.sheet, res.range.r0, res.range.r1)
   }
 
   row(sheet: number, r: number): CellOut[] | undefined {
     return this.sheets.get(sheet)?.blocks.get(Math.floor(r / BLOCK))?.rows.get(r)
+  }
+
+  /**
+   * The format (style index) a place without a cell shows: its row's own, else its column's (0: none). What a
+   * whole row / column / sheet was formatted with, without a cell for every place.
+   */
+  placeStyle(sheet: number, r: number, c: number): number {
+    const s = this.sheets.get(sheet)
+    if (!s) return 0
+    const own = s.blocks.get(Math.floor(r / BLOCK))?.own.get(r)
+    if (own) return own
+    for (const [min, max, st] of s.colStyles) if (min <= c && c <= max) return st
+    return 0
   }
 
   /** whether the rows r0..r1 are here as the worker has them now (not being read, none missing) */
@@ -314,6 +359,8 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
     bump()
   }
   const [renaming, setRenaming] = useState<number | null>(null)
+  /** a message about a sheet action (a name refused or changed) */
+  const [note, setNote] = useState<string | null>(null)
   const [tabMenu, setTabMenu] = useState<{ index: number; x: number; y: number } | null>(null)
   const bookOp = async (op: BookOp, goTo?: number) => {
     try {
@@ -324,7 +371,21 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
       bump()
     } catch (e) {
       alertError(e)
+      setNote((e as Error).message)
     }
+  }
+  /** renames sheet `index` to what was typed: an empty or taken name is refused with the reason, a name that is cut or changed says so */
+  const renameSheet = (index: number, raw: string) => {
+    const old = meta.sheets[index]
+    if (!old || raw === old.name) return
+    const name = cleanSheetName(raw)
+    if (!name) return setNote('A sheet name cannot be empty')
+    if (meta.sheets.some((x) => x.index !== index && x.name.toLowerCase() === name.toLowerCase())) return setNote(`A sheet named “${name}” already exists`)
+    const said: string[] = []
+    if (raw.trim().length > 31) said.push(`Sheet names have at most 31 characters: shortened to “${name}”.`)
+    if (/[\\/?*[\]:]/.test(raw)) said.push('Sheet names cannot contain \\ / ? * [ ] : — they were replaced by _.')
+    if (name !== old.name) void bookOp({ op: 'rename', index, name: raw })
+    if (said.length) setNote(said.join(' '))
   }
   const cur = Math.min(active, meta.sheets.length - 1)
   const curRef = useRef(cur)
@@ -416,7 +477,7 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
               defaultValue={s.name}
               onBlur={(e) => {
                 setRenaming(null)
-                if (e.target.value.trim() && e.target.value !== s.name) void bookOp({ op: 'rename', index: s.index, name: e.target.value })
+                renameSheet(s.index, e.target.value)
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
@@ -456,13 +517,14 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
           onClose={() => setTabMenu(null)}
           items={[
             { label: 'Rename', run: () => setRenaming(tabMenu.index) },
-            { label: 'Duplicate name → new sheet', run: () => void bookOp({ op: 'add', after: tabMenu.index, name: meta.sheets[tabMenu.index].name + ' (2)' }, tabMenu.index + 1) },
+            { label: 'Duplicate sheet', run: () => void bookOp({ op: 'duplicate', index: tabMenu.index }, tabMenu.index + 1) },
             { label: 'Move left', disabled: tabMenu.index === 0, run: () => void bookOp({ op: 'move', from: tabMenu.index, to: tabMenu.index - 1 }, tabMenu.index - 1) },
             { label: 'Move right', disabled: tabMenu.index >= meta.sheets.length - 1, run: () => void bookOp({ op: 'move', from: tabMenu.index, to: tabMenu.index + 1 }, tabMenu.index + 1) },
             { label: 'Delete sheet', disabled: meta.sheets.length <= 1, run: () => void bookOp({ op: 'delete', index: tabMenu.index }, Math.max(0, tabMenu.index - 1)) },
           ]}
         />
       )}
+      {note && <Toast text={note} onDone={() => setNote(null)} />}
     </div>
   )
 }
@@ -470,6 +532,9 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
 function alertError(e: unknown) {
   console.error('[office-engine]', e)
 }
+
+/** the name a sheet gets for `raw`: what the worker makes of it (31 characters, none of \ / ? * [ ] :, no apostrophe at the ends) */
+const cleanSheetName = (raw: string) => raw.trim().slice(0, 31).replace(/[\\/?*[\]:]/g, '_').replace(/^'|'$/g, '_').trim()
 
 export { ContextMenu, type MenuItem } from '../common/ContextMenu'
 
@@ -492,6 +557,36 @@ function rotated(rot: number): CSSProperties {
   return { display: 'inline-block', transform: `rotate(${-rot}deg)`, whiteSpace: 'nowrap' }
 }
 
+/**
+ * Tilted text, as Excel draws it: from the bottom left corner of its cell upwards (from the top left one downwards),
+ * out over the cells to the right. `line` is the height of a line of it.
+ */
+function tilted(rot: number, line: number): CSSProperties {
+  const up = rot > 0
+  return {
+    display: 'inline-block', flex: 'none', whiteSpace: 'nowrap', transform: `rotate(${-rot}deg)`, transformOrigin: up ? 'left bottom' : 'left top',
+    alignSelf: up ? 'flex-end' : 'flex-start', marginLeft: Math.ceil(line * Math.sin((Math.abs(rot) * Math.PI) / 180)),
+  }
+}
+
+/** the font of a part of a rich text: what its run properties say, and nothing of the cell's font where they are silent */
+function runCss(r: TextRun): CSSProperties | undefined {
+  if (!r.own) return undefined
+  const deco = [r.u ? 'underline' : '', r.strike ? 'line-through' : ''].filter(Boolean).join(' ')
+  const css: CSSProperties = { fontWeight: r.b ? 700 : 400, fontStyle: r.i ? 'italic' : 'normal' }
+  if (deco) css.textDecoration = deco
+  const color = r.color && cssColor(r.color)
+  if (color) css.color = color
+  if (r.sz) css.fontSize = `${r.va ? r.sz * 0.7 : r.sz}pt`
+  else if (r.va) css.fontSize = '0.7em'
+  if (r.font) css.fontFamily = cssFont(r.font)
+  if (r.va) css.verticalAlign = r.va === 'superscript' ? 'super' : 'sub'
+  return css
+}
+
+/** the tallest a row grows to show its text (Excel's limit: 409 pt) */
+const MAX_FIT_ROW = 545
+
 const JUSTIFY: Record<string, string> = dict({ center: 'center', right: 'flex-end', left: 'flex-start', justify: 'flex-start' })
 
 interface Selection {
@@ -499,6 +594,8 @@ interface Selection {
   ac: number
   fr: number
   fc: number
+  /** selected as whole columns / rows / the sheet (a header, Ctrl+Space…), not as the cells there are: a format goes to the columns / rows themselves */
+  whole?: 'col' | 'row' | 'all'
 }
 
 interface EditState {
@@ -552,6 +649,9 @@ export function withMerges(r: Range, merges: Merge[]): Range {
   return out
 }
 
+/** the hidden input field of a grid at rest: inside the view, so that nothing scrolls to it */
+const SINK_STYLE: CSSProperties = { left: 4, top: 4, width: 1, height: 1 }
+
 function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }: GridProps) {
   const viewer = useViewer()
   const editable = viewer.editable
@@ -572,6 +672,13 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
   /** paint format: style index copied from the active cell, applied to the next selection */
   const [painter, setPainter] = useState<number | null>(null)
   const afterDrag = useRef<(() => void) | null>(null)
+  /** the fill handle being dragged: the cells it started from, and the cell it is over */
+  const fillRef = useRef<{ src: Range; to?: { r: number; c: number } } | null>(null)
+  const [fillTo, setFillTo] = useState<{ r: number; c: number } | null>(null)
+  /** the column a row of entries began in: Enter after Tab goes back to it */
+  const tabStart = useRef<number | null>(null)
+  /** the last edit sent to the worker (a save waits for it) */
+  const lastRun = useRef<Promise<void>>(Promise.resolve())
   const [find, setFind] = useState<{ open: boolean; q: string; idx: number; replace: boolean; tick: number }>({ open: false, q: '', idx: 0, replace: false, tick: 0 })
   const [findOpts, setFindOpts] = useState<FindOptions>({})
   const [matches, setMatches] = useState<FindMatch[]>([])
@@ -643,6 +750,30 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
   const styles = meta.styles
   const basePx = fontPx(meta.baseFont.fontSize, 14.67)
   const mergeAt = (r: number, c: number) => s.merges.find((m) => r >= m.r0 && r <= m.r1 && c >= m.c0 && c <= m.c1)
+
+  // A row that says no height shows its turned text whole: Excel fits such rows when it opens the file. In the view
+  // only: nothing is written, and the file still leaves the height to who opens it.
+  useLayoutEffect(() => {
+    let grew = false
+    for (const [a, b] of [[0, frozen.rows - 1], [r0, r1]]) {
+      for (let r = a; r <= b; r++) {
+        if (rowAxis.size(r) !== rowAxis.def) continue
+        let h = 0
+        for (const [c, text, si] of store.row(sheet, r) ?? []) {
+          const css = styles[si] as Record<string, string | number> | undefined
+          if (!text || !css?.textRotate) continue
+          // (a cell merged over several rows has them all to show its text)
+          const m = s.merges.length ? mergeAt(r, c) : undefined
+          if (!m || m.r0 === m.r1) h = Math.max(h, Math.min(MAX_FIT_ROW, rotatedHeight(text, css, meta.baseFont as Record<string, string>, basePx, Number(css.textRotate))))
+        }
+        if (h > rowAxis.def) {
+          rowAxis.set(r, h)
+          grew = true
+        }
+      }
+    }
+    if (grew) store.emit()
+  })
   const rect = withMerges(rectOf(sel), s.merges)
   /** one cell, or exactly one merged cell */
   const oneCell = (rect.r0 === rect.r1 && rect.c0 === rect.c1) || s.merges.some((m) => m.r0 === rect.r0 && m.c0 === rect.c0 && m.r1 === rect.r1 && m.c1 === rect.c1)
@@ -667,10 +798,12 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
       el.scrollLeft = s.scrollPos.x
       el.scrollTop = s.scrollPos.y
     }
+    // the grid's keyboard input is a hidden text field (see `de-cell-sink`): a view that cannot edit has none
+    const target = (editable ? editRef.current : null) ?? el ?? null
     if (store.focusGrid) {
       store.focusGrid = false
-      el?.focus({ preventScroll: true })
-    } else claimFocus(el ?? null) // keyboard first: a focused host page control keeps the focus
+      target?.focus({ preventScroll: true })
+    } else claimFocus(target) // keyboard first: a focused host page control keeps the focus
     return () => {
       if (el?.isConnected) s.scrollPos = { x: el.scrollLeft, y: el.scrollTop }
     }
@@ -700,20 +833,20 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
         for (let c = Math.max(m.c0, cc0); c <= Math.min(m.c1, cc1); c++) covered.add(r * 16384 + c)
     }
     const cellEl = (r: number, cell: CellOut, wOverride?: number, hOverride?: number, filled?: Set<number>, merged = false) => {
-      const [c, raw, si, kind, color] = cell
+      const [c, raw, si, kind, color, runs] = cell
       const cw = wOverride ?? colAxis.size(c)
       const ch = hOverride ?? rowAxis.size(r)
       if (!cw || !ch) return null
       const css = (styles[si] ?? {}) as Record<string, string | number>
       let text = raw
-      if (kind === 1 && raw) text = fitNumber(raw, cw - 6, fontPx(css.fontSize, basePx))
-      const { textAlign, textRotate, alignItems, whiteSpace, ...rest } = css
+      if (kind === 1 && raw) text = fitNumber(raw, cw - 6, fontPx(css.fontSize, basePx), fontOf(css, meta.baseFont as Record<string, string>, basePx))
+      const { textAlign, textRotate, alignItems, whiteSpace, shrinkToFit, ...rest } = css
       // the fill is a color or a gradient of colors, never more: `background` would load a url() in it
       if (rest.background !== undefined) rest.background = cssPaint(rest.background) as string
       const rot = Number(textRotate ?? 0)
       const justify = (textAlign && JUSTIFY[textAlign as string]) || (kind === 1 ? 'flex-end' : kind === 2 ? 'center' : 'flex-start')
       let ov = 0
-      if (text && !rot && !whiteSpace && justify === 'flex-start' && !merged && filled) {
+      if (text && !rot && !whiteSpace && !shrinkToFit && justify === 'flex-start' && !merged && filled) {
         let next = c + 1
         while (next <= cc1 + 8 && !filled.has(next) && !covered.has(r * 16384 + next)) next++
         ov = colAxis.pos(next) - colAxis.pos(c)
@@ -733,9 +866,18 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
       // a merged cell hides the gridlines inside it (its own right / bottom edge lines stay visible)
       if (merged && !rest.background) style.background = 'linear-gradient(#fff, #fff) 0 0 / calc(100% - 1px) calc(100% - 1px) no-repeat'
       const overflow = ov > cw
+      // tilted text goes out over the cells to the right, not over the rows above and below
+      const tilt = !!text && rot !== 0 && Math.abs(rot) < 90 && !whiteSpace && justify === 'flex-start'
+      if (tilt) Object.assign(style, { overflow: 'visible', clipPath: 'inset(0 -4000px 0 0)' })
+      // shrink to fit: the text scaled down until it fits the cell
+      let shrink: CSSProperties | undefined
+      if (shrinkToFit && text && !rot && !whiteSpace) {
+        const w = textWidth(text, css, meta.baseFont as Record<string, string>, basePx)
+        if (w > cw - 6) shrink = { transform: `scale(${Math.max(0.2, (cw - 6) / w)})`, transformOrigin: justify === 'flex-end' ? 'right center' : justify === 'center' ? 'center' : 'left center', whiteSpace: 'nowrap', flex: 'none' }
+      }
       return (
         <div key={`${r}:${c}`} className={overflow ? 'de-cell de-ov' : 'de-cell'} style={style}>
-          {text && <span style={rot ? rotated(rot) : overflow ? { maxWidth: ov - 6, overflow: 'hidden', flex: 'none' } : undefined}>{text}</span>}
+          {text && <span style={tilt ? tilted(rot, fontPx(css.fontSize, basePx) * 1.2) : rot ? rotated(rot) : overflow ? { maxWidth: ov - 6, overflow: 'hidden', flex: 'none' } : shrink}>{runs ? runs.map((x, i) => <span key={i} style={runCss(x)}>{x.t}</span>) : text}</span>}
         </div>
       )
     }
@@ -743,6 +885,21 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
       const row = store.row(sheet, m.r0)
       const cell = row?.find((x) => x[0] === m.c0) ?? ([m.c0, '', 0, 0] as CellOut)
       out.push(cellEl(m.r0, cell, colAxis.pos(m.c1 + 1) - colAxis.pos(m.c0), rowAxis.pos(m.r1 + 1) - rowAxis.pos(m.r0), undefined, true))
+    }
+    // the places without a cell in rows / columns that have a format of their own show it (a fill, borders)
+    const block = (r: number) => s.blocks.get(Math.floor(r / BLOCK))
+    if (s.colStyles.length || [...new Set([block(rr0), block(rr1)])].some((b) => b?.own.size)) {
+      for (let r = rr0; r <= rr1; r++) {
+        const own = block(r)?.own.get(r)
+        if (!own && !s.colStyles.length) continue
+        const row = store.row(sheet, r)
+        const has = row?.length ? new Set(row.map((x) => x[0])) : undefined
+        for (let c = cc0; c <= cc1; c++) {
+          if (has?.has(c) || covered.has(r * 16384 + c)) continue
+          const st = own || store.placeStyle(sheet, r, c)
+          if (st && shows(styles[st])) out.push(cellEl(r, [c, '', st, 0]))
+        }
+      }
     }
     for (let r = rr0; r <= rr1; r++) {
       const row = store.row(sheet, r)
@@ -768,6 +925,18 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
       if (!b || b.x > px1 || b.x + b.w < px0 || b.y > py1 || b.y + b.h < py0) return
       out.push(drawingEl('dr' + i, d, { left: b.x - ox, top: b.y - oy, width: b.w, height: b.h }))
     })
+    // the fill handle: the corner of the selection, dragged to copy it down or to the right
+    if (editable && !edit && !fillRef.current && rect.r1 >= rr0 && rect.r1 <= rr1 && rect.c1 >= cc0 && rect.c1 <= cc1 && rect.r1 - rect.r0 < 5000 && rect.c1 - rect.c0 < 200) {
+      out.push(<div key="fillh" data-fill className="de-fill-handle" style={{ left: colAxis.pos(rect.c1 + 1) - ox - 4, top: rowAxis.pos(rect.r1 + 1) - oy - 4 }} />)
+    }
+    if (fillTo) {
+      const f = fillExtent(fillTo)
+      if (f) {
+        out.push(
+          <div key="fillp" className="de-fill-preview" style={{ left: colAxis.pos(f.c0) - ox - 1, top: rowAxis.pos(f.r0) - oy - 1, width: colAxis.pos(f.c1 + 1) - colAxis.pos(f.c0) + 1, height: rowAxis.pos(f.r1 + 1) - rowAxis.pos(f.r0) + 1 }} />,
+        )
+      }
+    }
     // selection range + active cell
     if (rect.r1 >= rr0 && rect.r0 <= rr1 && rect.c1 >= cc0 && rect.c0 <= cc1 && !oneCell) {
       out.push(
@@ -914,6 +1083,9 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
     if (!el) return
     const x = colAxis.pos(c)
     const y = rowAxis.pos(r)
+    // a cell of a frozen pane is always in view: going there brings the sheet back to its top / left, as Excel does
+    if (c < fc && scrollX > 0) el.scrollLeft = 0
+    if (r < fr && scrollY > 0) el.scrollTop = 0
     if (c >= fc) {
       if (x - frozenW < scrollX) el.scrollLeft = x - frozenW
       else if (x + colAxis.size(c) > mainOx + mainW) el.scrollLeft = x + colAxis.size(c) - frozenW - mainW
@@ -946,15 +1118,15 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
 
   // ---------------------------------------------------------------- editing
 
-  const focusGrid = () => scrollRef.current?.focus({ preventScroll: true })
-  const selectSheet = () => setSel({ ar: 0, ac: 0, fr: Math.max(0, s.rows - 1), fc: Math.max(0, s.cols - 1) })
+  const focusGrid = () => ((editable ? editRef.current : null) ?? scrollRef.current)?.focus({ preventScroll: true })
+  const selectSheet = () => setSel({ ar: 0, ac: 0, fr: Math.max(0, s.rows - 1), fc: Math.max(0, s.cols - 1), whole: 'all' })
   // Ctrl/⌘+A from the viewer chrome / the page; a cell being edited keeps its own select-all
   useSelectAll(() => {
     if (edit) return
     focusGrid()
     selectSheet()
   })
-  const styleOf = (r: number, c: number) => store.row(sheet, r)?.find((x) => x[0] === c)?.[2] ?? 0
+  const styleOf = (r: number, c: number) => store.row(sheet, r)?.find((x) => x[0] === c)?.[2] ?? store.placeStyle(sheet, r, c)
 
   const run = async (p: Promise<XlsxEditResult | null>) => {
     try {
@@ -999,7 +1171,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
     closed.current = e
     setEdit(null)
     const value = closeFormula(e.value)
-    if (value !== e.initial) void run(client.call('xlsx.set', e.sheet, [{ r: e.r, c: e.c, input: value }]))
+    if (value !== e.initial) lastRun.current = run(client.call('xlsx.set', e.sheet, [{ r: e.r, c: e.c, input: value }])).then(() => widen({ r0: e.r, c0: e.c, r1: e.r, c1: e.c }, e.sheet))
     if (e.sheet !== sheet) return backTo(e, move)
     if (move) moveBy(move[0], move[1], false)
     focusGrid()
@@ -1012,6 +1184,60 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
     setEdit(null)
     if (e.sheet !== sheet) return backTo(e)
     focusGrid()
+  }
+
+  /** Ctrl+Enter: the entry goes into every cell of the selection (a formula keeps its relative references) */
+  const commitFill = () => {
+    const e = edit
+    if (!e || closed.current === e) return
+    const R = e.sheet === sheet ? rect : { r0: e.r, c0: e.c, r1: e.r, c1: e.c }
+    if ((R.r1 - R.r0 + 1) * (R.c1 - R.c0 + 1) > 100_000) return setToast('The selection has more than 100,000 cells: select fewer to fill them')
+    closed.current = e
+    setEdit(null)
+    const value = closeFormula(e.value)
+    const cells: CellInput[] = []
+    for (let r = R.r0; r <= R.r1; r++) {
+      for (let c = R.c0; c <= R.c1; c++) {
+        const m = e.sheet === sheet ? mergeAt(r, c) : undefined
+        if (m && (m.r0 !== r || m.c0 !== c)) continue
+        let input = value
+        if (isFormula(value) && (r !== e.r || c !== e.c)) {
+          try {
+            input = '=' + translateFormula(value.slice(1), r - e.r, c - e.c)
+          } catch {
+            input = value
+          }
+        }
+        cells.push({ r, c, input })
+      }
+    }
+    lastRun.current = run(client.call('xlsx.set', e.sheet, cells)).then(() => widen(R, e.sheet))
+    if (e.sheet !== sheet) return backTo(e)
+    focusGrid()
+  }
+
+  /** text arrived in the hidden field of the selected cell (an IME, a virtual keyboard, an emoji picker, a key): the edit starts with it */
+  const sinkStart = (el: HTMLTextAreaElement) => {
+    const v = el.value
+    if (!v || !editable || !s.done) return
+    scrollIntoView(sel.ar, sel.ac)
+    setEdit({ sheet, r: sel.ar, c: sel.ac, value: v, initial: '\u0000', bar: false, mode: 'enter', caret: el.selectionStart ?? v.length, caretEnd: el.selectionEnd ?? v.length, sync: 0 })
+  }
+
+  /** F4: the reference at the caret goes relative → $A$1 → A$1 → $A1 → relative, both ends of a range alike */
+  const cycleAbsolute = () => {
+    if (!edit || !fctx) return
+    const f = fctx.refs.find((x) => edit.caret >= x.s && edit.caretEnd <= x.e)
+    if (!f) return
+    const bang = f.text.lastIndexOf('!')
+    const parts = f.text.slice(bang + 1).split(':')
+    const m = /^(\$?)([A-Za-z]*)(\$?)(\d*)$/.exec(parts[0])
+    if (!m) return
+    const [, col, , row] = m
+    const state = `${col ? 1 : 0}${row ? 1 : 0}`
+    const next = state === '00' ? '11' : state === '11' ? '01' : state === '01' ? '10' : '00'
+    const text = f.text.slice(0, bang + 1) + parts.map((x) => x.replace(/^(\$?)([A-Za-z]*)(\$?)(\d*)$/, (_, _c: string, letters: string, _r: string, digits: string) => (letters && next[0] === '1' ? '$' : '') + letters + (digits && next[1] === '1' ? '$' : '') + digits)).join(':')
+    setEdit((p) => (p ? { ...p, value: p.value.slice(0, f.s) + text + p.value.slice(f.e), caret: f.s + text.length, caretEnd: f.s + text.length, sync: p.sync + 1, point: undefined } : p))
   }
 
   /** formula edited from another sheet: return to the edited cell's sheet */
@@ -1062,6 +1288,13 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
     if (!el) return
     const root = el.getRootNode() as Document | ShadowRoot
     if (root.activeElement !== el) el.focus({ preventScroll: true })
+    else if (edit.sync && el === editRef.current && typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches) {
+      // the field had the focus without an on-screen keyboard (`inputMode` none): focus it again, now that the edit opens it
+      hold.current = true
+      el.blur()
+      el.focus({ preventScroll: true })
+      hold.current = false
+    }
     if (edit.sync) el.setSelectionRange(edit.caret, edit.caretEnd)
   }, [edit?.sync, inCell, edit !== null]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1140,18 +1373,169 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
     while (rowAxis.size(r) === 0 && r < rowAxis.count - 1) r++
     while (c > 0 && colAxis.size(c) === 0 && dc < 0) c--
     while (colAxis.size(c) === 0 && c < colAxis.count - 1) c++
-    if (extend) setSelState({ ...sel, fr: r, fc: c })
+    if (extend) setSelState({ ...sel, fr: r, fc: c, whole: undefined })
     else setSel({ ar: r, ac: c, fr: r, fc: c })
     scrollIntoView(r, c)
+  }
+
+  /** the rows r0..r1 as the worker has them (the cached blocks where they are whole, else read) */
+  const rowsOf = async (r0: number, r1: number): Promise<Map<number, CellOut[]>> => {
+    const out = new Map<number, CellOut[]>()
+    for (let b = Math.floor(r0 / BLOCK); b <= Math.floor(r1 / BLOCK); b++) {
+      const cached = s.blocks.get(b)
+      let rows = cached?.complete ? cached.rows : undefined
+      if (!rows) rows = new Map((await client.call('xlsx.block', sheet, b * BLOCK, (b + 1) * BLOCK)).rows.map((x) => [x.r, x.cells]))
+      for (const [r, cells] of rows) if (r >= r0 && r <= r1) out.set(r, cells)
+    }
+    return out
+  }
+
+  const gotoCell = (r: number, c: number, extend: boolean) => {
+    if (extend) setSelState((p) => ({ ...p, fr: r, fc: c, whole: undefined }))
+    else setSel({ ar: r, ac: c, fr: r, fc: c })
+    scrollIntoView(r, c)
+  }
+
+  /**
+   * Ctrl+Arrow, as Excel has it: from a filled cell with a filled neighbour to the last cell of that block; else to
+   * the next filled cell, or to the end of the data when there is none.
+   */
+  const jump = async (dr: number, dc: number, extend: boolean) => {
+    const lastR = Math.max(0, s.rows - 1)
+    const lastC = Math.max(0, s.cols - 1)
+    let r = extend ? sel.fr : sel.ar
+    let c = extend ? sel.fc : sel.ac
+    const inside = (a: number, b: number) => a >= 0 && b >= 0 && a <= lastR && b <= lastC
+    const seen = new Map<number, CellOut[]>()
+    let reads = 0
+    const filled = async (a: number, b: number) => {
+      if (!seen.has(a)) {
+        const from = Math.floor(a / BLOCK) * BLOCK
+        reads++
+        const rows = await rowsOf(from, from + BLOCK - 1)
+        for (let k = from; k < from + BLOCK; k++) seen.set(k, rows.get(k) ?? [])
+      }
+      return seen.get(a)!.some((x) => x[0] === b && x[1] !== '')
+    }
+    if (!inside(r + dr, c + dc)) return
+    if ((await filled(r, c)) && (await filled(r + dr, c + dc))) {
+      while (inside(r + dr, c + dc) && (await filled(r + dr, c + dc))) {
+        r += dr
+        c += dc
+      }
+    } else {
+      do {
+        r += dr
+        c += dc
+      } while (inside(r, c) && reads < 300 && !(await filled(r, c)))
+      // nothing filled ahead (or too far to look): the end of the data
+      if (!inside(r, c) || reads >= 300) {
+        r = dr > 0 ? lastR : dr < 0 ? 0 : Math.max(0, Math.min(lastR, r))
+        c = dc > 0 ? lastC : dc < 0 ? 0 : Math.max(0, Math.min(lastC, c))
+      }
+    }
+    gotoCell(r, c, extend)
+  }
+
+  /** Home / End / Ctrl+Home / Ctrl+End */
+  const homeEnd = async (end: boolean, mod: boolean, extend: boolean) => {
+    const row = extend ? sel.fr : sel.ar
+    if (mod) return gotoCell(end ? Math.max(0, s.rows - 1) : 0, end ? Math.max(0, s.cols - 1) : 0, extend)
+    if (!end) return gotoCell(row, 0, extend)
+    // End: the last filled cell of the row (the last column of the sheet when the row is empty)
+    const cells = (await rowsOf(row, row)).get(row) ?? []
+    const last = cells.reduce((m, x) => (x[1] !== '' ? Math.max(m, x[0]) : m), -1)
+    gotoCell(row, last >= 0 ? last : Math.max(0, s.cols - 1), extend)
+  }
+
+  /** Tab and Enter in a row of entries: Enter goes back to the column the Tabs began in (and a Shift+Enter or an arrow forgets it) */
+  const tabMove = (back: boolean, col: number): [number, number] => {
+    if (tabStart.current === null) tabStart.current = col
+    return [0, back ? -1 : 1]
+  }
+  const enterMove = (back: boolean, col: number): [number, number] => {
+    const start = tabStart.current
+    tabStart.current = null
+    return [back ? -1 : 1, start !== null && !back ? start - col : 0]
+  }
+
+  /** columns that show #### for the numbers written in `range` are widened, as Excel does (a width set by hand stays) */
+  const widen = async (range: Range, at = sheet) => {
+    if (!editable || at !== sheet) return
+    const live = store.sheet(sheet)
+    const need = new Map<number, number>()
+    for (const [, cells] of await rowsOf(range.r0, Math.min(range.r1, range.r0 + 999))) {
+      for (const [c, text, si, kind] of cells) {
+        if (c < range.c0 || c > range.c1 || kind !== 1 || !text || (meta.formats[si] ?? 'General') === 'General' || live.colAxis.size(c) !== live.colAxis.def) continue
+        const css = (styles[si] ?? {}) as Record<string, string | number>
+        const px = fontPx(css.fontSize, basePx)
+        const font = fontOf(css, meta.baseFont as Record<string, string>, basePx)
+        if (fitNumber(text, live.colAxis.size(c) - 6, px, font) === text) continue
+        // as wide as the text, and as wide as the grid needs to show it whole (it decides, by its own measure, between the number and ####)
+        let w = Math.ceil(textWidth(text, css, meta.baseFont as Record<string, string>, basePx)) + 12
+        while (w < 400 && fitNumber(text, w - 6, px, font) !== text) w += 6
+        need.set(c, Math.max(need.get(c) ?? 0, w))
+      }
+    }
+    for (const [c, px] of need) await sheetOp({ op: 'colWidth', c0: c, c1: c, px: Math.min(px, 400) })
+  }
+
+  /** a column as wide as its longest text (double click on its edge) */
+  const fitCol = async (c: number) => {
+    let best = 0
+    const total = Math.min(s.rows, 20_000)
+    for (let r0 = 0; r0 < total; r0 += BLOCK * 8) {
+      for (const cells of (await rowsOf(r0, Math.min(total - 1, r0 + BLOCK * 8 - 1))).values()) {
+        const cell = cells.find((x) => x[0] === c)
+        const css = (cell && styles[cell[2]]) as Record<string, string | number> | undefined
+        if (cell?.[1] && css?.whiteSpace !== 'pre-wrap') best = Math.max(best, textWidth(cell[1], css ?? {}, meta.baseFont as Record<string, string>, basePx))
+      }
+    }
+    return best ? Math.min(600, Math.ceil(best) + 12) : colAxis.def
+  }
+
+  /**
+   * Row heights from what the rows hold: those of wrapped text, wide as its column. `shrink`: rows may get lower
+   * (double click on an edge); else they only grow (Wrap text was turned on: a height set by hand is not undone).
+   */
+  const fitRows = async (range: Range, shrink: boolean) => {
+    const live = store.sheet(sheet)
+    const sizes: [number, number][] = []
+    const last = Math.min(range.r1, range.r0 + 999)
+    const held = await rowsOf(range.r0, last)
+    for (let r = range.r0; r <= last; r++) {
+      const cells = held.get(r) ?? []
+      if (live.rowAxis.size(r) === 0) continue
+      let h = shrink ? live.rowAxis.def : 0
+      for (const [c, text, si] of cells) {
+        if (!text) continue
+        const css = (styles[si] ?? {}) as Record<string, string | number>
+        if (css.textRotate) h = Math.max(h, Math.min(MAX_FIT_ROW, rotatedHeight(text, css, meta.baseFont as Record<string, string>, basePx, Number(css.textRotate))))
+        else if (css.whiteSpace === 'pre-wrap') h = Math.max(h, wrapHeight(text, css, meta.baseFont as Record<string, string>, basePx, live.colAxis.size(c) - 6))
+        else if (shrink) h = Math.max(h, Math.ceil(fontPx(css.fontSize, basePx) * 1.2) + 3)
+      }
+      if (h && (shrink ? h !== live.rowAxis.size(r) : h > live.rowAxis.size(r))) sizes.push([r, h])
+    }
+    for (let i = 0; i < sizes.length; ) {
+      let j = i
+      while (j + 1 < sizes.length && sizes[j + 1][0] === sizes[j][0] + 1 && sizes[j + 1][1] === sizes[i][1]) j++
+      await sheetOp({ op: 'rowHeight', r0: sizes[i][0], r1: sizes[j][0], px: sizes[i][1] })
+      i = j + 1
+    }
   }
 
   // in the worker: every cell of the range, also those of rows not shown yet (a whole column, the whole sheet)
   const clearRange = () => void sheetOp({ op: 'clear', range: rect })
 
   const activeCss = (styles[styleOf(sel.ar, sel.ac)] ?? {}) as Record<string, string | number>
-  const fmt = (patch: FmtPatch) => fmtAt(rect, patch)
+  // whole columns / rows / the sheet: the format goes to them, down to the last row, not only to the cells there are
+  const fmt = (patch: FmtPatch) =>
+    fmtAt(sel.whole === 'all' ? { r0: 0, c0: 0, r1: MAX_ROW, c1: MAX_COL } : sel.whole === 'col' ? { ...rect, r0: 0, r1: MAX_ROW } : sel.whole === 'row' ? { ...rect, c0: 0, c1: MAX_COL } : rect, patch)
   const fmtAt = (range: Range, patch: FmtPatch) => {
-    void run(client.call('xlsx.format', sheet, range, patch))
+    const done = run(client.call('xlsx.format', sheet, range, patch))
+    // Wrap text shows all of the text: the rows grow; a number format shows its numbers: the columns widen
+    if (patch.wrap) void done.then(() => fitRows(range, false))
+    if (patch.numFmt !== undefined) void done.then(() => widen(range))
     focusGrid()
   }
   const toggle = (k: 'b' | 'i' | 'u' | 'strike') => {
@@ -1250,6 +1634,13 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
       setFind((f) => ({ ...f, open: true, replace: k === 'h' || f.replace, tick: f.tick + 1 }))
       return
     }
+    // Shift+Space selects the row(s), Ctrl+Space the column(s) of the selection
+    if (e.code === 'Space' && (e.shiftKey || mod) && !e.altKey) {
+      e.preventDefault()
+      if (mod) setSel({ ar: 0, ac: rect.c0, fr: Math.max(0, s.rows - 1), fc: rect.c1, whole: 'col' })
+      else setSel({ ar: rect.r0, ac: 0, fr: rect.r1, fc: Math.max(0, s.cols - 1), whole: 'row' })
+      return
+    }
     if (e.key === 'Escape' && painter !== null) {
       setPainter(null)
       return
@@ -1261,32 +1652,129 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
     }
     if (moves[e.key]) {
       e.preventDefault()
+      tabStart.current = null
       const [dr, dc] = moves[e.key]
-      if (mod) moveBy(dr ? (dr > 0 ? Math.max(0, s.rows - 1 - (e.shiftKey ? sel.fr : sel.ar)) : -1e9) : 0, dc ? (dc > 0 ? Math.max(0, s.cols - 1 - (e.shiftKey ? sel.fc : sel.ac)) : -1e9) : 0, e.shiftKey)
+      if (mod && !e.key.startsWith('Page')) void jump(dr, dc, e.shiftKey)
       else moveBy(dr, dc, e.shiftKey)
+      return
+    }
+    if (e.key === 'Home' || e.key === 'End') {
+      e.preventDefault()
+      tabStart.current = null
+      void homeEnd(e.key === 'End', mod, e.shiftKey)
       return
     }
     if (e.key === 'Enter' || e.key === 'Tab') {
       e.preventDefault()
-      if (e.key === 'Enter') moveBy(e.shiftKey ? -1 : 1, 0, false)
-      else moveBy(0, e.shiftKey ? -1 : 1, false)
+      if (e.key === 'Enter') moveBy(...enterMove(e.shiftKey, sel.ac), false)
+      else moveBy(...tabMove(e.shiftKey, sel.ac), false)
       return
     }
     if (!editable) return
+    if (e.altKey && e.code === 'Equal') {
+      // AutoSum
+      e.preventDefault()
+      autoFn('SUM')
+      return
+    }
+    if (mod && !e.altKey && e.code === 'Semicolon') {
+      // today's date (with Shift: the time), as a value in a date format
+      e.preventDefault()
+      stamp(e.shiftKey)
+      return
+    }
     if (e.key === 'F2') {
       e.preventDefault()
       void startEdit()
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault()
       clearRange()
-    } else if (e.key.length === 1 && !mod && !e.altKey) {
-      e.preventDefault()
-      void startEdit(e.key)
+    }
+    // (a key that types is not handled here: its text lands in the hidden field of the grid, which starts the edit, so that
+    // what an IME or a virtual keyboard composes there is not cut in two)
+  }
+
+  /** the date (time) of now in the active cell */
+  const stamp = (time: boolean) => {
+    const d = new Date()
+    const serial = time ? (d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds()) / 86400 : Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86400000) + 25569
+    const at = { r0: sel.ar, c0: sel.ac, r1: sel.ar, c1: sel.ac }
+    lastRun.current = (async () => {
+      await run(client.call('xlsx.set', sheet, [{ r: sel.ar, c: sel.ac, input: String(serial) }]))
+      await run(client.call('xlsx.format', sheet, at, { numFmt: time ? 'hh:mm' : 'yyyy-mm-dd' }))
+      await widen(at)
+    })()
+  }
+
+  /** the cells the handle would fill if let go over `to`: down or right of the selection, whichever it is further along */
+  const fillExtent = (to: { r: number; c: number }): Range | null => {
+    const src = fillRef.current?.src ?? rect
+    const dr = to.r - src.r1
+    const dc = to.c - src.c1
+    if (dr > 0 && dr >= dc) return { r0: src.r0, c0: src.c0, r1: to.r, c1: src.c1 }
+    if (dc > 0) return { r0: src.r0, c0: src.c0, r1: src.r1, c1: to.c }
+    return null
+  }
+
+  /**
+   * Fill handle: the cells copied down or to the right as far as the handle was dragged. One row (column) is the
+   * `fill` operation; several are repeated, as a block of copied cells is.
+   */
+  const doFill = async (src: Range, to: { r: number; c: number }) => {
+    const ext = fillExtent(to)
+    if (!ext) return
+    const down = ext.r1 > src.r1
+    const h = src.r1 - src.r0 + 1
+    const w = src.c1 - src.c0 + 1
+    if (down ? h === 1 : w === 1) await sheetOp({ op: 'fill', range: ext, dir: down ? 'down' : 'right' })
+    else {
+      const clip = await client.call('xlsx.copy', sheet, src)
+      const rows = down ? ext.r1 - src.r1 : h
+      const cols = down ? w : ext.c1 - src.c1
+      const cells: ClipCell[][] = []
+      for (let i = 0; i < rows; i++) {
+        const line: ClipCell[] = []
+        for (let j = 0; j < cols; j++) {
+          const cell = clip.cells[down ? i % h : i]?.[down ? j : j % w] ?? null
+          const tile = down ? Math.floor(i / h) : Math.floor(j / w)
+          // (the worker moves every formula by the distance of the first block: the others by what is left of theirs)
+          line.push(cell && cell[3] !== undefined && tile ? ([cell[0], cell[1], cell[2], translateFormula(cell[3], down ? tile * h : 0, down ? 0 : tile * w)] as ClipCell) : cell)
+        }
+        cells.push(line)
+      }
+      const range = down ? { r0: src.r1 + 1, c0: src.c0, r1: ext.r1, c1: src.c1 } : { r0: src.r0, c0: src.c1 + 1, r1: src.r1, c1: ext.c1 }
+      await sheetOp({ op: 'paste', range, cells, from: { sheet: clip.sheet, r0: src.r0, c0: src.c0 } })
+    }
+    setSelState({ ar: src.r0, ac: src.c0, fr: ext.r1, fc: ext.c1 })
+  }
+
+  /** double click on the edge of a column / row: it is as wide / high as what it holds (all the selected ones, when they are) */
+  const fitGrip = async (grip: HTMLElement) => {
+    const col = grip.dataset.gripCol
+    const i = Number(col ?? grip.dataset.gripRow)
+    if (col !== undefined) {
+      const full = rect.r0 === 0 && rect.r1 >= s.rows - 1 && i >= rect.c0 && i <= rect.c1
+      for (let c = full ? rect.c0 : i; c <= (full ? Math.min(rect.c1, rect.c0 + 199) : i); c++) await sheetOp({ op: 'colWidth', c0: c, c1: c, px: await fitCol(c) })
+    } else {
+      const full = rect.c0 === 0 && rect.c1 >= s.cols - 1 && i >= rect.r0 && i <= rect.r1
+      await fitRows({ r0: full ? rect.r0 : i, c0: 0, r1: full ? rect.r1 : i, c1: 0 }, true)
     }
   }
 
   const onMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return
+    if ((e.target as HTMLElement).closest('[data-fill]') && !edit) {
+      e.preventDefault()
+      fillRef.current = { src: { ...rect } }
+      afterDrag.current = () => {
+        const f = fillRef.current
+        fillRef.current = null
+        setFillTo(null)
+        if (f?.to) void doFill(f.src, f.to)
+      }
+      return
+    }
+    tabStart.current = null
     const grip = (e.target as HTMLElement).closest('[data-grip-col],[data-grip-row]') as HTMLElement | null
     if (grip) {
       e.preventDefault()
@@ -1322,12 +1810,12 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
     }
     focusGrid()
     if (r < 0 && c < 0) {
-      setSel({ ar: 0, ac: 0, fr: Math.max(0, s.rows - 1), fc: Math.max(0, s.cols - 1) })
+      setSel({ ar: 0, ac: 0, fr: Math.max(0, s.rows - 1), fc: Math.max(0, s.cols - 1), whole: 'all' })
       return
     }
-    if (r < 0) setSel({ ar: 0, ac: c, fr: Math.max(0, s.rows - 1), fc: c })
-    else if (c < 0) setSel({ ar: r, ac: 0, fr: r, fc: Math.max(0, s.cols - 1) })
-    else if (e.shiftKey) setSelState({ ...sel, fr: r, fc: c })
+    if (r < 0) setSel({ ar: 0, ac: c, fr: Math.max(0, s.rows - 1), fc: c, whole: 'col' })
+    else if (c < 0) setSel({ ar: r, ac: 0, fr: r, fc: Math.max(0, s.cols - 1), whole: 'row' })
+    else if (e.shiftKey) setSelState({ ...sel, fr: r, fc: c, whole: undefined })
     else {
       setSel({ ar: r, ac: c, fr: r, fc: c })
       // a cell with a comment shows its thread
@@ -1392,8 +1880,23 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
   const sheetOp = (op: SheetOp) => run(client.call('xlsx.sheetOp', sheet, op))
   // the selection holds merged cells (it always covers them whole): Unmerge / toggle unmerges them all
   const merged = s.merges.some((m) => m.r0 >= rect.r0 && m.r1 <= rect.r1 && m.c0 >= rect.c0 && m.c1 <= rect.c1)
-  const toggleMerge = () => void sheetOp({ op: merged ? 'unmerge' : 'merge', range: rect })
-  const merge = (mode: MergeMode) => void sheetOp(mode === 'unmerge' ? { op: 'unmerge', range: rect } : { op: 'merge', range: rect, mode })
+  const toggleMerge = () => merge(merged ? 'unmerge' : 'all')
+  const merge = async (mode: MergeMode) => {
+    if (mode === 'unmerge') return void sheetOp({ op: 'unmerge', range: rect })
+    // like Excel, only the upper-left value of each merged block survives: say what goes (Undo brings it back)
+    let dropped = 0
+    const range = { ...rect }
+    if (range.r1 - range.r0 < 5000) {
+      for (const [r, cells] of await rowsOf(range.r0, range.r1)) {
+        for (const [c, text] of cells) {
+          if (c < range.c0 || c > range.c1 || !text) continue
+          if (!(mode === 'all' ? r === range.r0 && c === range.c0 : mode === 'across' ? c === range.c0 : r === range.r0)) dropped++
+        }
+      }
+    }
+    await sheetOp({ op: 'merge', range, mode })
+    if (dropped) setToast(`Merging keeps only the upper-left value of each merged cell: ${dropped} other value${dropped > 1 ? 's were' : ' was'} removed. Undo (${MOD}Z) brings ${dropped > 1 ? 'them' : 'it'} back.`)
+  }
   const freeze = (kind: 'none' | 'row' | 'col' | 'sel') =>
     void sheetOp({ op: 'freeze', rows: kind === 'row' ? 1 : kind === 'sel' ? sel.ar : 0, cols: kind === 'col' ? 1 : kind === 'sel' ? sel.ac : 0 })
   /** AutoSum-style: the function over the numbers above (or left of) the active cell */
@@ -1455,20 +1958,63 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
     }
     if (ops[k]) void sheetOp(ops[k])
   }
+  /** merged cells that the block `r0..r1` × `c0..c1` would fill in other cells than their first, with something */
+  const mergedHit = (b: Range, filledAt: (r: number, c: number) => boolean) =>
+    s.merges.some((m) => {
+      if (m.r1 < b.r0 || m.r0 > b.r1 || m.c1 < b.c0 || m.c0 > b.c1) return false
+      for (let r = Math.max(m.r0, b.r0); r <= Math.min(m.r1, b.r1); r++) for (let c = Math.max(m.c0, b.c0); c <= Math.min(m.c1, b.c1); c++) if ((r !== m.r0 || c !== m.c0) && filledAt(r, c)) return true
+      return false
+    })
+  const MERGED_PASTE = 'Cannot paste here: the cells would fill merged cells. Unmerge them, or paste into one cell.'
   const pasteText = (raw: string) => {
     const norm = (t: string) => t.replace(/\r\n?/g, '\n').replace(/\n$/, '')
     const at = { r: rect.r0, c: rect.c0 }
     const clip = store.clip
     // the cells copied here: as they were (values, formulas, formats), not as the text of them
     if (clip && norm(raw) === norm(clip.text)) {
-      const { cells, range } = clip.data
-      const w = Math.max(1, ...cells.map((row) => row.length))
-      void sheetOp({ op: 'paste', range: { r0: at.r, c0: at.c, r1: at.r + cells.length - 1, c1: at.c + w - 1 }, cells, from: { sheet: clip.data.sheet, r0: range.r0, c0: range.c0 }, ...(clip.cut ? { moved: true } : {}) })
+      const { cells: copied, range } = clip.data
+      const h = copied.length
+      const w = Math.max(1, ...copied.map((row) => row.length))
+      // one copied block into a selection that holds a whole number of them: it fills the selection (copied cells are not cut ones)
+      const selH = rect.r1 - rect.r0 + 1
+      const selW = rect.c1 - rect.c0 + 1
+      const tiles = !clip.cut && !oneCell && h > 0 && selH % h === 0 && selW % w === 0 && selH * selW <= 100_000 ? { r: selH / h, c: selW / w } : { r: 1, c: 1 }
+      const cells: ClipCell[][] = []
+      for (let i = 0; i < h * tiles.r; i++) {
+        const line: ClipCell[] = []
+        for (let j = 0; j < w * tiles.c; j++) {
+          const src = copied[i % h]?.[j % w] ?? null
+          const ti = Math.floor(i / h)
+          const tj = Math.floor(j / w)
+          // (the worker moves every formula by the distance of the first block: the others by what is left of theirs)
+          line.push(src && src[3] !== undefined && (ti || tj) ? ([src[0], src[1], src[2], translateFormula(src[3], ti * h, tj * w)] as ClipCell) : src)
+        }
+        cells.push(line)
+      }
+      const dest = { r0: at.r, c0: at.c, r1: at.r + cells.length - 1, c1: at.c + w * tiles.c - 1 }
+      if (cells.length * w * tiles.c > 1 && mergedHit(dest, (r, c) => !!cells[r - dest.r0]?.[c - dest.c0] && cells[r - dest.r0][c - dest.c0]![1] !== '')) return setToast(MERGED_PASTE)
+      void sheetOp({ op: 'paste', range: dest, cells, from: { sheet: clip.data.sheet, r0: range.r0, c0: range.c0 }, ...(clip.cut ? { moved: true } : {}) })
       // moved once: pasted again, they are copied
       if (clip.cut) store.clip = { ...clip, cut: false }
       return
     }
-    const cells = parseTsv(raw).flatMap((line, i) => line.map((v, j) => ({ r: at.r + i, c: at.c + j, input: v })))
+    const rows = parseTsv(raw)
+    // one value into a selection of several cells: all of them get it
+    if (rows.length === 1 && rows[0].length === 1 && !oneCell) {
+      const cells: CellInput[] = []
+      if ((rect.r1 - rect.r0 + 1) * (rect.c1 - rect.c0 + 1) > 100_000) return setToast('The selection has more than 100,000 cells: select fewer to fill them')
+      for (let r = rect.r0; r <= rect.r1; r++) {
+        for (let c = rect.c0; c <= rect.c1; c++) {
+          const m = mergeAt(r, c)
+          if (!m || (m.r0 === r && m.c0 === c)) cells.push({ r, c, input: rows[0][0] })
+        }
+      }
+      void run(client.call('xlsx.set', sheet, cells))
+      return
+    }
+    const cells = rows.flatMap((line, i) => line.map((v, j) => ({ r: at.r + i, c: at.c + j, input: v })))
+    const block = { r0: at.r, c0: at.c, r1: at.r + rows.length - 1, c1: at.c + Math.max(1, ...rows.map((l) => l.length)) - 1 }
+    if (cells.length > 1 && mergedHit(block, (r, c) => (rows[r - block.r0]?.[c - block.c0] ?? '') !== '')) return setToast(MERGED_PASTE)
     if (cells.length > 100_000) setToast(`Only the first 100,000 of the ${cells.length.toLocaleString()} cells were pasted`)
     if (cells.length) void run(client.call('xlsx.set', sheet, cells.slice(0, 100_000)))
   }
@@ -1551,16 +2097,32 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
       pointRange(pd.ar, pd.ac, r, c, pd.axis)
       return
     }
+    const fill = fillRef.current
+    if (fill) {
+      const { r, c } = cellAt(e.clientX, e.clientY, e.currentTarget as HTMLElement)
+      if (r >= 0 && c >= 0 && (fill.to?.r !== r || fill.to?.c !== c)) {
+        fill.to = { r, c }
+        setFillTo({ r, c })
+      }
+      return
+    }
     if (!dragging.current) return
     const { r, c } = cellAt(e.clientX, e.clientY, e.currentTarget as HTMLElement)
-    if (r >= 0 && c >= 0 && (r !== sel.fr || c !== sel.fc)) setSelState((p) => ({ ...p, fr: r, fc: c }))
+    if (r >= 0 && c >= 0 && (r !== sel.fr || c !== sel.fc)) setSelState((p) => ({ ...p, fr: r, fc: c, whole: undefined }))
   }
 
   const box = edit && own ? cellBox(edit.r, edit.c) : null
   const fx = edit ? edit.value : shown(detail, sel.ar, sel.ac)
   const editKeys = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (!edit || e.nativeEvent.isComposing) return
+    if (!edit || e.nativeEvent.isComposing || e.keyCode === 229) return
     const mod = e.metaKey || e.ctrlKey
+    if (mod && e.key.toLowerCase() === 's' && !e.altKey) {
+      // the cell is written, then the document: the browser's own "Save page as" stays closed
+      e.preventDefault()
+      commit()
+      void lastRun.current.then(() => viewer.save())
+      return
+    }
     if (sugg.length) {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault()
@@ -1568,7 +2130,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
         setSugIdx((i) => (Math.min(i, n - 1) + (e.key === 'ArrowDown' ? 1 : n - 1)) % n)
         return
       }
-      if (e.key === 'Tab' || (e.key === 'Enter' && !e.altKey && !e.shiftKey)) {
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.altKey && !e.shiftKey && !mod)) {
         e.preventDefault()
         accept(sugg[Math.min(sugIdx, sugg.length - 1)])
         return
@@ -1589,6 +2151,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
       }
       if (inCell && !e.shiftKey) {
         e.preventDefault()
+        tabStart.current = null
         commit(arrow)
         return
       }
@@ -1604,6 +2167,13 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
     } else if (e.key === 'F2') {
       e.preventDefault()
       setEdit((p) => (p ? { ...p, mode: p.mode === 'enter' ? 'edit' : 'enter' } : p))
+    } else if (e.key === 'F4') {
+      e.preventDefault()
+      cycleAbsolute()
+    } else if (e.key === 'Enter' && mod && !e.altKey) {
+      // Ctrl+Enter: the entry into every cell of the selection
+      e.preventDefault()
+      commitFill()
     } else if (e.key === 'Enter' && (e.altKey || e.shiftKey)) {
       // line break inside the cell: Alt+Enter as in Excel, Shift+Enter as in most text inputs
       e.preventDefault()
@@ -1615,10 +2185,10 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
       }
     } else if (e.key === 'Enter') {
       e.preventDefault()
-      commit([1, 0])
+      commit(enterMove(false, edit.c))
     } else if (e.key === 'Tab') {
       e.preventDefault()
-      commit([0, e.shiftKey ? -1 : 1])
+      commit(tabMove(e.shiftKey, edit.c))
     } else if (e.key === 'Escape') {
       e.preventDefault()
       cancel()
@@ -1685,6 +2255,8 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
     }
     hlParts.push(edit.value.slice(at) + '\u200b')
   }
+  /** the cell is being edited in its own box (not in the formula bar, not on another sheet) */
+  const editing = !!edit && inCell && !!edStyle
   const assistPos = (() => {
     if (!edStyle || !assist) return undefined
     const top = (edStyle.top as number) + (edStyle.height as number) + 2
@@ -1744,10 +2316,16 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
         onCut={(e) => {
           if (!edit && editable) copySel(e, true)
         }}
+        onFocus={(e) => {
+          // the grid itself (a click on its scroll bar) hands the keyboard to the hidden field that types into the cells
+          if (e.target === e.currentTarget && editable && !edit) editRef.current?.focus({ preventScroll: true })
+        }}
         onPaste={(e) => {
           if (edit || !editable) return
           e.preventDefault()
-          pasteText(e.clipboardData.getData('text/plain'))
+          // other programs may put only HTML on the clipboard (a table): its cells
+          const html = e.clipboardData.getData('text/html')
+          pasteText(e.clipboardData.getData('text/plain') || (html ? htmlToTsv(html) : ''))
         }}
       >
         <div style={{ position: 'relative', width: Math.max(spacerW, size.w), height: Math.max(spacerH, size.h) }}>
@@ -1763,7 +2341,12 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
               if (r >= 0 && c >= 0 && (r < rect.r0 || r > rect.r1 || c < rect.c0 || c > rect.c1)) setSel({ ar: r, ac: c, fr: r, fc: c })
               setCtx({ x: e.clientX, y: e.clientY })
             }}
-            onDoubleClick={() => !edit && void startEdit()}
+            onDoubleClick={(e) => {
+              if (edit) return
+              const grip = (e.target as HTMLElement).closest('[data-grip-col],[data-grip-row]') as HTMLElement | null
+              if (grip) void fitGrip(grip)
+              else void startEdit()
+            }}
           >
             {region('main', r0, r1, c0, c1, mainOx, mainOy, HW + fw, HH + fh, mainW, mainH)}
             {fr > 0 && region('top', 0, fr - 1, c0, c1, mainOx, 0, HW + fw, HH, mainW, fh)}
@@ -1776,39 +2359,46 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
             {fr > 0 && <div className="de-freeze-h" style={{ left: 0, top: HH + fh - 1, width: size.w, height: 2 }} />}
             {fc > 0 && <div className="de-freeze-v" style={{ left: HW + fw - 1, top: 0, width: 2, height: size.h }} />}
             <div className="de-corner" style={{ width: HW, height: HH }} />
-            {edit && inCell && edStyle && (
-              <>
-                {hlParts.length > 0 && (
-                  <div ref={hlRef} className="de-cell-edit de-cell-hl" style={edStyle} aria-hidden>
-                    {hlParts}
-                  </div>
-                )}
-                <textarea
-                  ref={editRef}
-                  className={hlParts.length ? 'de-cell-edit de-cell-edit-fx' : 'de-cell-edit'}
-                  spellCheck={false}
-                  value={edit.value}
-                  style={edStyle}
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onChange={(e) => onInput(e.target)}
-                  onSelect={(e) => readCaret(e.currentTarget)}
-                  onScroll={(e) => {
-                    if (hlRef.current) hlRef.current.scrollTop = e.currentTarget.scrollTop
-                  }}
-                  onKeyDown={editKeys}
-                  onBlur={(e) => {
-                    if (hold.current) return
-                    // moving into the formula bar keeps editing there
-                    if (e.relatedTarget && e.relatedTarget === fxRef.current) return setEdit((p) => (p ? { ...p, bar: true, sync: 0 } : p))
-                    commit()
-                  }}
-                />
-                {assist && assistPos && (
-                  <div className="de-fassist-at" style={assistPos}>
-                    {assist}
-                  </div>
-                )}
-              </>
+            {edit && inCell && edStyle && hlParts.length > 0 && (
+              <div ref={hlRef} className="de-cell-edit de-cell-hl" style={edStyle} aria-hidden>
+                {hlParts}
+              </div>
+            )}
+            {/* The one text field of the grid, always there when the sheet can be edited: it is the cell editor while a cell is
+                being edited, and else a hidden field that has the keyboard. Text typed, composed (IME), inserted (emoji picker,
+                virtual keyboard) into it starts the edit of the selected cell, in this same field: a composition in progress
+                is not cut when the editor opens. */}
+            {editable && (
+              <textarea
+                ref={editRef}
+                className={editing ? (hlParts.length ? 'de-cell-edit de-cell-edit-fx' : 'de-cell-edit') : 'de-cell-sink'}
+                spellCheck={false}
+                autoComplete="off"
+                autoCapitalize="off"
+                aria-label="Cell"
+                // no on-screen keyboard until a cell is being edited (it would open as the sheet does)
+                inputMode={edit ? undefined : 'none'}
+                value={editing ? edit.value : ''}
+                style={editing ? edStyle : SINK_STYLE}
+                onMouseDown={(e) => e.stopPropagation()}
+                onChange={(e) => (edit ? onInput(e.target) : sinkStart(e.target))}
+                onSelect={(e) => readCaret(e.currentTarget)}
+                onScroll={(e) => {
+                  if (hlRef.current) hlRef.current.scrollTop = e.currentTarget.scrollTop
+                }}
+                onKeyDown={editKeys}
+                onBlur={(e) => {
+                  if (!edit || !inCell || hold.current) return
+                  // moving into the formula bar keeps editing there
+                  if (e.relatedTarget && e.relatedTarget === fxRef.current) return setEdit((p) => (p ? { ...p, bar: true, sync: 0 } : p))
+                  commit()
+                }}
+              />
+            )}
+            {editing && assist && assistPos && (
+              <div className="de-fassist-at" style={assistPos}>
+                {assist}
+              </div>
             )}
           </div>
         </div>

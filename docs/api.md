@@ -231,6 +231,9 @@ await doc.call('xlsx.sheetOp', 0, { op: 'clear', range: { r0: 0, c0: 3, r1: 1048
 await doc.call('xlsx.import', 0, csvFile, { name: 'cities' }) // a new sheet after sheet 0 with the rows of a CSV / TSV, streamed in when loaded
 await doc.call('xlsx.text', 0, ',') // the sheet as CSV (a Blob; '\t' for TSV), the values as shown
 // open(src, { residentCells: 12_000_000 }): cells of a CSV / TSV kept in memory; the other rows are read from the file as they are shown
+// open(src, { encoding: 'windows-1258' }): the encoding of a text file (CSV, TSV, text, Markdown, HTML…), a TextDecoder label; without it the
+// byte order mark, the declared charset, UTF-8, then (Vietnamese text) Windows-1258, then Windows-1252 decide. An unknown label is an error
+// the worker also emits `warning` ({ text }) when a file opened but not whole: a CSV with more than 16,384 columns (the viewer shows it as a message)
 const comments = await doc.call('comments.list')  // DocComment[]: threads are roots + replies (threadsOf)
 doc.on('comment', ({ id, c }) => {})       // a comment set / deleted (c null), here or by a collaborator
 await doc.call('comments.set', c.id, { ...c, done: true }) // XLSX / PPTX threads carry their place (`at`)

@@ -137,11 +137,11 @@ describe('plain sources open as Office files', () => {
 
   test('an Office name is not read as text; binary and empty files are not text', async () => {
     // e.g. a missing file served as the site's index.html
-    await expect(open(enc('<!doctype html><p>Not found</p>'), 'report.docx')).rejects.toThrow(/Not a ZIP/)
-    await expect(open(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0]), 'chart.csv')).rejects.toThrow('“chart.csv” is not a text file')
-    await expect(open(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]))).rejects.toThrow(/Not a ZIP/)
-    await expect(open(enc('%PDF-1.7\n%âãÏÓ\n1 0 obj\n<< /Type /Catalog >>\nendobj\n'), 'scan')).rejects.toThrow(/Not a ZIP/)
-    await expect(open(new Uint8Array(0))).rejects.toThrow(/Not a ZIP/)
+    await expect(open(enc('<!doctype html><p>Not found</p>'), 'report.docx')).rejects.toThrow(/web page/)
+    await expect(open(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0]), 'chart.csv')).rejects.toThrow('“chart.csv” is a PNG image, not a text file')
+    await expect(open(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]))).rejects.toThrow(/This is a PNG image/)
+    await expect(open(enc('%PDF-1.7\n%âãÏÓ\n1 0 obj\n<< /Type /Catalog >>\nendobj\n'), 'scan')).rejects.toThrow(/This is a PDF file/)
+    await expect(open(new Uint8Array(0))).rejects.toThrow('The file is empty')
     // an empty .csv is an empty workbook
     expect((await open(new Uint8Array(0), 'empty.csv')).info.kind).toBe('xlsx')
   })

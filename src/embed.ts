@@ -45,6 +45,10 @@ export class OfficeViewerElement extends HTMLElement {
   private viewer?: MountedViewer
   private _file?: Blob | ArrayBuffer
   private _icons?: Icons
+  // one function each for the element's life: a new one with every update would run the viewer's load effect again (a `load` event per update)
+  private readonly onLoad: NonNullable<MountOptions['onLoad']> = (client) => this.dispatchEvent(new CustomEvent('load', { detail: { kind: client.kind, name: client.name } }))
+  private readonly onError: NonNullable<MountOptions['onError']> = (error) => this.dispatchEvent(new CustomEvent('error', { detail: error }))
+  private readonly onComment = (e: unknown) => this.dispatchEvent(new CustomEvent('comment', { detail: e }))
 
   get file() {
     return this._file
@@ -110,10 +114,10 @@ export class OfficeViewerElement extends HTMLElement {
           ? false
           : {
               user: this.getAttribute('user') ? { name: this.getAttribute('user')! } : undefined,
-              onEvent: (e) => this.dispatchEvent(new CustomEvent('comment', { detail: e })),
+              onEvent: this.onComment,
             },
-      onLoad: (client) => this.dispatchEvent(new CustomEvent('load', { detail: { kind: client.kind, name: client.name } })),
-      onError: (error) => this.dispatchEvent(new CustomEvent('error', { detail: error })),
+      onLoad: this.onLoad,
+      onError: this.onError,
     }
   }
 
