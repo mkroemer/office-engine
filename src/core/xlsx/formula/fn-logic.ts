@@ -65,6 +65,10 @@ function iferror(naOnly: boolean) {
 
 export const LOGIC: Record<string, FnDef> = {
   IF,
+  // names for values inside one formula, and functions made of formulas (the evaluator keeps the names)
+  LET: L(3, INF, (a, ev, top) => ev.letIn(a, top)),
+  LAMBDA: L(1, INF, (a, ev) => ev.lambda(a)),
+  ISOMITTED: L(1, 1, (a, ev) => ev.omitted(a[0])),
   IFS: L(2, INF, (a, ev, top) => {
     if (a.length % 2) return ERR.VALUE
     for (let i = 0; i < a.length; i += 2) {

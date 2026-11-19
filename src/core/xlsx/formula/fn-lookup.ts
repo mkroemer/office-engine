@@ -1,7 +1,8 @@
 /** Lookup & reference functions. */
 import { A, flat, lift, type Ev, type FnDef } from './fn'
 import { parseRefText } from './lexer'
-import type { RefAddr } from './refs'
+import { INTERSECT } from './parser'
+import { sameSheet, type RefAddr } from './refs'
 import { ERR, FormulaError, MAX_COL, MAX_ROW, type Value } from './types'
 import { ArrayV, bool, compare, hasWildcard, int, num, RangeV, str, UnionV, valueEq, wildcardRe, type Val } from './values'
 
@@ -111,6 +112,39 @@ function xlookup(a: Val[], ev: Ev): Val {
   }
   if (rev) i = list.length - 1 - i
   return slice(a[2], ret, i, vertical)
+}
+
+/** XMATCH(value, array, [match_mode], [search_mode]): the position of a value in a row or column */
+function xmatch(a: Val[], ev: Ev): number {
+  const x = lookupValue(a[0], ev)
+  const d = grid(a[1], ev)
+  if (d.length > 1 && d[0].length > 1) throw ERR.VALUE
+  const mode = a.length > 2 && a[2] !== null ? int(ev.scalar(a[2])) : 0
+  const search = a.length > 3 && a[3] !== null ? int(ev.scalar(a[3])) : 1
+  if (search !== 1 && search !== -1 && search !== 2 && search !== -2) throw ERR.VALUE
+  let list = flat(d)
+  const rev = search === -1
+  if (rev) list = [...list].reverse()
+  let i = -1
+  if (mode === 0 || mode === 2) i = findExact(list, x, mode === 2)
+  else if (mode === 1 || mode === -1) {
+    i = findExact(list, x, false)
+    if (i < 0) {
+      // the next larger (1) / next smaller (-1) value
+      let best: Value = null
+      for (let k = 0; k < list.length; k++) {
+        const v = list[k]
+        if (v === null || v instanceof FormulaError || typeof v !== typeof x) continue
+        const c = compare(v, x)
+        if (mode === 1 ? c > 0 && (best === null || compare(v, best) < 0) : c < 0 && (best === null || compare(v, best) > 0)) {
+          best = v
+          i = k
+        }
+      }
+    }
+  } else throw ERR.VALUE
+  if (i < 0) throw ERR.NA
+  return (rev ? list.length - 1 - i : i) + 1
 }
 
 function lookup(a: Val[], ev: Ev): Value {
@@ -232,12 +266,28 @@ function dims(v: Val, rows: boolean): number {
   return 1
 }
 
+/** the cells two references both have; none: #NULL! */
+function intersection(a: Val[]): Val {
+  const [x, y] = a
+  if (x instanceof FormulaError) throw x
+  if (y instanceof FormulaError) throw y
+  if (!(x instanceof RangeV) || !(y instanceof RangeV) || !sameSheet(x.sheet, y.sheet)) throw ERR.VALUE
+  const r0 = Math.max(x.r0, y.r0)
+  const c0 = Math.max(x.c0, y.c0)
+  const r1 = Math.min(x.r1, y.r1)
+  const c1 = Math.min(x.c1, y.c1)
+  if (r0 > r1 || c0 > c1) throw ERR.NULL
+  return new RangeV(x.sheet, r0, c0, r1, c1)
+}
+
 export const LOOKUP: Record<string, FnDef> = {
+  [INTERSECT]: A(2, 2, intersection),
   // the value looked up, and the column / row to give: one result each when they are arrays
   VLOOKUP: A(3, 4, lift((i) => i === 0 || i === 2, (a, ev) => vhlookup(a, ev, true))),
   HLOOKUP: A(3, 4, lift((i) => i === 0 || i === 2, (a, ev) => vhlookup(a, ev, false))),
   XLOOKUP: A(3, 6, lift((i) => i === 0, xlookup)),
   MATCH: A(2, 3, lift((i) => i === 0, match)),
+  XMATCH: A(2, 4, lift((i) => i === 0, xmatch)),
   LOOKUP: A(2, 3, lookup),
   INDEX: A(2, 4, index),
   OFFSET: A(3, 5, offset),

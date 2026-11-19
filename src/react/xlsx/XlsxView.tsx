@@ -263,6 +263,11 @@ class XlsxStore {
       this.emit()
       return
     }
+    // (a formula filled cells past the last row / column: the grid reaches them)
+    if (res.grown) {
+      s.rows = Math.max(s.rows, res.grown.rows)
+      s.cols = Math.max(s.cols, res.grown.cols)
+    }
     // (a range of whole rows reaches the last column of the sheet, not of what there is)
     if (res.range.c1 < 16383) s.cols = Math.max(s.cols, res.range.c1 + 1)
     this.invalidate(res.sheet, res.range.r0, res.range.r1)
