@@ -282,6 +282,11 @@ describe('as a file writes them', () => {
     expect(stripFunctionPrefixes('_xlfn.LET(_xlpm.x,1,_xlpm.x+1)')).toBe('LET(x,1,x+1)')
     expect(stripFunctionPrefixes('=_xlfn.LAMBDA(_xlpm.a,[_xlpm.b],_xlpm.a+_xlpm.b)(1,2)')).toBe('=LAMBDA(a,[b],a+b)(1,2)')
     expect(stripFunctionPrefixes('_xlfn.LET(_xlpm.f,_xlfn.LAMBDA(_xlpm.v,_xlpm.v*2),_xlpm.f(A1))')).toBe('LET(f,LAMBDA(v,v*2),f(A1))')
+    expect(stripFunctionPrefixes('SUM(_xlfn.ANCHORARRAY(A1))')).toBe('SUM(A1#)')
+    expect(stripFunctionPrefixes('=_xlfn.SINGLE(SUM(A1:A3))+_xlfn.SINGLE(B1)')).toBe('=@SUM(A1:A3)+@B1')
+    expect(stripFunctionPrefixes('_xlfn.SINGLE(_xlfn.ANCHORARRAY(Sheet2!B2))')).toBe('@Sheet2!B2#')
+    expect(stripFunctionPrefixes('_xlfn.SINGLE(A1:A3*2)')).toBe('SINGLE(A1:A3*2)')
+    for (const f of ['=@SUM(A1:A3)+@B1', 'SUM(A1#)', '@Sheet2!B2#', 'LET(x,1,x+1)']) expect(stripFunctionPrefixes(withFunctionPrefixes(f))).toBe(f)
     // what was read from a file evaluates as it is
     expect(ev('_xlfn.LET(_xlpm.f,_xlfn.LAMBDA(_xlpm.v,_xlpm.v*2),_xlpm.f(A1))')).toBe(6)
     expect(ev('SUM(_xlfn.ANCHORARRAY(A1))')).toBe(7)

@@ -387,9 +387,54 @@ export function withFunctionPrefixes(text: string, table?: string): string {
   })
 }
 
-/** The formula as it is typed: without the prefixes a file gives the newer functions. */
+/**
+ * The operators a file writes as functions, as they are typed: `SINGLE(A1:A3)` is `@A1:A3`, `ANCHORARRAY(A1)` is
+ * `A1#`. Only where the argument is one reference, name or call: `@` and `#` apply to no more.
+ */
+function withOperators(text: string): string {
+  if (!/(?:SINGLE|ANCHORARRAY)\(/i.test(text)) return text
+  const src = text.startsWith('=') ? text.slice(1) : text
+  let toks: Token[]
+  try {
+    toks = tokenize(src).filter((t) => t.t !== 'ws')
+  } catch {
+    return text
+  }
+  /** the index of the `)` that closes the call whose name is at `i` */
+  const close = (list: Token[], i: number): number => {
+    let depth = 0
+    for (let k = i + 1; k < list.length; k++) {
+      const u = list[k]
+      if (u.t !== 'punc') continue
+      if (u.v === '(') depth++
+      else if (u.v === ')' && --depth === 0) return k
+    }
+    return -1
+  }
+  const edits = new Map<number, string>()
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i]
+    if (t.t !== 'func' || (t.v !== 'SINGLE' && t.v !== 'ANCHORARRAY')) continue
+    const end = close(toks, i)
+    if (end < 0) continue
+    const inner = toks.slice(i + 2, end)
+    const one = inner.length === 1 && (inner[0].t === 'ref' || inner[0].t === 'name')
+    const call = inner.length > 2 && inner[0].t === 'func' && close(inner, 0) === inner.length - 1
+    if (t.v === 'ANCHORARRAY' ? !one : !one && !call) continue
+    edits.set(t.s, t.v === 'SINGLE' ? '@' : '')
+    edits.set(toks[i + 1].s, '')
+    edits.set(toks[end].s, t.v === 'SINGLE' ? '' : '#')
+  }
+  return edits.size ? rewrite(text, (t) => edits.get(t.s)) : text
+}
+
+/** The formula as it is typed: without the prefixes a file gives the newer functions, its operators as operators. */
 export function stripFunctionPrefixes(text: string): string {
   if (!text.includes('_xl') && !text.includes('_XL')) return text
+  return withOperators(stripPrefixes(text))
+}
+
+function stripPrefixes(text: string): string {
   return rewrite(text, (t) => {
     const src = text.slice(text.startsWith('=') ? t.s + 1 : t.s, text.startsWith('=') ? t.e + 1 : t.e)
     // (the names of LET and the parameters of LAMBDA have a prefix of their own)
