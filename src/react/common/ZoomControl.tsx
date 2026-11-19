@@ -1,3 +1,5 @@
+import { Icon } from '../edit/Toolbar'
+
 export type Zoom = number | 'fit'
 
 const STEPS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3]
@@ -11,13 +13,13 @@ export function ZoomControl({ zoom, effective, onChange }: { zoom: Zoom; effecti
   return (
     <div className="de-zoom" role="group" aria-label="Zoom">
       <button type="button" aria-label="Zoom out" onClick={() => step(-1)}>
-        −
+        <Icon name="zoomOut" size={16} />
       </button>
       <span title={zoom === 'fit' ? 'Fit width (click for 100%)' : 'Click to fit width'} onClick={() => onChange(zoom === 'fit' ? 1 : 'fit')}>
         {zoom === 'fit' ? 'Fit' : `${Math.round(effective * 100)}%`}
       </span>
       <button type="button" aria-label="Zoom in" onClick={() => step(1)}>
-        +
+        <Icon name="zoomIn" size={16} />
       </button>
     </div>
   )

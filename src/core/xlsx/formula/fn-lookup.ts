@@ -1,5 +1,5 @@
 /** Lookup & reference functions. */
-import { A, flat, type Ev, type FnDef } from './fn'
+import { A, flat, lift, type Ev, type FnDef } from './fn'
 import { parseRefText } from './lexer'
 import type { RefAddr } from './refs'
 import { ERR, FormulaError, MAX_COL, MAX_ROW, type Value } from './types'
@@ -148,7 +148,8 @@ function index(a: Val[], ev: Ev): Val {
   else if (h === 1) [r, c] = [1, r]
   else if (w === 1) c = 1
   else c = 0
-  if (r < 0 || c < 0 || r > h || c > w) throw ERR.REF
+  if (r < 0 || c < 0) throw ERR.VALUE
+  if (r > h || c > w) throw ERR.REF
   if (src instanceof RangeV) {
     const [r0, r1] = r ? [src.r0 + r - 1, src.r0 + r - 1] : [src.r0, src.r1]
     const [c0, c1] = c ? [src.c0 + c - 1, src.c0 + c - 1] : [src.c0, src.c1]
@@ -232,10 +233,11 @@ function dims(v: Val, rows: boolean): number {
 }
 
 export const LOOKUP: Record<string, FnDef> = {
-  VLOOKUP: A(3, 4, (a, ev) => vhlookup(a, ev, true)),
-  HLOOKUP: A(3, 4, (a, ev) => vhlookup(a, ev, false)),
-  XLOOKUP: A(3, 6, xlookup),
-  MATCH: A(2, 3, match),
+  // the value looked up, and the column / row to give: one result each when they are arrays
+  VLOOKUP: A(3, 4, lift((i) => i === 0 || i === 2, (a, ev) => vhlookup(a, ev, true))),
+  HLOOKUP: A(3, 4, lift((i) => i === 0 || i === 2, (a, ev) => vhlookup(a, ev, false))),
+  XLOOKUP: A(3, 6, lift((i) => i === 0, xlookup)),
+  MATCH: A(2, 3, lift((i) => i === 0, match)),
   LOOKUP: A(2, 3, lookup),
   INDEX: A(2, 4, index),
   OFFSET: A(3, 5, offset),

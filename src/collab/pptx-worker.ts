@@ -94,6 +94,9 @@ export class PptxCollabWorker {
       }
       if (!s) return { res: {}, rec: null }
       const meta = await slideOp(pres, s)
+      // shared undo covers slide edits through records, not the view's own history
+      pres.undoStack = []
+      pres.redoStack = []
       await this.originals()
       // slide parts and indexes changed: older records would restore stale slides
       this.recs.clear()
@@ -115,7 +118,7 @@ export class PptxCollabWorker {
     const before = await this.snap(path)
     if (op.t === 'text') {
       try {
-        await pres.setText(i, op.sid, op.paras)
+        await pres.setText(i, op.sid, op.paras, op.cell)
       } catch {
         // shape deleted by a collaborator: skipped everywhere alike
         return { res: {}, rec: null }

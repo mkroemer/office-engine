@@ -46,11 +46,73 @@ describe('numfmt', () => {
     expect(f(1.5, '# ?/?')).toBe('1 1/2')
     expect(f(-3, '0')).toBe('-3')
   })
+  test('large fixed decimals retain decimal precision rather than binary digits', () => {
+    // Excel 16.115 also displays the adjacent doubles as 1e21 at 15 significant digits.
+    for (const v of [1e21 - 131072, 1e21, 1e21 + 131072]) {
+      expect(f(v, '0.00')).toBe('1000000000000000000000.00')
+      expect(f(-v, '0.00')).toBe('-1000000000000000000000.00')
+    }
+    expect(f(1e21 - 1e7, '0.00')).toBe('999999999999990000000.00')
+    expect(f(1e21 + 1e7, '0.00')).toBe('1000000000000010000000.00')
+    expect(f(1.23456789012345e21, '0.00')).toBe('1234567890123450000000.00')
+    expect(f(1e20, '0.00')).toBe('100000000000000000000.00')
+    expect(f(1e100, '0.00')).toBe('1' + '0'.repeat(100) + '.00')
+    expect(f(-1e308, '0.00')).toBe('-1' + '0'.repeat(308) + '.00')
+    expect(f(Number.MAX_VALUE, '0.00')).toBe('179769313486232' + '0'.repeat(294) + '.00')
+  })
+  test('decimal rendering preserves format sections, scaling and other number formats', () => {
+    expect(formatValue(-1e21, '#,##0.00;[Red](#,##0.00)')).toEqual({
+      text: '(1,000,000,000,000,000,000,000.00)', color: '#ff0000',
+    })
+    expect(f(1e21, '[>=100]0.00;"small"')).toBe('1000000000000000000000.00')
+    expect(f(1e21, '0.00,,')).toBe('1000000000000000.00')
+    expect(f(1e21, '0.00%')).toBe('100000000000000000000000.00%')
+    expect(f(1e21, '0.##')).toBe('1000000000000000000000.')
+    expect(f(1e21, '0.??')).toBe('1000000000000000000000.  ')
+    expect(f(1.234567890123456, '0.00000000000000000000')).toBe('1.23456789012346000000')
+    expect(f(9.999, '0.00E+00')).toBe('1.00E+01')
+    expect(f(1e100, '0.00E+00')).toBe('1.00E+100')
+    expect(f(1e-100, '0.00E+00')).toBe('1.00E-100')
+    expect(f(12345, '##0.0E+0')).toBe('12.3E+3')
+    // Excel keeps the space between the (empty) whole part and the fraction
+    expect(f(0.125, '# ?/?')).toBe(' 1/8')
+  })
   test('dates', () => {
     expect(f(45291.75, 'yyyy-mm-dd hh:mm')).toBe('2023-12-31 18:00')
     expect(f(45291.75, 'dddd, mmmm d, yyyy h:mm AM/PM')).toBe('Sunday, December 31, 2023 6:00 PM')
     expect(f(45291, 'm/d/yyyy')).toBe('12/31/2023')
     expect(f(1.5, '[h]:mm:ss')).toBe('36:00:00')
+  })
+  test('date-only midnight carry matches Excel in both date systems', () => {
+    // Verified with Excel 16.115: date-only formats also round to seconds.
+    expect(f(0.99999999, 'm/d/yyyy')).toBe('1/1/1900')
+    expect(f(45291.99999999, 'm/d/yyyy')).toBe('1/1/2024')
+    expect(f(45291 + (86400 - 0.6) / 86400, 'm/d/yyyy')).toBe('12/31/2023')
+    expect(f(45291 + (86400 - 0.4) / 86400, 'm/d/yyyy')).toBe('1/1/2024')
+    expect(formatValue(0.5, 'm/d/yyyy', true).text).toBe('1/1/1904')
+    expect(formatValue(0.99999999, 'm/d/yyyy', true).text).toBe('1/2/1904')
+    expect(formatValue((86400 - 0.6) / 86400, 'm/d/yyyy', true).text).toBe('1/1/1904')
+  })
+  test('time carry preserves wrapped, elapsed and fractional seconds', () => {
+    const nearMidnight = (86400 - 0.4) / 86400
+    expect(f(nearMidnight, 'h:mm:ss')).toBe('0:00:00')
+    expect(f(1 + nearMidnight, 'h:mm:ss')).toBe('0:00:00')
+    expect(f(1 + nearMidnight, '[h]:mm:ss')).toBe('48:00:00')
+    expect(f((86400 - 0.04) / 86400, 'h:mm:ss.0')).toBe('0:00:00.0')
+    expect(f((86400 - 0.06) / 86400, 'h:mm:ss.0')).toBe('23:59:59.9')
+    expect(f(-0.00001, 'h:mm:ss')).toBe('########')
+  })
+  // https://github.com/p10node/office-engine/issues/3
+  test('matches Excel on the issue #3 repros', () => {
+    expect(f(-1.5, '# ?/?')).toBe('-1 1/2')
+    expect(f(-0.5, '?/?')).toBe('-1/2')
+    expect(f(0.00001, 'h:mm:ss')).toBe('0:00:01')
+    expect(f(99.999, 'h:mm:ss')).toBe('23:58:34')
+    expect(f(0.12345, 'mm:ss.0')).toBe('57:46.1')
+    expect(f(0, '0;-0;;@')).toBe('')
+    expect(f(0.001, '[mm]:ss')).toBe('01:26')
+    expect(f(2.675, '0.00')).toBe('2.68')
+    expect(f(1.005, '0.00')).toBe('1.01')
   })
 })
 

@@ -74,6 +74,10 @@ export interface TrackMark {
   author?: string
   /** ISO date */
   date?: string
+  /** a deletion of text someone inserted (Word's w:ins around w:del): that insertion, still to be accepted or rejected */
+  ins?: TrackMark
+  /** the change is a move (w:moveFrom / w:moveTo), written back as one */
+  mv?: boolean
 }
 
 /**
@@ -82,7 +86,19 @@ export interface TrackMark {
  * `cm`: the comment threads (root ids) whose range covers the run.
  */
 export type Inline =
-  | { t: 'text'; text: string; s: RunStyle; href?: string; lk?: string; src?: SrcRef; d?: RunSet; cm?: string[]; tc?: TrackMark }
+  | {
+      t: 'text'
+      text: string
+      s: RunStyle
+      href?: string
+      lk?: string
+      src?: SrcRef
+      d?: RunSet
+      cm?: string[]
+      tc?: TrackMark
+      /** what the source run's properties hold that `s` does not (language, character style…): runs differing in it are not merged */
+      rp?: string
+    }
   | {
       t: 'img'
       cm?: string[]
@@ -259,7 +275,7 @@ export interface StyleLook {
   after?: number | null
 }
 
-export type HeaderFooters = Pick<DocxMeta, 'header' | 'footer' | 'firstHeader' | 'firstFooter'>
+export type HeaderFooters = Pick<DocxMeta, 'header' | 'footer' | 'firstHeader' | 'firstFooter' | 'evenHeader' | 'evenFooter'>
 
 export type HFKind = 'header' | 'footer' | 'firstHeader' | 'firstFooter'
 
@@ -397,7 +413,12 @@ export interface DocxMeta {
   footer?: Block[]
   firstHeader?: Block[]
   firstFooter?: Block[]
+  /** the header / footer of even pages (used when `evenOdd`) */
+  evenHeader?: Block[]
+  evenFooter?: Block[]
   titlePg?: boolean
+  /** different headers / footers for odd and even pages (w:evenAndOddHeaders) */
+  evenOdd?: boolean
   /** body default font (CSS) and size */
   font?: string
   sz?: number

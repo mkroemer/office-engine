@@ -25,6 +25,15 @@ export interface ColInfo {
   w: number
   /** width before hiding (px) */
   prevW?: number
+  /** attributes of the <col> the model does not edit (style, outlineLevel, collapsed, bestFit, phonetic), kept as read */
+  x?: Record<string, string>
+}
+
+/** what a <row> says that the sheet shows: height, hidden; `x`: the other attributes (s, customFormat, outlineLevel, collapsed, thickTop, thickBot), kept as read */
+export interface RowAttrs {
+  ht?: number
+  hidden?: boolean
+  x?: Record<string, string>
 }
 
 export interface Merge {
@@ -55,12 +64,30 @@ export interface SheetProgress {
   recalc?: boolean
 }
 
-/** [col, text, styleIndex, kind (0 text,1 number,2 center), color?] */
-export type CellOut = [number, string, number, number, string?]
+/** a part of a text with a font of its own (rich text): what is not said is not set (not bold, the cell's color and size) */
+export interface TextRun {
+  t: string
+  /** the part has run properties: its font is the one they say, not the cell's */
+  own?: boolean
+  b?: boolean
+  i?: boolean
+  u?: boolean
+  strike?: boolean
+  color?: string
+  /** size in points */
+  sz?: number
+  font?: string
+  va?: 'superscript' | 'subscript'
+}
+
+/** [col, text, styleIndex, kind (0 text,1 number,2 center), color?, parts of a rich text?] */
+export type CellOut = [number, string, number, number, string?, TextRun[]?]
 
 export interface RowOut {
   r: number
   cells: CellOut[]
+  /** the format (style index) of the row itself, when it has one: what its places without a cell show */
+  s?: number
 }
 
 export interface BlockOut {
@@ -130,6 +157,20 @@ export interface XlsxEditResult {
   recalc?: number[]
 }
 
+/** a copied cell: kind of value (as the workbook holds it: number, text, boolean, error…), value, format, formula (no "=") */
+export type ClipCell = [type: number, value: number | string, style: number, formula?: string] | null
+
+/** cells copied from a sheet (`xlsx.copy`): what the `paste` sheet operation writes, and what goes to the clipboard */
+export interface XlsxClip {
+  /** the values as shown, tab separated, a line per row: for other programs */
+  text: string
+  /** path of the sheet they are from */
+  sheet: string
+  range: Range
+  /** by row, then column */
+  cells: ClipCell[][]
+}
+
 export type SheetOp =
   | { op: 'insertRows' | 'deleteRows' | 'insertCols' | 'deleteCols'; at: number; n: number }
   | { op: 'merge' | 'unmerge'; range: Range; mode?: 'all' | 'across' | 'down' }
@@ -139,6 +180,13 @@ export type SheetOp =
   | { op: 'rowHeight'; r0: number; r1: number; px: number }
   | { op: 'freeze'; rows: number; cols: number }
   | { op: 'fill'; range: Range; dir: 'down' | 'right' }
+  /** clears the contents of every cell of the range (the rows not shown yet included); formats stay */
+  | { op: 'clear'; range: Range }
+  /**
+   * Writes copied cells (`xlsx.copy`) with their top left at that of `range`: values, formats, formulas. `from`: where
+   * they were copied; `moved`: they were cut (and cleared there): references to them follow them here.
+   */
+  | { op: 'paste'; range: Range; cells: ClipCell[][]; from: { sheet: string; r0: number; c0: number }; moved?: boolean }
   | { op: 'sort'; range: Range; col: number; desc?: boolean }
 
 export type BookOp =
@@ -146,6 +194,8 @@ export type BookOp =
   | { op: 'rename'; index: number; name: string }
   | { op: 'delete'; index: number }
   | { op: 'move'; from: number; to: number }
+  /** a copy of the sheet (cells, formats, widths, merges) after it, called "Name (2)" */
+  | { op: 'duplicate'; index: number }
 
 export interface FindOptions {
   matchCase?: boolean

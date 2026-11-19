@@ -14,6 +14,8 @@ export interface RRun {
   cm?: string[]
   /** tracked change the run belongs to (DOCX) */
   tc?: object
+  /** source run properties beyond the style (DOCX): runs that differ in it stay apart */
+  rp?: string
 }
 
 export interface Pos {
@@ -48,7 +50,7 @@ function shallowEq(a: object | undefined, b: object | undefined): boolean {
 export const sameMarks = (a: string[] | undefined, b: string[] | undefined) => (a?.length ?? 0) === (b?.length ?? 0) && (!a || a.every((x, i) => b![i] === x))
 
 const sameText = (a: RRun, b: RRun) =>
-  a.t === 'text' && b.t === 'text' && a.href === b.href && a.lk === b.lk && shallowEq(a.s, b.s) && shallowEq(a.d, b.d) && sameMarks(a.cm, b.cm) && shallowEq(a.tc, b.tc)
+  a.t === 'text' && b.t === 'text' && a.href === b.href && a.lk === b.lk && shallowEq(a.s, b.s) && shallowEq(a.d, b.d) && sameMarks(a.cm, b.cm) && shallowEq(a.tc, b.tc) && a.rp === b.rp
 
 /**
  * Comment threads text inserted at `o` joins: those covering both the character before and the one after (typing at
@@ -120,6 +122,29 @@ export function runAt<R extends RRun>(runs: R[], o: number): R | undefined {
   const [l, r] = splitRuns(runs, o)
   for (let i = l.length - 1; i >= 0; i--) if (l[i].t === 'text') return l[i]
   return r.find((x) => x.t === 'text')
+}
+
+/**
+ * [start, end) of the link a caret at `o` is in: the text run it follows (or the first one at 0) and the runs around it
+ * with the same target; null when that run is no link.
+ */
+export function linkSpan(runs: RRun[], o: number): [number, number] | null {
+  let pos = 0
+  const at: { a: number; b: number; href?: string }[] = []
+  for (const r of runs) {
+    const n = rlen(r)
+    at.push({ a: pos, b: pos + n, href: r.t === 'text' ? r.href : undefined })
+    pos += n
+  }
+  let k = runs.findIndex((r, i) => r.t === 'text' && at[i].a < o && o <= at[i].b)
+  if (k < 0) k = runs.findIndex((r) => r.t === 'text')
+  const href = k >= 0 ? at[k].href : undefined
+  if (!href || (o < at[k].a || o > at[k].b)) return null
+  let i = k
+  let j = k
+  while (i > 0 && at[i - 1].href === href) i--
+  while (j < at.length - 1 && at[j + 1].href === href) j++
+  return [at[i].a, at[j].b]
 }
 
 export function insertText<R extends RRun>(runs: R[], o: number, text: string, style?: Partial<R>, fallback?: Partial<R>): R[] {

@@ -46,11 +46,11 @@ PDF goes through the browser print dialog ("Save as PDF"), so text stays selecta
 />
 ```
 
-CSS is auto-injected, no import needed. Container must have a height.
+CSS is auto-injected, no import needed (or import `@p10node/office-engine/styles.css` with `injectStyles={false}`). Container must have a height. Colors, type and shape: [Theming](theming.md).
 
 | Prop               | Type                                           | Default   | Notes                                                                                                                    |
 |--------------------|------------------------------------------------|-----------|--------------------------------------------------------------------------------------------------------------------------|
-| `src`              | `File \| Blob \| ArrayBuffer \| string \| URL` | –         | Document: Office (also 97-2003); OpenDocument; RTF; Pages / Keynote / Numbers; CSV / TSV, text, Markdown, HTML, diagrams |
+| `src`              | `File \| Blob \| ArrayBuffer \| string \| URL` | –         | Office (also 97-2003); OpenDocument; RTF; Pages / Keynote / Numbers; Visio; CSV / TSV, text, Markdown, HTML, diagrams    |
 | `name`             | `string`                                       | auto      | Display name; its extension also tells the format of a `Blob` / `ArrayBuffer`                                            |
 | `toolbar`          | `boolean`                                      | `true`    | Top bar (name, status, progress)                                                                                         |
 | `toolbarExtra`     | `ReactNode`                                    | –         | Extra buttons on the right of the toolbar                                                                                |
@@ -60,8 +60,9 @@ CSS is auto-injected, no import needed. Container must have a height.
 | `credentials`      | `RequestCredentials`                           | –         | Cross-origin cookies                                                                                                     |
 | `worker`           | `() => Worker \| false`                        | inline    | Custom worker (CSP), `false` = main thread                                                                               |
 | `styleTarget`      | `Document \| ShadowRoot`                       | document  | Where CSS is injected                                                                                                    |
-| `theme`            | `'light' \| 'dark' \| 'auto'`                  | `'light'` | Color scheme of the chrome; `'auto'` follows `prefers-color-scheme`. Documents keep their own colors                     |
-| `editable`         | `boolean`                                      | `false`   | Open in edit mode (Pages, Keynote and Numbers files stay view only)                                                      |
+| `injectStyles`     | `boolean`                                      | `true`    | Inject the stylesheet; false when the page loads `@p10node/office-engine/styles.css` itself                              |
+| `theme`            | `'light' \| 'dark' \| 'auto' \| ThemeOptions`  | `'light'` | Color scheme of the chrome; `'auto'` follows `prefers-color-scheme`; an object adds token overrides ([Theming](theming.md)). Documents keep their own colors |
+| `editable`         | `boolean`                                      | `false`   | Open in edit mode (Pages, Keynote, Numbers and Visio files stay view only)                                               |
 | `allowEdit`        | `boolean`                                      | `true`    | Show Edit/View button                                                                                                    |
 | `allowSave`        | `boolean`                                      | `true`    | Show Save/Download button, enable Ctrl+S                                                                                 |
 | `allowDownload`    | `boolean`                                      | `true`    | Allow downloads to device (save without `onSave`, images)                                                                |
@@ -69,6 +70,7 @@ CSS is auto-injected, no import needed. Container must have a height.
 | `allowOpen`        | `boolean`                                      | `true`    | File → New / Open (off during collaboration)                                                                             |
 | `captureSelectAll` | `boolean`                                      | `true`    | Ctrl/⌘+A from anywhere on the page selects the document; `false`: from the viewer only                                   |
 | `fileMenuItems`    | `FileMenuItem[]`                               | –         | Extra File menu entries (`label`, `onClick`, `icon`, `hint`)                                                             |
+| `icons`            | `Icons`                                        | built-in  | Your own icons: a map by `IconName` or a resolver `(name, { size }) => node`; see [Icons](#icons)                        |
 | `onRename`         | `(name) => void`                               | –         | File → Rename result (extension included)                                                                                |
 | `onClose`          | `() => void`                                   | –         | Adds File → Close                                                                                                        |
 | `onSave`           | `(blob, name) => void`                         | download  | Receives saved file (downloads by default): the Office file, or a Markdown / HTML / SVG file as itself                   |
@@ -126,7 +128,67 @@ const { client, error, progress } = useDocument(src)
 if (client?.kind === 'xlsx') return <div className="de-root"><XlsxView client={client} /></div>
 ```
 
-The views style themselves from CSS variables on `.de-root` (`--de-bg`, `--de-chrome`, `--de-accent`…): override them to match your app. Add `de-dark` to the root element for the dark theme.
+The views style themselves from design tokens on their root: `useThemeRoot(theme)` gives its class name and style (see [Theming](theming.md)).
+
+### Icons
+
+Every icon the viewer draws, toolbars, menus, zoom, outline, Present and the add-sheet tab included, has a name (`IconName`, all of them in `ICON_NAMES`). `icons` replaces any of them, either as a map or as a resolver that is called for every icon:
+
+```tsx
+import { DocViewer, type IconName, type Icons } from '@p10node/office-engine'
+
+// Define outside the host component so the map keeps its identity across renders.
+const icons: Icons = { undo: <MyUndo />, redo: <MyRedo /> }
+
+<DocViewer src={file} icons={icons} />
+```
+
+A name the map leaves out, or a resolver returning `undefined` / `null`, keeps the built-in icon, so a set can cover just part of the names. Your icon is rendered inside `<span class="de-icon">` whose font-size is the icon's size in pixels: draw it at `1em` (a bare `<svg>` child is sized to `1em` for you) and with `currentColor`, so it follows the theme. The resolver also gets `{ size }` in pixels.
+
+The names exported in `ICON_NAMES` are stable public keys, including names originally used only inside the viewer.
+New names may be added; existing keys must not be renamed as an internal refactor.
+
+With [Lucide](https://lucide.dev) (`lucide-react`):
+
+```tsx
+import { Bold, Italic, ListTree, Plus, Presentation, Redo2, Replace, Search, Undo2, X, ZoomIn, ZoomOut, type LucideIcon } from 'lucide-react'
+
+const LUCIDE: Partial<Record<IconName, LucideIcon>> = {
+  undo: Undo2, redo: Redo2, bold: Bold, italic: Italic, search: Search, replace: Replace,
+  zoomIn: ZoomIn, zoomOut: ZoomOut, outline: ListTree, close: X, present: Presentation, sheetAdd: Plus,
+}
+const lucide = (name: IconName) => {
+  const C = LUCIDE[name]
+  return C && <C size="1em" strokeWidth={1.8} />
+}
+
+<DocViewer src={file} icons={lucide} />
+```
+
+With [Phosphor](https://phosphoricons.com) (`@phosphor-icons/react`):
+
+```tsx
+import { ArrowArcLeft, ArrowArcRight, ArrowsLeftRight, ListBullets, MagnifyingGlass, MagnifyingGlassMinus, MagnifyingGlassPlus, Plus, PresentationChart, TextB, TextItalic, X, type Icon } from '@phosphor-icons/react'
+
+const PHOSPHOR: Partial<Record<IconName, Icon>> = {
+  undo: ArrowArcLeft, redo: ArrowArcRight, bold: TextB, italic: TextItalic, search: MagnifyingGlass, replace: ArrowsLeftRight,
+  zoomIn: MagnifyingGlassPlus, zoomOut: MagnifyingGlassMinus, outline: ListBullets, close: X, present: PresentationChart, sheetAdd: Plus,
+}
+const phosphor = (name: IconName) => {
+  const C = PHOSPHOR[name]
+  return C && <C size="1em" />
+}
+```
+
+The standalone views get the same icons from `IconsProvider`, which `DocViewer` uses internally; a nested provider falls back to the enclosing one for names it leaves out:
+
+```tsx
+import { IconsProvider, XlsxView } from '@p10node/office-engine'
+
+<IconsProvider icons={lucide}>
+  <div className="de-root"><XlsxView client={client} /></div>
+</IconsProvider>
+```
 
 ## Without a React build
 
@@ -143,7 +205,7 @@ The views style themselves from CSS variables on `.de-root` (`--de-bg`, `--de-ch
 </script>
 ```
 
-`<office-viewer>`: attributes `src`, `name`, `editable`, `toolbar="false"`, `thumbnails="false"`, `save="false"`, `download="false"`, `file-menu="false"`, `open="false"`, `capture-select-all="false"`, `theme="dark"` (or `"auto"`), `collab` / `room` / `user` / `base` (real-time collaboration; `user` also writes the comments), `comments="false"`; property `.file = File`; events `load`, `error`, `comment` (`detail`: a `CommentEvent`).
+`<office-viewer>`: attributes `src`, `name`, `editable`, `toolbar="false"`, `thumbnails="false"`, `save="false"`, `download="false"`, `file-menu="false"`, `open="false"`, `capture-select-all="false"`, `theme="dark"` (or `"auto"`), `collab` / `room` / `user` / `base` (real-time collaboration; `user` also writes the comments), `comments="false"`; properties `.file = File` and `.icons` (map or resolver, as `icons` above); events `load`, `error`, `comment` (`detail`: a `CommentEvent`).
 
 ## Core API (no React)
 
@@ -152,9 +214,10 @@ import { DocumentClient } from '@p10node/office-engine/core'
 
 const doc = await DocumentClient.open(fileOrUrl, { onProgress: console.log })
 doc.kind                                   // 'docx' | 'xlsx' | 'pptx'
-doc.info.from                              // 'pages' / 'keynote' / 'numbers': an Apple file, converted to docx / pptx / xlsx (view only)
+doc.info.from                              // 'pages' / 'keynote' / 'numbers' / 'visio': an Apple or Visio file, converted to docx / pptx / xlsx / pptx (view only)
 doc.info.imported                          // 'csv' / 'tsv' / 'text' / 'markdown' / 'html' / 'svg' / 'mermaid' / 'plantuml' / 'graphviz': a plain file, built as xlsx / docx (editable)
 doc.info.converted                         // 'doc' / 'xls' / 'ppt' / 'rtf' / 'odt' / 'ods' / 'odp': converted to docx / xlsx / pptx (editable, saved as such)
+doc.info.ext                               // 'xlsm' / 'xltx' / 'docm' / 'dotx' / 'pptm' / 'potx' / 'ppsx' …: the file is that variant, and is saved as it (undefined: plain docx / xlsx / pptx)
 doc.on('docx:blocks', (blocks) => {})      // docx: streamed blocks
 await doc.call('docx.start')
 doc.call('xlsx.load', 0)                   // xlsx: stream sheet
@@ -162,9 +225,15 @@ doc.on('xlsx:progress', (p) => {})
 await doc.call('xlsx.block', 0, 1000, 1100) // formatted cells, rows [1000, 1100)
 await doc.call('pptx.slide', 12)           // slide model with layout/master/theme resolved
 await doc.call('xlsx.set', 0, [{ r: 4, c: 1, input: '=SUM(A1:A4)' }])
+const clip = await doc.call('xlsx.copy', 0, { r0: 0, c0: 0, r1: 9, c1: 2 })   // cells as they are (values, formats, formulas) + `text` for the clipboard
+await doc.call('xlsx.sheetOp', 0, { op: 'paste', range: { r0: 20, c0: 0, r1: 29, c1: 2 }, cells: clip.cells, from: { sheet: clip.sheet, r0: 0, c0: 0 } })
+await doc.call('xlsx.sheetOp', 0, { op: 'clear', range: { r0: 0, c0: 3, r1: 1048575, c1: 3 } })   // a whole column, every row of it
 await doc.call('xlsx.import', 0, csvFile, { name: 'cities' }) // a new sheet after sheet 0 with the rows of a CSV / TSV, streamed in when loaded
 await doc.call('xlsx.text', 0, ',') // the sheet as CSV (a Blob; '\t' for TSV), the values as shown
 // open(src, { residentCells: 12_000_000 }): cells of a CSV / TSV kept in memory; the other rows are read from the file as they are shown
+// open(src, { encoding: 'windows-1258' }): the encoding of a text file (CSV, TSV, text, Markdown, HTML…), a TextDecoder label; without it the
+// byte order mark, the declared charset, UTF-8, then (Vietnamese text) Windows-1258, then Windows-1252 decide. An unknown label is an error
+// the worker also emits `warning` ({ text }) when a file opened but not whole: a CSV with more than 16,384 columns (the viewer shows it as a message)
 const comments = await doc.call('comments.list')  // DocComment[]: threads are roots + replies (threadsOf)
 doc.on('comment', ({ id, c }) => {})       // a comment set / deleted (c null), here or by a collaborator
 await doc.call('comments.set', c.id, { ...c, done: true }) // XLSX / PPTX threads carry their place (`at`)

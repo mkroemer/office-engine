@@ -38,7 +38,7 @@ export class Axis {
     let hi = this.keys.length - 1
     let k = -1
     while (lo <= hi) {
-      const mid = (lo + hi) >> 1
+      const mid = lo + Math.floor((hi - lo) / 2)
       if (this.keys[mid] < i) {
         k = mid
         lo = mid + 1
@@ -53,11 +53,12 @@ export class Axis {
 
   /** Index containing offset px (clamped to [0, count-1]). */
   index(px: number): number {
-    if (px <= 0) return 0
+    if (px <= 0 || Number.isNaN(px) || !Number.isSafeInteger(this.count)) return 0
     let lo = 0
     let hi = Math.max(0, this.count - 1)
     while (lo < hi) {
-      const mid = (lo + hi + 1) >> 1
+      // Bitwise midpoints overflow at 2^31; large CSV axes intentionally exceed Excel's limits.
+      const mid = lo + Math.ceil((hi - lo) / 2)
       if (this.pos(mid) <= px) lo = mid
       else hi = mid - 1
     }

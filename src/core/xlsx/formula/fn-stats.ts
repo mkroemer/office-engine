@@ -1,5 +1,5 @@
 /** Aggregate, statistical and criteria (*IF/*IFS) functions. */
-import { A, eachNum, flat, INF, nums, visit, type Ev, type FnDef } from './fn'
+import { A, eachNum, flat, INF, lift, nums, visit, type Ev, type FnDef } from './fn'
 import { ERR, FormulaError, type Value } from './types'
 import { ArrayV, criteria, num, parseNumberText, RangeV, UnionV, type Val } from './values'
 
@@ -154,6 +154,12 @@ function minmax(xs: number[], max: boolean): number {
   return m
 }
 
+// the arguments that are single values (see `lift`)
+const first = (i: number) => i === 0
+const second = (i: number) => i === 1
+/** the criteria of SUMIFS(values, range1, criteria1, …) */
+const criteriaOfMany = (i: number) => i >= 2 && i % 2 === 0
+
 export const STATS: Record<string, FnDef> = {
   SUM: A(0, INF, (a, ev) => {
     let s = 0
@@ -223,20 +229,20 @@ export const STATS: Record<string, FnDef> = {
   'VAR.S': A(1, INF, (a, ev) => variance(nums(a, ev), true)),
   'VAR.P': A(1, INF, (a, ev) => variance(nums(a, ev), false)),
   VARP: A(1, INF, (a, ev) => variance(nums(a, ev), false)),
-  LARGE: A(2, 2, (a, ev) => kth(a, ev, true)),
-  SMALL: A(2, 2, (a, ev) => kth(a, ev, false)),
-  RANK: A(2, 3, rank),
-  'RANK.EQ': A(2, 3, rank),
+  LARGE: A(2, 2, lift(second, (a, ev) => kth(a, ev, true))),
+  SMALL: A(2, 2, lift(second, (a, ev) => kth(a, ev, false))),
+  RANK: A(2, 3, lift(first, rank)),
+  'RANK.EQ': A(2, 3, lift(first, rank)),
   SUMPRODUCT: A(1, INF, sumproduct),
-  SUMIF: A(2, 3, (a, ev) => sum(ifOne(a, ev))),
-  SUMIFS: A(3, INF, (a, ev) => sum(ifMany(a, ev))),
-  AVERAGEIF: A(2, 3, (a, ev) => mean(ifOne(a, ev))),
-  AVERAGEIFS: A(3, INF, (a, ev) => mean(ifMany(a, ev))),
-  COUNTIF: A(2, 2, (a, ev) => matched(null, a, ev).length),
-  COUNTIFS: A(2, INF, (a, ev) => {
+  SUMIF: A(2, 3, lift(second, (a, ev) => sum(ifOne(a, ev)))),
+  SUMIFS: A(3, INF, lift(criteriaOfMany, (a, ev) => sum(ifMany(a, ev)))),
+  AVERAGEIF: A(2, 3, lift(second, (a, ev) => mean(ifOne(a, ev)))),
+  AVERAGEIFS: A(3, INF, lift(criteriaOfMany, (a, ev) => mean(ifMany(a, ev)))),
+  COUNTIF: A(2, 2, lift(second, (a, ev) => matched(null, a, ev).length)),
+  COUNTIFS: A(2, INF, lift((i) => i % 2 === 1, (a, ev) => {
     if (a.length % 2) throw ERR.VALUE
     return matched(null, a, ev).length
-  }),
-  MINIFS: A(3, INF, (a, ev) => minmax(ifMany(a, ev), false)),
-  MAXIFS: A(3, INF, (a, ev) => minmax(ifMany(a, ev), true)),
+  })),
+  MINIFS: A(3, INF, lift(criteriaOfMany, (a, ev) => minmax(ifMany(a, ev), false))),
+  MAXIFS: A(3, INF, lift(criteriaOfMany, (a, ev) => minmax(ifMany(a, ev), true))),
 }

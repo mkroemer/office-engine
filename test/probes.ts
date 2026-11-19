@@ -9,6 +9,7 @@
 import { BlobSource } from '../src/core/source'
 import { ZipArchive } from '../src/core/zip'
 import { rebuildZip } from '../src/core/zipwrite'
+import { cells as vcells, esc, line as vline, relRect, rows, shape as vshape, STYLE, themeXml, VisioBuilder } from './visio-builder'
 
 const SAMPLES = `${import.meta.dir}/../playground/public/samples`
 
@@ -173,4 +174,55 @@ export function scriptLinkDocx(): Promise<Blob> {
   return rebuilt('sample.docx', {
     'word/_rels/document.xml.rels': (xml) => xml.replace('Target="https://example.com"', 'Target="javascript:window.__ran=1"'),
   })
+}
+
+// ---- Visio drawings: built whole (test/visio-builder.ts), shown as slides
+
+const blobOf = async (bytes: Promise<Uint8Array<ArrayBuffer>>) => new Blob([await bytes])
+
+/** fills, lines, text and its background, gradient stops, the palette and the theme of a drawing */
+export function probeVisio(): Promise<Blob> {
+  const b = new VisioBuilder()
+  const c = (id: string) => '#' + probe(`visio-${id}`)
+  b.colors = `<ColorEntry IX='24' RGB='${esc(c('palette'))}'/>`
+  // the theme's own colors, and those of its styles
+  b.theme = themeXml().replace(/val="[0-9A-F]{6}"/g, () => `val="${probe('visio-theme')}"`)
+  const text = (id: string) => rows('Character', [{ Color: c(id), Size: 0.2 }])
+  const stops = rows('FillGradient', [{ GradientStopColor: c('stop'), GradientStopPosition: 0 }, { GradientStopColor: c('stop'), GradientStopPosition: 1 }])
+  b.page(
+    'Page-1',
+    vshape({ id: 1, style: STYLE.NORMAL, box: [2, 6, 2, 1], cells: { FillForegnd: c('fill'), LineColor: c('line'), TextBkgnd: c('text-bg') }, sections: text('text') + relRect(), text: 'probe 1\n' }) +
+      vshape({ id: 2, style: STYLE.NORMAL, box: [5, 6, 2, 1], cells: { FillGradientEnabled: 1 }, sections: stops + relRect(), text: 'probe 2\n' }) +
+      vshape({ id: 3, style: STYLE.NORMAL, box: [8, 6, 2, 1], cells: { FillPattern: 25, FillForegnd: c('pattern'), FillBkgnd: c('pattern-bg') }, sections: relRect(), text: 'probe 3\n' }) +
+      vshape({ id: 4, style: STYLE.NORMAL, box: [2, 4, 2, 1], cells: { FillForegnd: 24, LineColor: probe('visio-bare'), FillPattern: 6, FillBkgnd: c('hatch') }, sections: relRect(), text: 'probe 4\n' }) +
+      vshape({ id: 5, style: STYLE.THEMED, box: [5, 4, 2, 1], sections: relRect(), text: 'probe 5\n' }) +
+      vline(6, 1, 2, 4, 2, { cells: { LineColor: c('arrow'), EndArrow: 4, BeginArrow: 4 } }),
+    { cells: { ThemeIndex: 33 } },
+  )
+  return blobOf(b.zip())
+}
+
+/** a drawing naming an inherited key wherever it names a style, a master, a row, a layer, a pattern, a color… */
+export function inheritedVisio(name: string): Promise<Blob> {
+  const b = new VisioBuilder()
+  b.theme = themeXml().replace(/<a:schemeClr val="lt1"/g, `<a:schemeClr val="${name}"`)
+  b.styles = `<StyleSheet ID='${name}' LineStyle='${name}' FillStyle='${name}' TextStyle='${name}'><Cell N='${name}' V='${name}'/></StyleSheet>`
+  const named: Record<string, string> = {
+    FillForegnd: name, FillBkgnd: name, FillPattern: name, LineColor: name, LinePattern: name, BeginArrow: name, EndArrow: name, LayerMember: name, VerticalAlign: name, TextBkgnd: name,
+    DisplayMode: name, QuickStyleFillColor: name, QuickStyleFillMatrix: name, QuickStyleLineMatrix: name, QuickStyleFontMatrix: name, [name]: name,
+  }
+  const sections =
+    `<Section N='${name}'><Row T='${name}' IX='${name}'><Cell N='${name}' V='${name}'/></Row></Section>` +
+    `<Section N='Character'><Row IX='${name}'><Cell N='Font' V='${name}'/><Cell N='Color' V='${name}'/><Cell N='Style' V='${name}'/></Row></Section>` +
+    `<Section N='Paragraph'><Row IX='${name}'><Cell N='HorzAlign' V='${name}'/><Cell N='Bullet' V='${name}'/></Row></Section>` +
+    `<Section N='Geometry' IX='${name}'><Row T='${name}' IX='1'><Cell N='X' V='${name}'/></Row><Row T='PolylineTo' IX='2'><Cell N='A' V='${name}(${name})'/></Row></Section>` +
+    relRect()
+  b.page(
+    'Page-1',
+    `<Shape ID='${name}' Type='${name}' Master='${name}' MasterShape='${name}' LineStyle='${name}' FillStyle='${name}' TextStyle='${name}'>` +
+      `${vcells({ PinX: 3, PinY: 3, Width: 2, Height: 1, ...named })}${sections}<Text><cp IX='${name}'/><pp IX='${name}'/>k 1\n</Text><ForeignData ForeignType='${name}'><Rel r:id='${name}'/></ForeignData></Shape>` +
+      vshape({ id: 2, type: 'Foreign', style: STYLE.THEMED, box: [7, 3, 2, 1], cells: named, sections: relRect(), text: 'k 2\n', foreign: name }),
+    { backPage: name as unknown as number, cells: { ThemeIndex: name, ColorSchemeIndex: name, VariationColorIndex: name, VariationStyleIndex: name } },
+  )
+  return blobOf(b.zip())
 }

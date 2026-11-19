@@ -68,6 +68,13 @@ export function deleteRow(t: Table, ri: number): Table | null {
   for (const c of cells) {
     if (c.ri < ri && c.ri + c.cell.rowSpan > ri) rows[c.ri].cells[c.ci] = { ...rows[c.ri].cells[c.ci], rowSpan: c.cell.rowSpan - 1 }
   }
+  // a merged cell that starts in the row goes on in the next one (alone there when one row of it is left): else that row loses its column
+  const next = ri + 1
+  const starts = cells.filter((c) => c.ri === ri && c.cell.rowSpan > 1).sort((a, b) => b.g - a.g)
+  for (const c of starts) {
+    const before = cells.filter((x) => x.ri === next && x.g < c.g).length
+    rows[next].cells.splice(before, 0, { ...c.cell, rowSpan: c.cell.rowSpan - 1 })
+  }
   rows.splice(ri, 1)
   return { ...t, rows }
 }
@@ -123,6 +130,49 @@ export function newTable(rowsN: number, colsN: number, width: number, mk: () => 
       cells: Array.from({ length: colsN }, () => ({ blocks: [mk()], colSpan: 1, rowSpan: 1, borders: { t: border, r: border, b: border, l: border }, pad: [0, 5.4, 0, 5.4] as [number, number, number, number] })),
     })),
   }
+}
+
+/** a cell of a table to build: what it holds and how many grid cells it covers */
+export interface CellSeed {
+  blocks: Block[]
+  colSpan: number
+  rowSpan: number
+}
+
+/**
+ * A table from rows of cells as HTML has them (a cell with a row span is left out of the rows it covers; short rows are
+ * filled up with empty cells), `width` pt wide, with the grid of a table the toolbar inserts.
+ */
+export function tableFromRows(seeds: CellSeed[][], width: number, mk: () => Paragraph): Table {
+  const border = '0.5pt solid #000000'
+  const occ: boolean[][] = []
+  const rows: Table['rows'] = []
+  let nCols = 1
+  for (const row of seeds) nCols = Math.max(nCols, row.reduce((n, c) => n + c.colSpan, 0))
+  const cell = (c: CellSeed): TableCell => ({ blocks: c.blocks.length ? c.blocks : [mk()], colSpan: c.colSpan, rowSpan: c.rowSpan, borders: { t: border, r: border, b: border, l: border }, pad: [0, 5.4, 0, 5.4] })
+  seeds.forEach((row, ri) => {
+    const cells: TableCell[] = []
+    let g = 0
+    const place = (c: CellSeed) => {
+      while (occ[ri]?.[g]) g++
+      // a column span that would pass the last column is cut
+      const colSpan = Math.max(1, Math.min(c.colSpan, nCols - g))
+      const rowSpan = Math.max(1, Math.min(c.rowSpan, seeds.length - ri))
+      for (let r = ri; r < ri + rowSpan; r++) for (let k = g; k < g + colSpan; k++) (occ[r] ??= [])[k] = true
+      cells.push(cell({ ...c, colSpan, rowSpan }))
+      g += colSpan
+    }
+    for (const c of row) place(c)
+    // what the row lacks of the grid
+    for (;;) {
+      while (occ[ri]?.[g]) g++
+      if (g >= nCols) break
+      place({ blocks: [], colSpan: 1, rowSpan: 1 })
+    }
+    rows.push({ cells })
+  })
+  const w = +(width / nCols).toFixed(2)
+  return { t: 'tbl', cols: new Array(nCols).fill(w), rows }
 }
 
 // ---------------------------------------------------------------- cell ranges (merge, borders, shading)

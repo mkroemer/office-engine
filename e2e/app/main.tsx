@@ -2,6 +2,7 @@
  * Fixture for the browser tests: DocViewer configured from the query string, callbacks recorded on window.
  *   ?src=samples/sample.docx&editable=1&allowSave=0&onSave=1&items=1&close=1&collab=ws://…&room=r
  *   comments: &me=Ann&meId=u1 (author), &people=1 (mentions: Ann, Bob Stone, Cid), &comments=0 (hidden), &cmOpen=1
+ *   &icons=1: every icon from a host resolver, as `<svg data-host-icon={name}>`
  */
 import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -46,6 +47,7 @@ const initial: DocViewerProps = {
   thumbnails: flag('thumbnails'),
   captureSelectAll: flag('captureSelectAll'),
   theme: (q.get('theme') as DocViewerProps['theme']) ?? undefined,
+  injectStyles: flag('injectStyles'),
   onSave: q.has('onSave') ? async (blob, name) => void log({ type: 'save', name, b64: await b64(blob) }) : undefined,
   onDirtyChange: (dirty) => log({ type: 'dirty', dirty }),
   onRename: (name) => log({ type: 'rename', name }),
@@ -62,6 +64,13 @@ const initial: DocViewerProps = {
           open: flag('cmOpen'),
           onEvent: (e) => log({ type: 'comment', action: e.type, id: e.comment.id, text: e.comment.text, thread: e.thread.id, quote: e.quote, mentioned: e.mentioned.map((m) => m.id ?? m.name), participants: e.participants.map((m) => m.id ?? m.name) }),
         },
+  icons: q.has('icons')
+    ? (name) => (
+        <svg data-host-icon={name} viewBox="0 0 24 24">
+          <circle cx={12} cy={12} r={8} fill="currentColor" />
+        </svg>
+      )
+    : undefined,
   collab: q.get('collab') ? { transport: q.get('collab')!, room: q.get('room') ?? 'e2e', base: Number(q.get('base')) || 0, user: { name: q.get('user') ?? 'Tester' } } : undefined,
 }
 

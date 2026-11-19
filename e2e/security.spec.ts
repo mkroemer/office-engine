@@ -3,7 +3,8 @@
  * browser request nothing, and a link that would run script is not opened.
  */
 import { describe, expect, test } from 'bun:test'
-import { PROBE_HOST, probeDocx, probePptx, probeXlsx, scriptLinkDocx } from '../test/probes'
+import { PROBE_HOST, probeDocx, probePptx, probeVisio, probeXlsx, scriptLinkDocx } from '../test/probes'
+import { plainToOffice } from '../src/core/plain'
 import { READY, useBrowser, viewer, type Viewer } from './harness'
 
 useBrowser()
@@ -55,6 +56,8 @@ describe('a crafted file', () => {
     ['pptx', probePptx, 'samples/sample.docx'],
     ['xlsx', probeXlsx, 'samples/sample.docx'],
     ['docx', probeDocx, 'samples/sample.xlsx'],
+    // a Visio drawing is shown as slides
+    ['vsdx', probeVisio, 'samples/sample.docx'],
   ] as const
 
   for (const [kind, build, start] of cases) {
@@ -62,16 +65,16 @@ describe('a crafted file', () => {
       const v = await viewer({ src: start })
       const requests = await outbound(v)
       await openBytes(v, `probe.${kind}`, await build())
-      await v.page.locator(READY[kind]).first().waitFor()
+      await v.page.locator(READY[kind === 'vsdx' ? 'pptx' : kind]).first().waitFor()
       // the probes are shown: text of the crafted shapes / the text box, the sheet's cells
-      if (kind === 'pptx') await v.page.getByText('probe 1').first().waitFor()
+      if (kind === 'pptx' || kind === 'vsdx') await v.page.getByText('probe 1').first().waitFor()
       if (kind === 'docx') await v.page.getByText('probe box').first().waitFor()
       if (kind === 'xlsx') await v.page.locator('.de-cell').first().waitFor()
       await v.page.waitForTimeout(1200)
       expect(await loadedUrls(v)).toEqual([])
 
-      // editing draws the same content again (and the toolbar shows the selection's colors)
-      await v.edit()
+      // editing draws the same content again (and the toolbar shows the selection's colors); a drawing is view only
+      if (kind !== 'vsdx') await v.edit()
       // a cell with the crafted fill, font color and border: the toolbar shows them
       if (kind === 'xlsx') await v.clickCell('A3')
       if (kind === 'pptx') await v.page.getByText('probe 1').first().click()
@@ -107,5 +110,38 @@ describe('a crafted file', () => {
     await v.page.waitForTimeout(300)
     expect(v.ctx.pages().length).toBe(pages)
     expect(await v.page.evaluate(() => (window as unknown as { __ran?: number }).__ran)).toBeUndefined()
+  })
+
+  // "Open image in new tab" navigates to the <img>'s URL: for an SVG that must not be a same-origin document
+  const EVIL_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" onload="document.title=\'ran:\'+(function(){try{return localStorage.getItem(\'secret\')}catch(e){return \'blocked\'}})()"><script>document.title="ran:"+(function(){try{return localStorage.getItem("secret")}catch(e){return "blocked"}})()</script><rect width="120" height="80" fill="red"/></svg>'
+
+  async function opensAsOpaque(v: Viewer, imgSelector: string) {
+    const img = v.page.locator(imgSelector).first()
+    await img.waitFor()
+    const src = (await img.getAttribute('src'))!
+    expect(src.startsWith('blob:')).toBe(false)
+    // what the browser does for the context menu entry: a new tab on the image's address
+    const origin = new URL(v.page.url()).origin
+    const tab = await v.ctx.newPage()
+    await tab.goto(origin + '/')
+    await tab.evaluate(() => localStorage.setItem('secret', 'host-data'))
+    await tab.goto(src).catch(() => {})
+    await tab.waitForFunction(() => document.title.startsWith('ran:'), null, { timeout: 5000 }).catch(() => {})
+    const title = await tab.title()
+    // the script may run, but not as the host: it sees nothing of the host's storage
+    expect(title).not.toContain('host-data')
+    expect(await tab.evaluate(() => location.origin)).not.toBe(origin)
+  }
+
+  test('an SVG file: its picture is not a same-origin document', async () => {
+    const v = await viewer({ src: 'samples/sample.docx' })
+    await openBytes(v, 'evil.svg', new Blob([EVIL_SVG], { type: 'image/svg+xml' }))
+    await opensAsOpaque(v, '[data-testid=de-picture] img')
+  })
+
+  test('an SVG picture in a docx: not a same-origin document', async () => {
+    const v = await viewer({ src: 'samples/sample.xlsx' })
+    await openBytes(v, 'evil.docx', await plainToOffice(EVIL_SVG, 'svg', 'evil.svg'))
+    await opensAsOpaque(v, '.de-page-inner img')
   })
 })

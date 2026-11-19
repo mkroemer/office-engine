@@ -1,8 +1,8 @@
 /** Logical and information functions. */
 import { A, INF, L, pick, S, visit, type Ev, type FnDef } from './fn'
 import type { Ast } from './parser'
-import { ERR, ERROR_CODES, FormulaError, type Value } from './types'
-import { ArrayV, bool, compare, int, num, toBool, valueEq, type Val } from './values'
+import { ERR, ERROR_CODES, ERROR_TYPE_EXTRA, FormulaError, type Value } from './types'
+import { ArrayV, bool, compare, int, num, toBool, toNum, valueEq, type Val } from './values'
 
 /** Evaluate an argument of a pass-through function (missing => 0). */
 const arg = (a: Ast, ev: Ev, top: boolean): Val => (a.type === 'missing' ? 0 : ev.eval(a, top))
@@ -94,9 +94,45 @@ export const LOGIC: Record<string, FnDef> = {
     return i < a.length ? arg(a[i], ev, top) : ERR.NA
   }),
   CHOOSE: L(2, INF, (a, ev, top) => {
-    const i = int(ev.scalar(ev.eval(a[0], top)))
-    if (i < 1 || i >= a.length) return ERR.VALUE
-    return arg(a[i], ev, top)
+    const sel = ev.operand(ev.eval(a[0], top), top)
+    if (!Array.isArray(sel)) {
+      const i = int(sel)
+      if (i < 1 || i >= a.length) return ERR.VALUE
+      return arg(a[i], ev, top)
+    }
+    // an array of indexes: each cell takes from the value it names, that value's own cell there when it is an array.
+    // CHOOSE({1,2},names,ids) is names and ids side by side (a table for VLOOKUP to look up to the left).
+    const vals = new Map<number, Value | Value[][]>()
+    let h = sel.length
+    let w = sel[0].length
+    const idx = sel.map((row) =>
+      row.map((x): Value => {
+        const n = toNum(x)
+        if (n instanceof FormulaError) return n
+        const k = Math.trunc(n)
+        if (k < 1 || k >= a.length) return ERR.VALUE
+        if (!vals.has(k)) {
+          const v = ev.operand(arg(a[k], ev, false), false)
+          vals.set(k, v)
+          if (Array.isArray(v)) {
+            h = Math.max(h, v.length)
+            w = Math.max(w, v[0].length)
+          }
+        }
+        return k
+      }),
+    )
+    const out: Value[][] = []
+    for (let i = 0; i < h; i++) {
+      const row: Value[] = []
+      for (let j = 0; j < w; j++) {
+        const k = pick(idx, i, j)
+        const v = typeof k === 'number' ? vals.get(k)! : k
+        row.push(Array.isArray(v) ? pick(v, i, j) : v)
+      }
+      out.push(row)
+    }
+    return new ArrayV(out)
   }),
 
   ISBLANK: S(1, 1, ([x]) => x === null),
@@ -110,7 +146,7 @@ export const LOGIC: Record<string, FnDef> = {
   ISEVEN: S(1, 1, ([x]) => Math.trunc(num(x)) % 2 === 0),
   ISODD: S(1, 1, ([x]) => Math.abs(Math.trunc(num(x))) % 2 === 1),
   NA: A(0, 0, () => ERR.NA),
-  'ERROR.TYPE': S(1, 1, ([x]) => (x instanceof FormulaError ? ERROR_CODES.indexOf(x.code) + 1 : ERR.NA)),
+  'ERROR.TYPE': S(1, 1, ([x]) => (x instanceof FormulaError ? (ERROR_TYPE_EXTRA[x.code] ?? ERROR_CODES.indexOf(x.code) + 1) : ERR.NA)),
   N: S(1, 1, ([x]) => {
     if (x instanceof FormulaError) return x
     return typeof x === 'number' ? x : typeof x === 'boolean' ? (x ? 1 : 0) : 0

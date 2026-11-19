@@ -81,3 +81,16 @@ export function svgImage(text: string): ImportImage {
   const alt = title ? decodeEntities(title.replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim() : ''
   return { svg, w: w ?? 300, h: h ?? 150, alt: alt || 'SVG picture' }
 }
+
+/**
+ * A URL to show a picture of a file in an <img>. An SVG gets a data: URL, never a blob: one: a blob: URL carries the
+ * page's origin, so "Open image in new tab" (or dragging the image out) would run the SVG's script as the host
+ * application; a data: document has an opaque origin and reaches nothing of it.
+ */
+export async function pictureUrl(blob: Blob): Promise<string> {
+  if (!/^image\/svg/i.test(blob.type)) return URL.createObjectURL(blob)
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  let bin = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  return `data:image/svg+xml;base64,${btoa(bin)}`
+}

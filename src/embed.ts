@@ -2,6 +2,7 @@ import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import './core/default-worker'
 import { DocViewer, type DocViewerProps } from './react/DocViewer'
+import type { Icons } from './react/edit/Toolbar'
 
 export type MountOptions = Omit<DocViewerProps, 'styleTarget'>
 
@@ -37,18 +38,31 @@ export function mount(el: HTMLElement, options: MountOptions): MountedViewer {
  * Attributes: src, name, editable, toolbar / thumbnails / save / download / file-menu / open / capture-select-all ("false" to turn off),
  * theme ("light" | "dark" | "auto");
  * real-time collaboration: collab (hub WebSocket URL), room, user (display name), base (snapshot seq `src` was opened at).
- * Property: `file` (File/Blob/ArrayBuffer) for local data.
+ * Properties: `file` (File/Blob/ArrayBuffer) for local data; `icons` (map or resolver, as DocViewer's `icons`).
  */
 export class OfficeViewerElement extends HTMLElement {
   static observedAttributes = ['src', 'name', 'toolbar', 'thumbnails', 'editable', 'save', 'download', 'file-menu', 'open', 'capture-select-all', 'theme', 'collab', 'room', 'user', 'base', 'comments']
   private viewer?: MountedViewer
   private _file?: Blob | ArrayBuffer
+  private _icons?: Icons
+  // one function each for the element's life: a new one with every update would run the viewer's load effect again (a `load` event per update)
+  private readonly onLoad: NonNullable<MountOptions['onLoad']> = (client) => this.dispatchEvent(new CustomEvent('load', { detail: { kind: client.kind, name: client.name } }))
+  private readonly onError: NonNullable<MountOptions['onError']> = (error) => this.dispatchEvent(new CustomEvent('error', { detail: error }))
+  private readonly onComment = (e: unknown) => this.dispatchEvent(new CustomEvent('comment', { detail: e }))
 
   get file() {
     return this._file
   }
   set file(v: Blob | ArrayBuffer | undefined) {
     this._file = v
+    this.sync()
+  }
+
+  get icons() {
+    return this._icons
+  }
+  set icons(v: Icons | undefined) {
+    this._icons = v
     this.sync()
   }
 
@@ -85,6 +99,7 @@ export class OfficeViewerElement extends HTMLElement {
       allowOpen: this.getAttribute('open') !== 'false',
       captureSelectAll: this.getAttribute('capture-select-all') !== 'false',
       theme: THEMES.find((t) => t === this.getAttribute('theme')),
+      icons: this._icons,
       collab:
         this.getAttribute('collab') && this.getAttribute('room')
           ? {
@@ -99,10 +114,10 @@ export class OfficeViewerElement extends HTMLElement {
           ? false
           : {
               user: this.getAttribute('user') ? { name: this.getAttribute('user')! } : undefined,
-              onEvent: (e) => this.dispatchEvent(new CustomEvent('comment', { detail: e })),
+              onEvent: this.onComment,
             },
-      onLoad: (client) => this.dispatchEvent(new CustomEvent('load', { detail: { kind: client.kind, name: client.name } })),
-      onError: (error) => this.dispatchEvent(new CustomEvent('error', { detail: error })),
+      onLoad: this.onLoad,
+      onError: this.onError,
     }
   }
 

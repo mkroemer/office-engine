@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 import type { DocKind } from '../../core/opc'
 import { MOD } from '../common/ContextMenu'
 import type { FileOps } from '../common/Slots'
-import { download, Dropdown, pickFiles, type DropOption } from '../edit/Toolbar'
+import { download, Dropdown, pickFiles, type DropOption, type IconName } from '../edit/Toolbar'
 import { OPEN_ACCEPT } from './importFile'
 import { exportHtml, printDocument } from './print'
 
@@ -29,7 +29,7 @@ const TEXT_FORMATS: Record<DocKind, { id: string; label: string; ext: string; mi
 export interface FileMenuItem {
   label: string
   /** built-in icon name */
-  icon?: string
+  icon?: IconName
   /** shortcut / note on the right */
   hint?: string
   disabled?: boolean
@@ -38,6 +38,8 @@ export interface FileMenuItem {
 
 export interface FileActionsOptions {
   kind: DocKind | undefined
+  /** extension of the Office file when it is not the plain one of its kind (".xlsm", ".dotx"…) */
+  ext?: string
   /** file name without extension */
   base: string
   /** New / Open (replace the document) */
@@ -101,11 +103,11 @@ export function useFileActions(o: FileActionsOptions): FileActions {
   section(fileItems)
   if (o.canDownload && kind) {
     section([
-      { value: 'original', label: KIND_LABEL[kind], icon: 'save', hint: EXT[kind], head: 'Download as' },
+      { value: 'original', label: KIND_LABEL[kind], icon: 'save', hint: o.ext || EXT[kind], head: 'Download as' },
       { value: 'pdf', label: 'PDF document', icon: 'pdf', hint: '.pdf' },
       ...(o.picture
-        ? [{ value: 'picture', label: o.picture.label, icon: 'image', hint: o.picture.ext }]
-        : [{ value: 'html', label: 'Web page', icon: 'html', hint: '.html' }, ...TEXT_FORMATS[kind].map((f) => ({ value: 'text:' + f.id, label: f.label, icon: 'doc', hint: f.ext }))]),
+        ? [{ value: 'picture', label: o.picture.label, icon: 'image', hint: o.picture.ext } as const]
+        : [{ value: 'html', label: 'Web page', icon: 'html', hint: '.html' } as const, ...TEXT_FORMATS[kind].map((f) => ({ value: 'text:' + f.id, label: f.label, icon: 'doc', hint: f.ext }) as const)]),
     ])
   }
   const tail: DropOption<string>[] = []
@@ -146,6 +148,7 @@ export function useFileActions(o: FileActionsOptions): FileActions {
     if (action === 'original') return c.downloadOriginal()
     if (action === 'picture') return c.picture?.download()
     if (!ops) throw new Error('The document is still loading — try again in a moment')
+    await ops.flush?.()
     if (action.startsWith('text:')) {
       const f = TEXT_FORMATS[c.kind].find((x) => 'text:' + x.id === action)
       if (!f) return

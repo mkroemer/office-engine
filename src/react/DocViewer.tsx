@@ -6,7 +6,7 @@ import { DocxView } from './docx/DocxView'
 import { ViewerContext, type FileOps, type ViewerApi } from './common/Slots'
 import { StatusContext } from './common/Status'
 import { ConfirmDialog, PromptDialog, Toast } from './common/Dialog'
-import { download, Icon } from './edit/Toolbar'
+import { download, Icon, IconsProvider, type Icons } from './edit/Toolbar'
 import { DetailsDialog } from './file/DetailsDialog'
 import { FileMenu, KIND_LABEL, useFileActions, type FileMenuItem } from './file/FileMenu'
 import { importFile, type Imported } from './file/importFile'
@@ -15,7 +15,8 @@ import type { DocKind } from '../core/opc'
 import { extOf, HAS_SOURCE, PLAIN_EXT, PLAIN_FILE, unpackedName, type PlainFormat } from '../core/plain'
 import type { LegacyFormat } from '../core/legacy'
 import { injectStyles } from './injectStyles'
-import { isTextEntry, useDarkTheme, useSize, type Theme } from './common/hooks'
+import { isTextEntry, useSize } from './common/hooks'
+import { useThemeRoot, type Theme } from './theme'
 import { SourceEditor } from './source/SourceEditor'
 import { PictureView } from './picture/PictureView'
 import { PptxView } from './pptx/PptxView'
@@ -29,7 +30,8 @@ import { COMMENT_KEYS, CommentsPanel } from './comments/CommentsPanel'
 export interface DocViewerProps {
   /**
    * File, Blob, ArrayBuffer, Uint8Array or URL (HTTP Range requests are used when the server supports them): an Office file,
-   * an Apple Pages / Keynote / Numbers file (view only), CSV / TSV / text / Markdown / HTML (opened as a workbook / document),
+   * an Apple Pages / Keynote / Numbers file or a Microsoft Visio drawing (view only), CSV / TSV / text / Markdown / HTML (opened as a
+   * workbook / document),
    * an SVG picture or a Mermaid / PlantUML / Graphviz diagram.
    */
   src: DocSource | null | undefined
@@ -52,8 +54,14 @@ export interface DocViewerProps {
   /** Where to inject the stylesheet (document or a shadow root). */
   styleTarget?: Document | ShadowRoot
   /**
-   * Color scheme of the viewer chrome (bars, menus, dialogs): 'light', 'dark' or 'auto' (follows the OS / browser setting).
-   * The document itself keeps its own colors. Default 'light'.
+   * Inject the stylesheet. Default true. Set false when the page loads `@p10node/office-engine/styles.css` itself
+   * (a CSP without inline styles, a cascade layer of its own, a bundler that extracts CSS).
+   */
+  injectStyles?: boolean
+  /**
+   * Color scheme of the viewer chrome (bars, menus, dialogs): 'light', 'dark' or 'auto' (follows the OS / browser setting),
+   * or a theme object with that mode and design token overrides (see docs/theming.md). The document itself keeps its own
+   * colors. Default 'light'.
    */
   theme?: Theme
   onLoad?: (client: DocumentClient) => void
@@ -71,7 +79,7 @@ export interface DocViewerProps {
   allowDownload?: boolean
   /** Show the File menu (new, open, save, rename, download as PDF / HTML / text…, details, print) and its shortcuts. Default true. */
   fileMenu?: boolean
-  /** File → New / Open: replace the document with a blank one or a local file (Office, Pages, Keynote, Numbers, CSV, text, Markdown, HTML). Default true. */
+  /** File → New / Open: replace the document with a blank one or a local file (Office, Pages, Keynote, Numbers, Visio, CSV, text, Markdown, HTML). Default true. */
   allowOpen?: boolean
   /** Extra File menu entries (Share, Version history…), shown before Close. */
   fileMenuItems?: FileMenuItem[]
@@ -98,10 +106,21 @@ export interface DocViewerProps {
    * host hears about. Shown by default, written while editing; `false` hides them.
    */
   comments?: CommentOptions | false
+  /**
+   * The host's icons, shown instead of the built-in ones: a map by name (see `ICON_NAMES`) or a resolver
+   * `(name, { size }) => node`; a missing entry, or `undefined` / `null` from the resolver, keeps the built-in icon.
+   * Each is rendered in `span.de-icon`, sized by font-size (1em).
+   */
+  icons?: Icons
 }
 
 const EXT: Record<string, string> = { docx: '.docx', xlsx: '.xlsx', pptx: '.pptx' }
-const FROM_LABEL: Record<'pages' | 'keynote' | 'numbers', string> = { pages: 'Apple Pages document', keynote: 'Apple Keynote presentation', numbers: 'Apple Numbers spreadsheet' }
+const FROM_LABEL: Record<'pages' | 'keynote' | 'numbers' | 'visio', string> = {
+  pages: 'Apple Pages document',
+  keynote: 'Apple Keynote presentation',
+  numbers: 'Apple Numbers spreadsheet',
+  visio: 'Microsoft Visio drawing',
+}
 const CONVERTED_LABEL: Record<LegacyFormat, string> = {
   doc: 'Word 97-2003 document',
   xls: 'Excel 97-2003 workbook',
@@ -125,10 +144,6 @@ const IMPORTED_LABEL: Record<PlainFormat, string> = {
 }
 /** plain formats saved back as themselves: Markdown and HTML built again from the document when it was edited, SVG from its text */
 const SAVES_SOURCE = new Set<PlainFormat>(['markdown', 'html', 'svg'])
-const savesSource = (name: string) => {
-  const f = PLAIN_EXT[extOf(unpackedName(name) ?? name)]
-  return !!f && SAVES_SOURCE.has(f)
-}
 const UNTITLED: Record<DocKind, string> = { docx: 'Untitled document', xlsx: 'Untitled spreadsheet', pptx: 'Untitled presentation' }
 
 /** a key per opened client: a view is built again for each (the edited source's previews have one name) */
@@ -148,7 +163,7 @@ function fmtBytes(n: number) {
 
 export function DocViewer(props: DocViewerProps) {
   const { src, name, className, style, toolbar = true, toolbarExtra, zoom, thumbnails, headers, credentials, worker, styleTarget, theme, onLoad, onError } = props
-  const dark = useDarkTheme(theme)
+  const root = useThemeRoot(theme, style)
   const { allowEdit = true, allowSave = true, allowDownload = true, fileMenu = true, allowOpen = true, captureSelectAll = true, onSave, onDirtyChange } = props
   const [editing, setEditing] = useState(!!props.editable)
   useEffect(() => {
@@ -157,7 +172,10 @@ export function DocViewer(props: DocViewerProps) {
   const [dirty, setDirtyState] = useState(false)
   const [saving, setSaving] = useState(false)
   const [barEl, setBarEl] = useState<HTMLDivElement | null>(null)
-  useInsertionEffect(() => injectStyles(styleTarget), [styleTarget])
+  const inject = props.injectStyles ?? true
+  useInsertionEffect(() => {
+    if (inject) injectStyles(styleTarget)
+  }, [styleTarget, inject])
   // File → New / Open: a local file shown instead of `src` until the host passes another `src`
   const [opened, setOpened] = useState<Imported | null>(null)
   const [renamed, setRenamed] = useState<string | null>(null)
@@ -169,12 +187,21 @@ export function DocViewer(props: DocViewerProps) {
   // the name is part of what is loaded: Rename only changes what is shown and saved
   // a preview of the edited source keeps the one shown until it is ready
   const { client, error, loading, progress } = useDocument(opened ? opened.src : src, { name: loadName, headers, credentials, worker }, !!opened?.live)
+  // Save ownership follows the document, including a source change before its client is ready.
+  const saveSession = useMemo(() => ({ live: true, saving: false, revision: 0 }), [client, src, opened])
+  useEffect(() => {
+    saveSession.live = true
+    setSaving(false)
+    return () => {
+      saveSession.live = false
+    }
+  }, [saveSession])
   const docName = renamed ?? loadName
   const collab = useCollab(client, props.collab)
   const srcFormat = client?.info?.imported
   // an SVG file: the picture alone, read only (its text is edited in the source pane)
   const isPicture = srcFormat === 'svg'
-  // converted from another format (Apple Pages, Keynote, Numbers): view only
+  // converted from another format (Apple Pages, Keynote, Numbers, Microsoft Visio): view only
   const readOnly = !!client?.info?.from || isPicture
   // with collaboration, editing waits for the shared history (offline edits sync on reconnect)
   const canEdit = !readOnly && (!props.collab || collab.status === 'live' || collab.status === 'offline')
@@ -208,7 +235,14 @@ export function DocViewer(props: DocViewerProps) {
     const stale = rebuilds && lastEdit.current === 'doc'
     if (code !== null && !stale) return
     let live = true
-    const built = stale && fileOps.current ? fileOps.current.text(saveFormat === 'html' ? 'html' : 'md').catch(() => null) : Promise.resolve(null)
+    const ops = fileOps.current
+    // the source the document was built from: what was not edited is kept from it
+    const built =
+      stale && ops
+        ? Promise.resolve(code ?? (client.call('plain.source') as Promise<string | null>))
+            .then((base) => ops.text(saveFormat === 'html' ? 'html' : 'md', base ?? undefined))
+            .catch(() => null)
+        : Promise.resolve(null)
     built
       .then(async (t) => (typeof t === 'string' ? t : ((await client.call('plain.source')) as string | null)))
       .then(
@@ -279,9 +313,12 @@ export function DocViewer(props: DocViewerProps) {
     cmCtl.select(root)
   }, [cmCtl, cmFocus, cmState.rev])
 
+  // once per document: a new `onLoad` function (a host's inline callback, with every render) is not another load
+  const onLoadRef = useRef(onLoad)
+  onLoadRef.current = onLoad
   useEffect(() => {
-    if (client) onLoad?.(client)
-  }, [client, onLoad])
+    if (client) onLoadRef.current?.(client)
+  }, [client])
   useEffect(() => {
     if (error) onError?.(error)
   }, [error, onError])
@@ -289,27 +326,37 @@ export function DocViewer(props: DocViewerProps) {
   // a converted file (CSV → xlsx…) starts unsaved
   const openedDirty = useRef(false)
   useEffect(() => {
-    setDirtyState(!!client && openedDirty.current)
+    const d = !!client && openedDirty.current
+    // (the host is told too: a new document is not unsaved)
+    setDirtyState((prev) => {
+      if (prev !== d) onDirtyChange?.(d)
+      return d
+    })
     if (client) openedDirty.current = false
-  }, [client])
+  }, [client]) // eslint-disable-line react-hooks/exhaustive-deps
   const setDirty = useCallback(
-    (d: boolean) =>
+    (d: boolean) => {
+      if (!saveSession.live) return
+      if (d) saveSession.revision++
       setDirtyState((prev) => {
         if (prev !== d) onDirtyChange?.(d)
         return d
-      }),
-    [onDirtyChange],
+      })
+    },
+    [onDirtyChange, saveSession],
   )
   const baseName = (renamed ?? (client?.name || docName || 'document')).replace(/\.[^.]+$/, '')
-  const fileName = baseName + (client ? EXT[client.kind] : '')
+  // the Office file as it is saved: a workbook with macros stays an .xlsm, a template an .xltx (named otherwise, Excel refuses it)
+  const officeExt = client ? (client.info?.ext ? `.${client.info.ext}` : EXT[client.kind]) : ''
+  const fileName = baseName + officeExt
   // what Save writes: the Office file, or a Markdown / HTML / SVG file in its own format
-  const saveExt = saveFormat ? `.${PLAIN_FILE[saveFormat].ext}` : client ? EXT[client.kind] : ''
+  const saveExt = saveFormat ? `.${PLAIN_FILE[saveFormat].ext}` : officeExt
   const saveName = baseName + saveExt
   /** the text of a file saved in its own format: the source as edited, or built from the edited document */
   const sourceText = useCallback(async (): Promise<string> => {
     if (!client) return ''
     if (rebuilds && lastEdit.current === 'doc' && fileOps.current) {
-      const text = (await fileOps.current.text(saveFormat === 'html' ? 'html' : 'md')) as string
+      const text = (await fileOps.current.text(saveFormat === 'html' ? 'html' : 'md', code ?? ((await client.call('plain.source')) as string | null) ?? undefined)) as string
       lastEdit.current = null
       setCode(text)
       return text
@@ -318,22 +365,30 @@ export function DocViewer(props: DocViewerProps) {
   }, [client, rebuilds, saveFormat, code])
   // saving without onSave means downloading
   const canSave = allowSave && (!!onSave || allowDownload)
-  const save = useCallback(async () => {
-    if (!client || saving || !canSave) return
+  const saveFile = useCallback(async (original = false) => {
+    if (!client || !saveSession.live || saveSession.saving || !(original ? allowDownload : canSave)) return
+    saveSession.saving = true
     setSaving(true)
     try {
-      const blob = saveFormat ? new Blob([await sourceText()], { type: `${PLAIN_FILE[saveFormat].mime};charset=utf-8` }) : await client.call('save')
-      if (onSave) await onSave(blob, saveName)
-      else download(blob, saveName)
-      setDirty(false)
+      await fileOps.current?.flush?.()
+      if (!saveSession.live) return
+      const revision = saveSession.revision
+      const blob = !original && saveFormat ? new Blob([await sourceText()], { type: `${PLAIN_FILE[saveFormat].mime};charset=utf-8` }) : await client.call('save')
+      if (!saveSession.live) return
+      if (!original && onSave) await onSave(blob, saveName)
+      else download(blob, original ? fileName : saveName)
+      if (saveSession.live && saveSession.revision === revision && (!original || !onSave)) setDirty(false)
     } catch (e) {
+      if (!saveSession.live) return
       onError?.(e as Error)
       console.error('[office-engine] save failed', e)
       setToast((e as Error).message)
     } finally {
-      setSaving(false)
+      saveSession.saving = false
+      if (saveSession.live) setSaving(false)
     }
-  }, [client, saving, canSave, onSave, saveName, saveFormat, sourceText, setDirty, onError])
+  }, [client, saveSession, canSave, allowDownload, onSave, fileName, saveName, saveFormat, sourceText, setDirty, onError])
+  const save = useCallback(() => saveFile(), [saveFile])
   // an edit in the document: its source (Markdown / HTML) is built again when shown or saved
   const setDocDirty = useCallback(
     (d: boolean) => {
@@ -427,14 +482,16 @@ export function DocViewer(props: DocViewerProps) {
   // ---- File menu ----
   const [toast, setToast] = useState<string | null>(null)
   const clearToast = useCallback(() => setToast(null), [])
+  // the file opened but not whole (a CSV with more columns than a sheet holds): what is missing is said, not left to be found
+  useEffect(() => client?.on('warning', (w) => setToast(w.text)), [client])
   const [confirm, setConfirm] = useState<{ message: string; run: () => void } | null>(null)
   const [renaming, setRenaming] = useState(false)
   const [details, setDetails] = useState(false)
   /** replaces the document, after confirmation when there are unsaved changes */
   const replace = (message: string, run: () => void) => (dirty ? setConfirm({ message, run }) : run())
   const show = useCallback((doc: Imported, edit = false) => {
-    // a file saved as itself (Markdown, HTML, SVG) is not unsaved for being shown as a document
-    openedDirty.current = doc.converted && (!!doc.live || !savesSource(doc.name))
+    // a file shown as it is, converted or not, has no changes: only the preview of a source being edited is unsaved
+    openedDirty.current = !!doc.live
     setRenamed(null)
     setOpened(doc)
     if (edit) setEditing(true)
@@ -442,6 +499,7 @@ export function DocViewer(props: DocViewerProps) {
   const canOpen = fileMenu && allowOpen && !props.collab
   const fileActions = useFileActions({
     kind: client?.kind,
+    ext: officeExt,
     base: baseName,
     canOpen,
     canImport: fileMenu && allowEdit && canEdit,
@@ -458,12 +516,7 @@ export function DocViewer(props: DocViewerProps) {
         importFile(file).then(show, (e: Error) => setToast(e.message))
       }),
     save,
-    downloadOriginal: async () => {
-      if (!client) return
-      download(await client.call('save'), fileName)
-      // without onSave, saving is downloading
-      if (!onSave) setDirty(false)
-    },
+    downloadOriginal: () => saveFile(true),
     picture: isPicture
       ? {
           label: 'SVG picture',
@@ -531,7 +584,8 @@ export function DocViewer(props: DocViewerProps) {
   else body = <PptxView client={client} initialZoom={zoom} thumbnails={thumbnails} />
 
   return (
-    <div ref={rootRef} className={'de-root' + (dark ? ' de-dark' : '') + (className ? ` ${className}` : '')} style={style} onKeyDown={onKeyDown}>
+    <IconsProvider icons={props.icons}>
+    <div ref={rootRef} className={root.className + (className ? ` ${className}` : '')} style={root.style} onKeyDown={onKeyDown}>
       {toolbar && (
         <div className="de-bar">
           {client && <span className={`de-badge de-badge-${client.kind}`}>{client.info?.from ?? client.info?.converted ?? (client.info?.imported ? IMPORTED_BADGE[client.info.imported] : client.kind)}</span>}
@@ -654,9 +708,9 @@ export function DocViewer(props: DocViewerProps) {
             initial: baseName,
             ok: 'Rename',
             onOk: (v) => {
-              const next = v.trim().replace(/[\\/:*?"<>|]+/g, ' ').replace(new RegExp(`(\\${EXT[client.kind]}|\\${saveExt})$`, 'i'), '')
+              const next = v.trim().replace(/[\\/:*?"<>|]+/g, ' ').replace(new RegExp(`(\\${officeExt}|\\${saveExt})$`, 'i'), '')
               if (!next) return
-              setRenamed(next + EXT[client.kind])
+              setRenamed(next + officeExt)
               props.onRename?.(next + saveExt)
             },
           }}
@@ -686,5 +740,6 @@ export function DocViewer(props: DocViewerProps) {
         />
       )}
     </div>
+    </IconsProvider>
   )
 }

@@ -5,13 +5,13 @@ import { isWebImage } from '../../core/opc'
 export const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect
 
 /** Color scheme of the viewer chrome: 'auto' follows the browser / OS setting (prefers-color-scheme). */
-export type Theme = 'light' | 'dark' | 'auto'
+export type ThemeMode = 'light' | 'dark' | 'auto'
 
 const DARK_MQ = '(prefers-color-scheme: dark)'
 const prefersDark = () => typeof matchMedia === 'function' && matchMedia(DARK_MQ).matches
 
 /** Whether the dark theme applies for `theme`; 'auto' tracks prefers-color-scheme live. */
-export function useDarkTheme(theme: Theme = 'light'): boolean {
+export function useDarkTheme(theme: ThemeMode = 'light'): boolean {
   const [dark, setDark] = useState(() => theme === 'auto' && prefersDark())
   useEffect(() => {
     if (theme !== 'auto' || typeof matchMedia !== 'function') return

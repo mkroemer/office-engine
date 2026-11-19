@@ -74,22 +74,31 @@ export function toTPara(p: EPara, num = 0): TPara {
 }
 
 /** Text editing of one shape on one slide. */
+/** times an edit the worker refused is sent again (at the next commit or save) before it is given up */
+const MAX_COMMIT_TRIES = 3
+
 export class PptxEditor implements RichHost<EPara> {
   readonly input: RichInput
   paras: EPara[] = []
   body?: TextBody
   slide = -1
   sid = -1
+  /** [row, column] when the text is a table cell's (`sid` is then the table's id) */
+  cell?: [number, number]
   pendingSel: Sel | null = null
   private history: Entry[] = []
   private future: Entry[] = []
   private pend: { s: Partial<RunStyle>; d: PRunSet; at: { pa: string; o: number } } | null = null
   private timer: ReturnType<typeof setTimeout> | undefined
   private changedSinceCommit = false
+  private commits: { slide: number; sid: number; cell?: [number, number]; specs: PParaSpec[]; failed?: number }[] = []
+  private committing?: Promise<void>
   onChange?: () => void
   onCommitted?: (slide: number, model: SlideModel) => void
   onDirty?: () => void
   onState?: (s: PptxFormat | null) => void
+  /** Tab / Shift+Tab in a table cell: go to the next / previous cell */
+  onCellMove?: (d: 1 | -1) => void
 
   constructor(private client: DocumentClient) {
     this.input = new RichInput(this)
@@ -99,10 +108,11 @@ export class PptxEditor implements RichHost<EPara> {
     return this.sid >= 0
   }
 
-  begin(slide: number, sid: number, body: TextBody) {
+  begin(slide: number, sid: number, body: TextBody, cell?: [number, number]) {
     this.end()
     this.slide = slide
     this.sid = sid
+    this.cell = cell
     this.body = body
     this.paras = (body.paras.length ? body.paras : [{ algn: 'left', marL: 0, indent: 0, spcBef: 0, spcAft: 0, runs: [], endSz: 18 } as TPara]).map(toEdit)
     this.history = []
@@ -111,10 +121,12 @@ export class PptxEditor implements RichHost<EPara> {
   }
 
   end() {
-    if (this.sid >= 0 && this.changedSinceCommit) this.commit()
+    clearTimeout(this.timer)
+    if (this.sid >= 0 && this.changedSinceCommit) this.commitInBackground()
     this.input.detach()
     this.sid = -1
     this.slide = -1
+    this.cell = undefined
     this.body = undefined
     this.onState?.(null)
   }
@@ -194,7 +206,7 @@ export class PptxEditor implements RichHost<EPara> {
     this.changedSinceCommit = true
     this.onDirty?.()
     clearTimeout(this.timer)
-    this.timer = setTimeout(() => this.commit(), 400)
+    this.timer = setTimeout(() => this.commitInBackground(), 400)
     this.onChange?.()
     this.onState?.(this.state(sel))
   }
@@ -215,29 +227,62 @@ export class PptxEditor implements RichHost<EPara> {
     this.paras = paras
     this.pendingSel = sel
     this.changedSinceCommit = true
+    this.onDirty?.()
     clearTimeout(this.timer)
-    this.timer = setTimeout(() => this.commit(), 400)
+    this.timer = setTimeout(() => this.commitInBackground(), 400)
     this.onChange?.()
     this.onState?.(this.state(sel))
   }
 
-  commit() {
+  private commitInBackground() {
+    void this.commit().catch((e) => console.error('[office-engine] slide edit failed', e))
+  }
+
+  /** Flush the debounce and any edits made while an earlier commit was in flight. */
+  async flush() {
+    do {
+      await this.commit()
+    } while (this.changedSinceCommit || this.commits.length)
+  }
+
+  commit(): Promise<void> {
     clearTimeout(this.timer)
-    if (this.sid < 0 || !this.changedSinceCommit) return
-    this.changedSinceCommit = false
-    const slide = this.slide
-    const specs: PParaSpec[] = this.paras.map((p) => ({
-      k: p.k,
-      algn: p.algnSet ? p.algn : undefined,
-      ...p.pp,
-      runs: p.runs.map((r) =>
-        r.t === 'fld' ? { text: '', src: r.src as [number, number], fld: true } : { text: r.text ?? '', src: r.src as [number, number] | undefined, set: r.d as PRunSet | undefined },
-      ),
-    }))
-    this.client
-      .call('pptx.setText', slide, this.sid, specs)
-      .then((m) => this.onCommitted?.(slide, m))
-      .catch((e) => console.error('[office-engine] slide edit failed', e))
+    if (this.sid >= 0 && this.changedSinceCommit) {
+      this.changedSinceCommit = false
+      const specs: PParaSpec[] = this.paras.map((p) => ({
+        k: p.k,
+        algn: p.algnSet ? p.algn : undefined,
+        ...p.pp,
+        runs: p.runs.map((r) =>
+          r.t === 'fld' ? { text: '', src: r.src as [number, number], fld: true } : { text: r.text ?? '', src: r.src as [number, number] | undefined, set: r.d as PRunSet | undefined },
+        ),
+      }))
+      this.commits.push({ slide: this.slide, sid: this.sid, cell: this.cell, specs })
+    }
+    if (!this.committing) {
+      this.committing = this.drainCommits().finally(() => {
+        this.committing = undefined
+      })
+    }
+    return this.committing
+  }
+
+  private async drainCommits() {
+    while (this.commits.length) {
+      const c = this.commits[0]
+      let model: SlideModel
+      try {
+        model = await this.client.call('pptx.setText', c.slide, c.sid, c.specs, c.cell)
+      } catch (e) {
+        // Retain a failed snapshot for retry, including after the active shape changes: but not for ever. An edit the
+        // worker refuses every time would fail every save from here on, the edits made after it never written.
+        c.failed = (c.failed ?? 0) + 1
+        if (c.failed >= MAX_COMMIT_TRIES) this.commits.shift()
+        throw e
+      }
+      this.commits.shift()
+      this.onCommitted?.(c.slide, model)
+    }
   }
 
   // ---------------------------------------------------------------- formatting
@@ -303,6 +348,22 @@ export class PptxEditor implements RichHost<EPara> {
 
   indentLevel(d: 1 | -1) {
     this.paraOp((p) => ({ ...p, pp: { ...p.pp, lvl: Math.max(0, Math.min(8, lvlOf(p) + d)) } }), 'indent')
+  }
+
+  /**
+   * Tab / Shift+Tab: the level of a list item (the keys of the Increase / Decrease indent buttons), the next / previous
+   * cell in a table. Anywhere else Tab types a tab and Shift+Tab does nothing.
+   */
+  tab(sel: Sel, shift: boolean): boolean {
+    if (this.cell) {
+      this.onCellMove?.(shift ? -1 : 1)
+      return true
+    }
+    const [a, b] = ordered(this, sel)
+    const items = this.span(a.pa, b.pa).filter((pa) => bulletOf(this.para(pa)) !== 'none')
+    if (!items.length) return shift
+    this.indentLevel(shift ? -1 : 1)
+    return true
   }
 
   setLineSpacing(x: number) {

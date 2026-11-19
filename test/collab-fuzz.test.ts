@@ -153,7 +153,8 @@ async function dump(client: DocumentClient) {
   out.push(new TextDecoder().decode(await zip.bytes('xl/styles.xml')))
   return JSON.stringify(out)
 }
-async function runSeedX(start: number, steps: number, verbose = false) {
+/** `book`: every sheet takes edits, with formulas across sheets, sorts, cleared and pasted cells, and the sheet list changing under them */
+async function runSeedX(start: number, steps: number, verbose = false, book = false) {
   let seed = start
   const rand = () => ((seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296)
   const hub = new CollabHub()
@@ -162,6 +163,10 @@ async function runSeedX(start: number, steps: number, verbose = false) {
     const client = await DocumentClient.open(Bun.file(S('sample.xlsx')) as unknown as Blob, { worker: false })
     await client.call('xlsx.load', 0)
     await new Promise((r) => setTimeout(r, 30))
+    if (book) {
+      // a few rows of numbers at the top of each sheet, for the formulas and the sorts to work on
+      for (const s of client.info.xlsx!.sheets) await client.call('xlsx.set', s.index, Array.from({ length: 12 }, (_, r) => ({ r, c: 0, input: String((r * 7) % 5) })))
+    }
     const collab = startCollab(client, { transport: new ManualTransport(hub, wire), room: 'x', user: { name } })
     return { name, client, collab }
   }
@@ -198,6 +203,29 @@ async function runSeedX(start: number, steps: number, verbose = false) {
     const r = Math.floor(rand() * 12)
     const c = Math.floor(rand() * 5)
     const run = (label: string, p: Promise<unknown>) => { log.push(`${who.name} ${label}`); inflight.push(p.catch(() => {})) }
+    if (book) {
+      const sheets = who.client.info.xlsx!.sheets
+      const sh = Math.floor(rand() * sheets.length)
+      const other = sheets[Math.floor(rand() * sheets.length)].name
+      const q = /^[A-Za-z_]\w*$/.test(other) ? other : `'${other.replace(/'/g, "''")}'`
+      const y = rand()
+      const call = who.client.call.bind(who.client)
+      if (y < 0.2) run(`set ${sh}:${r},${c} =${q}!A${r + 1}*2`, call('xlsx.set', sh, [{ r, c, input: rand() < 0.7 ? `=${q}!A${r + 1}*2` : `=SUM(${q}!A1:A${r + 1})+A1` }]))
+      else if (y < 0.34) run(`set ${sh}:${r},0`, call('xlsx.set', sh, [{ r, c: 0, input: rand() < 0.6 ? String(i) : rand() < 0.5 ? '50%' : '2024-01-15' }]))
+      else if (y < 0.42) run(`rename ${sh}`, call('xlsx.bookOp', { op: 'rename', index: sh, name: `R${i} x` }))
+      else if (y < 0.48) run(`delete ${sh}`, call('xlsx.bookOp', { op: 'delete', index: sh }))
+      else if (y < 0.54) run(`add after ${sh}`, call('xlsx.bookOp', { op: 'add', after: sh }))
+      else if (y < 0.6) run(`move ${sh}`, call('xlsx.bookOp', { op: 'move', from: sh, to: Math.floor(rand() * sheets.length) }))
+      else if (y < 0.72) run(`sort ${sh} ${r}`, call('xlsx.sheetOp', sh, { op: 'sort', range: { r0: r, c0: 0, r1: r + 4, c1: 4 }, col: c, desc: rand() < 0.5 }))
+      else if (y < 0.8) run(`clear ${sh} ${r},${c}`, call('xlsx.sheetOp', sh, { op: 'clear', range: { r0: r, c0: c, r1: r + 1, c1: c + 1 } }))
+      else if (y < 0.9) {
+        const moved = rand() < 0.5
+        run(`paste ${sh} ${r},${c}${moved ? ' (cut)' : ''}`, call('xlsx.copy', sh, { r0: 0, c0: 0, r1: 1, c1: 1 }).then((clip) => call('xlsx.sheetOp', sh, { op: 'paste', range: { r0: r, c0: c, r1: r + 1, c1: c + 1 }, cells: clip.cells, from: { sheet: clip.sheet, r0: 0, c0: 0 }, ...(moved ? { moved } : {}) })))
+      } else if (y < 0.95) run(`insertRows ${sh} ${r}`, call('xlsx.sheetOp', sh, { op: 'insertRows', at: r, n: 1 }))
+      else run('undo', call('xlsx.undo'))
+      await idle()
+      continue
+    }
     if (x < 0.45) run(`set ${r},${c}`, who.client.call('xlsx.set', 0, [{ r, c, input: rand() < 0.3 ? `=A${r + 2}*2` : `v${i}` }]))
     else if (x < 0.65) { const patch = rand() < 0.5 ? { b: rand() < 0.5 } : { fill: rand() < 0.5 ? '#ffee00' : '#00ccff' }; run(`fmt ${r},${c} ${JSON.stringify(patch)}`, who.client.call('xlsx.format', 0, { r0: r, c0: c, r1: r + 1, c1: c + 1 }, patch)) }
     else if (x < 0.72) { const op = rand() < 0.6 ? 'insertRows' : 'deleteRows'; run(`${op} ${r}`, who.client.call('xlsx.sheetOp', 0, { op, at: r, n: 1 } as never)) }
@@ -236,5 +264,8 @@ describe('collab fuzz (deterministic interleavings)', () => {
   }, 600_000)
   test('xlsx', async () => {
     for (let s = lo; s <= hi; s++) expect(`seed ${s}: ${await runSeedX(s, 50, true)}`).toBe(`seed ${s}: null`)
+  }, 600_000)
+  test('xlsx: formulas across sheets, sorts and the clipboard while sheets are added, renamed, moved and deleted', async () => {
+    for (let s = lo; s <= hi; s++) expect(`seed ${s}: ${await runSeedX(s, 40, true, true)}`).toBe(`seed ${s}: null`)
   }, 600_000)
 })

@@ -22,6 +22,12 @@ describe('embedding without React', () => {
     await wc.locator('.de-slide-inner').first().waitFor()
     await v.page.evaluate(() => document.getElementById('wc')!.setAttribute('theme', 'dark'))
     await wc.locator('.de-root.de-dark').waitFor()
+    // N3-010: one `load` per document (an attribute change is not a load)
+    await v.page.waitForTimeout(300)
+    expect(await v.page.evaluate(() => (window as any).__wcEvents)).toEqual([
+      { kind: 'docx', name: 'sample.docx' },
+      { kind: 'pptx', name: 'sample.pptx' },
+    ])
     expect(v.errors).toEqual([])
   })
 

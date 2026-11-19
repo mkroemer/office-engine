@@ -3,6 +3,7 @@ import type { DocumentClient } from '../../core/worker/client'
 import type { ChartModel } from '../../core/xlsx/chart'
 import { renderChart } from '../../core/xlsx/chart-svg'
 import type { SheetDrawing } from '../../core/xlsx/drawings'
+import { MAX_COL, MAX_ROWS } from '../../core/xlsx/limits'
 import { Icon } from '../edit/Toolbar'
 import type { Axis } from './axis'
 
@@ -103,9 +104,11 @@ export function drawingExtent(list: SheetDrawing[], cols: Axis, rows: Axis): { r
     const end = d.to ?? (d.from && d.size ? { c: d.from.c + Math.ceil(d.size.w / cols.def), r: d.from.r + Math.ceil(d.size.h / rows.def) } : undefined)
     const fromAt = !end && d.at && d.size ? { c: Math.ceil((d.at.x + d.size.w) / cols.def), r: Math.ceil((d.at.y + d.size.h) / rows.def) } : undefined
     const e = end ?? fromAt
-    if (e) {
-      r = Math.max(r, e.r + 1)
-      c = Math.max(c, e.c + 1)
+    if (e && Number.isFinite(e.r) && Number.isFinite(e.c)) {
+      // Sizes/absolute positions are in pixels and can span many default-sized cells. Only this
+      // OOXML drawing contribution is bounded; the sheet's CSV row count and Axis stay unrestricted.
+      r = Math.max(r, Math.min(MAX_ROWS, e.r + 1))
+      c = Math.max(c, Math.min(MAX_COL, e.c + 1))
     }
   }
   return { rows: r, cols: c }

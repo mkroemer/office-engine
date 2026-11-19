@@ -342,6 +342,11 @@ class OdsConverter {
         const b = a['office:boolean-value']
         out.t = 'b'
         out.v = b === 'true' || (b !== undefined && b !== 'false' && Number(b) !== 0 && !Number.isNaN(Number(b))) ? '1' : '0'
+        // TRUE / FALSE typed in a cell: LibreOffice may write them as `=TRUE()`; the cell holds the boolean, not a formula
+        if (out.f !== undefined && /^(?:TRUE|FALSE)(?:\(\))?$/.test(out.f)) {
+          out.f = undefined
+          out.arr = undefined
+        }
         break
       }
       case 'string':

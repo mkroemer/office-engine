@@ -26,7 +26,10 @@ export function docxToText(blocks: Block[]): string {
   return out.join('\n') + '\n'
 }
 
-const mdEsc = (s: string) => s.replace(/([\\`*_[\]<>])/g, '\\$1')
+const mdEsc = (s: string) => s.replace(/([\\`*_[\]<>~])/g, '\\$1')
+
+/** a paragraph that would read as a heading, quote, list item or rule given its first characters: the first one escaped */
+const mdLead = (s: string) => s.replace(/^(\s*)(#{1,6}(?=\s)|>|[-+*](?=\s)|\d+(?=[.)]\s)|(?:[-*_]\s*){3,}$)/, (_, sp: string, m: string) => (/^\d/.test(m) ? `${sp}${m}\\` : `${sp}\\${m}`))
 
 /** a code font: the run is code */
 const MONO = /courier|mono|consolas|menlo|fira code|source code/i
@@ -112,7 +115,7 @@ export function docxToMarkdown(blocks: Block[], images?: Pictures): string {
     if (prevList) out.push('')
     prevList = false
     if (!text) continue
-    out.push(heading ? `${'#'.repeat(lvl + 1)} ${text}` : text, '')
+    out.push(heading ? `${'#'.repeat(lvl + 1)} ${text}` : mdLead(text), '')
   }
   return out.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n'
 }
@@ -202,7 +205,14 @@ const HTML_CSS =
  * links, code, colors, tables, pictures (as data URLs when given). The text reads with its tracked changes accepted.
  */
 export function docxToHtml(blocks: Block[], opts: { title?: string; images?: Pictures } = {}): string {
-  const { images } = opts
+  return (
+    `<!doctype html>\n<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">` +
+    `<title>${hEsc(opts.title ?? '')}</title>\n<style>${HTML_CSS}</style></head>\n<body>\n${docxBodyHtml(blocks, opts.images)}\n</body></html>\n`
+  )
+}
+
+/** the elements of a page's body for the blocks (see docxToHtml) */
+export function docxBodyHtml(blocks: Block[], images?: Pictures): string {
   const out: string[] = []
   // open lists, an <li> open in each; closing tags go on the line of the last item
   const lists: ('ul' | 'ol')[] = []
@@ -240,10 +250,7 @@ export function docxToHtml(blocks: Block[], opts: { title?: string; images?: Pic
     out.push(heading ? `<h${lvl + 1}${align}>${inner}</h${lvl + 1}>` : `<p${align}>${inner}</p>`)
   }
   closeTo(0)
-  return (
-    `<!doctype html>\n<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">` +
-    `<title>${hEsc(opts.title ?? '')}</title>\n<style>${HTML_CSS}</style></head>\n<body>\n${out.join('\n')}\n</body></html>\n`
-  )
+  return out.join('\n')
 }
 
 /** The pictures of a document (paragraphs and table cells) as data URLs, by part path; `part` reads a package part. */

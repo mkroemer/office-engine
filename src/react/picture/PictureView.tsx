@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { svgImage } from '../../core/svgfile'
+import { pictureUrl, svgImage } from '../../core/svgfile'
 import type { DocumentClient } from '../../core/worker/client'
 import { useFileOps } from '../common/Slots'
 
@@ -17,14 +17,14 @@ export function PictureView({ client }: { client: DocumentClient }) {
     // the document holding the picture is loaded too: Download as Word saves it
     client.call('docx.start').catch(() => {})
     client.call('plain.source').then(
-      (text) => {
+      async (text) => {
         if (!live) return
         try {
           const img = svgImage((text as string | null) ?? '')
-          url = URL.createObjectURL(new Blob([img.svg], { type: 'image/svg+xml' }))
-          setPic({ url, w: img.w, h: img.h, alt: img.alt ?? '' })
+          url = await pictureUrl(new Blob([img.svg], { type: 'image/svg+xml' }))
+          if (live) setPic({ url, w: img.w, h: img.h, alt: img.alt ?? '' })
         } catch (e) {
-          setPic({ error: (e as Error).message })
+          if (live) setPic({ error: (e as Error).message })
         }
       },
       (e: Error) => live && setPic({ error: e.message }),

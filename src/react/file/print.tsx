@@ -26,6 +26,8 @@ html, body { margin: 0; padding: 0; background: #fff; }
 .de-print img { max-width: none; }
 .de-print-page { position: relative; overflow: hidden; background: #fff; break-after: page; }
 .de-print-page:last-child { break-after: auto; }
+/* a page of a document taller than the sheet runs over several: the box shows all of it */
+.de-print-tall { overflow: visible; }
 .de-print-page > .de-page { left: 0; top: 0; box-shadow: none; }
 /* position: own paint layer, so clipping cells after layout (fitText) stays cheap */
 .de-print-table { position: relative; border-collapse: collapse; table-layout: fixed; }

@@ -7,7 +7,8 @@
  * boxes and the like are left out, as are drawings in a group the anchor's own frame does not hold.
  */
 import { isWebImage } from '../opc'
-import { desc, descAll, kid, num, textOf, type XEl } from '../xml'
+import { desc, descAll, kid, textOf, type XEl } from '../xml'
+import { MAX_COL, MAX_ROWS, MAX_SHEET_WIDTH_PX, MAX_SHEET_HEIGHT_PX, ooxmlInt } from './limits'
 import { parseFormula, references } from './formula'
 import { readChart, type ChartModel, type RangeReader, type RangeValues } from './chart'
 import { T_BOOL, T_DATE, T_EMPTY, T_ERR, T_NUM, T_SST, type XlsxWorkbook } from './workbook'
@@ -54,15 +55,41 @@ const attr = (el: XEl | undefined, local: string) => {
   return undefined
 }
 
-const corner = (el: XEl | undefined): DrawingCorner | undefined =>
-  el
-    ? {
-        c: num(textOf(kid(el, 'col')), 0)!,
-        r: num(textOf(kid(el, 'row')), 0)!,
-        dx: num(textOf(kid(el, 'colOff')), 0)! / EMU_PER_PX,
-        dy: num(textOf(kid(el, 'rowOff')), 0)! / EMU_PER_PX,
-      }
-    : undefined
+function emu(value: string | undefined, maxPx: number, signed = false): number | undefined {
+  const n = ooxmlInt(value, signed ? -maxPx * EMU_PER_PX : 0, maxPx * EMU_PER_PX)
+  return n === undefined ? undefined : n / EMU_PER_PX
+}
+
+function corner(el: XEl | undefined): DrawingCorner | undefined {
+  if (!el) return undefined
+  const c = ooxmlInt(textOf(kid(el, 'col')), 0, MAX_COL - 1)
+  const r = ooxmlInt(textOf(kid(el, 'row')), 0, MAX_ROWS - 1)
+  // an offset left out is none: the corner is at the cell's own (a wrong one still discards the anchor)
+  const off = (name: string, max: number) => (kid(el, name) ? emu(textOf(kid(el, name)), max, true) : 0)
+  const dx = off('colOff', MAX_SHEET_WIDTH_PX)
+  const dy = off('rowOff', MAX_SHEET_HEIGHT_PX)
+  if (c === undefined || r === undefined || dx === undefined || dy === undefined) return undefined
+  return { c, r, dx, dy }
+}
+
+/** Reject an invalid anchor as a whole; do not move corrupt drawings to the sheet's last cell. */
+function placement(anchor: XEl): Pick<SheetDrawing, 'from' | 'to' | 'at' | 'size'> | undefined {
+  const from = corner(kid(anchor, 'from'))
+  if (anchor.n === 'twoCellAnchor') {
+    const to = corner(kid(anchor, 'to'))
+    return from && to ? { from, to } : undefined
+  }
+  const ext = kid(anchor, 'ext')
+  const w = emu(ext?.a.cx, MAX_SHEET_WIDTH_PX)
+  const h = emu(ext?.a.cy, MAX_SHEET_HEIGHT_PX)
+  if (w === undefined || h === undefined) return undefined
+  const size = { w, h }
+  if (anchor.n === 'oneCellAnchor') return from ? { from, size } : undefined
+  const pos = kid(anchor, 'pos')
+  const x = emu(pos?.a.x, MAX_SHEET_WIDTH_PX, true)
+  const y = emu(pos?.a.y, MAX_SHEET_HEIGHT_PX, true)
+  return x !== undefined && y !== undefined ? { at: { x, y }, size } : undefined
+}
 
 /** a chart's kind, title and model (null where it is a kind chart.ts does not draw), from its chart part */
 async function chartOf(wb: XlsxWorkbook, sheet: number, part: string): Promise<{ chart: string; title: string; model: ChartModel | null }> {
@@ -156,14 +183,8 @@ export async function readSheetDrawings(wb: XlsxWorkbook, sheet: number): Promis
     const rels = await pkg.rels(rel.target)
     for (const anchor of root?.c ?? []) {
       if (anchor.n !== 'twoCellAnchor' && anchor.n !== 'oneCellAnchor' && anchor.n !== 'absoluteAnchor') continue
-      const ext = kid(anchor, 'ext')
-      const pos = kid(anchor, 'pos')
-      const place = {
-        from: corner(kid(anchor, 'from')),
-        to: corner(kid(anchor, 'to')),
-        at: pos ? { x: num(pos.a.x, 0)! / EMU_PER_PX, y: num(pos.a.y, 0)! / EMU_PER_PX } : undefined,
-        size: ext ? { w: num(ext.a.cx, 0)! / EMU_PER_PX, h: num(ext.a.cy, 0)! / EMU_PER_PX } : undefined,
-      }
+      const place = placement(anchor)
+      if (!place) continue
       const chartRef = desc(anchor, 'chart')
       const blip = desc(anchor, 'blip')
       if (chartRef) {

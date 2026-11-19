@@ -4,7 +4,8 @@
  */
 import { Part } from '../../iwork/ooxml'
 import { escAttr } from '../../raw'
-import { charsetCp, knownCp } from './codepage'
+import { charsetCp, CP_SYMBOL, knownCp } from './codepage'
+import { symbolToUnicode } from './symbol'
 import { BIN, CLOSE, END, HEX, Lexer, OPEN, SYMBOL, TEXT, WORD } from './lexer'
 import { Numbering, type Level, type ListDef, type Override } from './lists'
 import { Story, type DocSetup, type Field, type Item, type Sect, type Shape, type State } from './model'
@@ -79,6 +80,8 @@ export class RtfReader {
   private runStory?: Story
   /** the tracked change the run belongs to (w:ins / w:del attributes) */
   private runRev = ''
+  /** the font of the run being read, by name (symbol fonts' text is mapped to Unicode) */
+  private runFont: string | undefined
   /** authors of tracked changes (\revtbl) */
   revAuthors: string[] = []
   /** w:id of bookmarks and tracked changes */
@@ -385,7 +388,8 @@ export class RtfReader {
     const s = this.st
     if (s.dest === D_FONT && this.font) {
       const f = this.font.f
-      return f.cpg ?? charsetCp(f.charset, this.ansi)
+      // a symbol font is named in the ordinary code page ("Symbol", not its glyphs' code points)
+      return f.cpg ?? ((cp) => (cp === CP_SYMBOL ? this.ansi : cp))(charsetCp(f.charset, this.ansi))
     }
     const f = s.dbch && s.ch.fEA !== undefined ? s.ch.fEA : (s.ch.f ?? this.styles.defChp.f)
     if (f === undefined) return this.ansi
@@ -568,6 +572,7 @@ export class RtfReader {
     if (rPr !== this.runRPr || st.link !== this.runLink || st.story !== this.runStory || rev !== this.runRev) {
       this.flushRun()
       this.runRPr = rPr
+      this.runFont = this.tables.fonts.get(st.ch.f ?? this.styles.defChp.f ?? -1)?.name
       this.runLink = st.link
       this.runStory = st.story
       this.runRev = rev
@@ -577,7 +582,7 @@ export class RtfReader {
 
   flushRun() {
     if (this.buf.empty) return
-    const text = this.buf.take()
+    const text = symbolToUnicode(this.buf.take(), this.runFont)
     const story = this.runStory ?? this.st.story
     let xml = runXml(text, this.runRPr)
     if (xml && this.runRev) {
