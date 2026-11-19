@@ -153,11 +153,12 @@ function App() {
   window.__setLanguage = (language) => setProps((cur) => ({ ...cur, strings: language === 'de-DE' ? de : undefined }))
   const { undo, redo } = window.__ctl
   if (q.has('renderHost')) return <RenderingHost props={props} />
+  // the host's controls are drawn from the viewer's controller, so it is given one whatever `controller` says
   if (q.has('chrome'))
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
         <HostChrome />
-        <DocViewer {...props} style={{ flex: 1, minHeight: 0 }} />
+        <DocViewer {...props} controller={window.__ctl} style={{ flex: 1, minHeight: 0 }} />
       </div>
     )
   return <>
