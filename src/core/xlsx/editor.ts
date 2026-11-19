@@ -2036,7 +2036,9 @@ function cellXml(d: SheetData, r: number, c: number, P: string, wb: XlsxWorkbook
     const dynamic = d.dynamic.has(key) && wb.dynamicRecord > 0
     const arr = d.arrays.get(key) ?? (dynamic ? { r0: r, c0: c, r1: r, c1: c } : undefined)
     if (dynamic) s += ` cm="${wb.dynamicRecord}"`
-    const fx = `<${P}f${arr ? ` t="array" ref="${colName(arr.c0)}${arr.r0 + 1}:${colName(arr.c1)}${arr.r1 + 1}"` : ''}>${escText(withFunctionPrefixes(f, f.includes('[') ? tableAt(wb, d, r, c) : undefined))}</${P}f>`
+    // (one cell is named alone, as Excel names it)
+    const cells = arr ? `${colName(arr.c0)}${arr.r0 + 1}${arr.r1 > arr.r0 || arr.c1 > arr.c0 ? `:${colName(arr.c1)}${arr.r1 + 1}` : ''}` : ''
+    const fx = `<${P}f${arr ? ` t="array" ref="${cells}"` : ''}>${escText(withFunctionPrefixes(f, f.includes('[') ? tableAt(wb, d, r, c) : undefined))}</${P}f>`
     if (t === T_NUM) return `<${P}c r="${ref}"${s}>${fx}<${P}v>${String(v)}</${P}v></${P}c>`
     if (t === T_BOOL) return `<${P}c r="${ref}"${s} t="b">${fx}<${P}v>${v ? 1 : 0}</${P}v></${P}c>`
     if (t === T_ERR) return `<${P}c r="${ref}"${s} t="e">${fx}<${P}v>${escText(String(v))}</${P}v></${P}c>`
