@@ -1,6 +1,6 @@
 /** Which formulas may give more than one value: those are dynamic array formulas, whose values spill over the cells next to them. */
 import { FUNCTIONS } from './functions'
-import type { Ast } from './parser'
+import { INTERSECT, type Ast } from './parser'
 
 /** functions that give an array or a reference whatever they are given */
 const ARRAYS = new Set(
@@ -94,6 +94,8 @@ export function spills(ast: Ast, names?: NameOf, scope: ReadonlyMap<string, bool
     case 'call': {
       const { name, args } = ast
       if (name === 'SINGLE' || name === 'ISOMITTED') return false
+      // the cells two references both have: several, maybe
+      if (name === INTERSECT) return true
       // a name of LET called as a function gives what its function gives
       if (scope.has(key(name))) return scope.get(key(name))! || args.some(go)
       if (name === 'LET') {

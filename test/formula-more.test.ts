@@ -374,6 +374,21 @@ describe('lookup and information', () => {
     expect(ev('Staff[[#Totals],[Salary]]', 9, 9, p)).toEqual(E('#REF!'))
   })
 
+  test('a space between two references is the cells both have', () => {
+    const p = makeProvider(DATA, { name: (name) => ({ ops: parseFormula('Sheet1!$A$2:$C$2'), pay: parseFormula('Sheet1!$C$1:$C$5') })[name.toLowerCase()] })
+    expect(ev('SUM(A1:C3 C2:C9)')).toBe(320)
+    expect(ev('A2:C2 C1:C5')).toBe(120)
+    expect(ev('SUM(A2:C4 B3:C9 C1:C3)')).toBe(200)
+    expect(ev('A1:A3 C1:C3')).toEqual(E('#NULL!'))
+    expect(ev('ROWS(A1:C5 (B2:B9))')).toBe(4)
+    expect(ev('AREAS(B2:D4 B2)')).toBe(1)
+    expect(ev('Ops Pay', 9, 9, p)).toBe(120)
+    expect(ev('SUM( A1:C3 , C4 )')).toBe(400)
+    expect(ev('A1:A3 Sheet2!A1:A3')).toEqual(E('#VALUE!'))
+    expect(() => parseFormula('1 2')).toThrow()
+    expect(() => parseFormula('A1 2')).toThrow()
+  })
+
   test('GETPIVOTDATA', () => {
     // a pivot table at G1: rows by Dept, columns by Year, the sum of Salary
     const cells: Sheets = {

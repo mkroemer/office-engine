@@ -1,7 +1,8 @@
 /** Lookup & reference functions. */
 import { A, flat, lift, type Ev, type FnDef } from './fn'
 import { parseRefText } from './lexer'
-import type { RefAddr } from './refs'
+import { INTERSECT } from './parser'
+import { sameSheet, type RefAddr } from './refs'
 import { ERR, FormulaError, MAX_COL, MAX_ROW, type Value } from './types'
 import { ArrayV, bool, compare, hasWildcard, int, num, RangeV, str, UnionV, valueEq, wildcardRe, type Val } from './values'
 
@@ -265,7 +266,22 @@ function dims(v: Val, rows: boolean): number {
   return 1
 }
 
+/** the cells two references both have; none: #NULL! */
+function intersection(a: Val[]): Val {
+  const [x, y] = a
+  if (x instanceof FormulaError) throw x
+  if (y instanceof FormulaError) throw y
+  if (!(x instanceof RangeV) || !(y instanceof RangeV) || !sameSheet(x.sheet, y.sheet)) throw ERR.VALUE
+  const r0 = Math.max(x.r0, y.r0)
+  const c0 = Math.max(x.c0, y.c0)
+  const r1 = Math.min(x.r1, y.r1)
+  const c1 = Math.min(x.c1, y.c1)
+  if (r0 > r1 || c0 > c1) throw ERR.NULL
+  return new RangeV(x.sheet, r0, c0, r1, c1)
+}
+
 export const LOOKUP: Record<string, FnDef> = {
+  [INTERSECT]: A(2, 2, intersection),
   // the value looked up, and the column / row to give: one result each when they are arrays
   VLOOKUP: A(3, 4, lift((i) => i === 0 || i === 2, (a, ev) => vhlookup(a, ev, true))),
   HLOOKUP: A(3, 4, lift((i) => i === 0 || i === 2, (a, ev) => vhlookup(a, ev, false))),

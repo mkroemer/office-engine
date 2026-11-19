@@ -29,9 +29,21 @@ export type Ast =
 
 const CMP = new Set(['=', '<>', '<', '>', '<=', '>='])
 
+/** the function a space between two references stands for: the cells both have (the intersection operator) */
+export const INTERSECT = ' '
+
+/** functions that give a reference: what a space after them may intersect */
+const REF_FUNCTIONS = new Set(['OFFSET', 'INDEX', 'INDIRECT', 'ANCHORARRAY', INTERSECT])
+
+const refLike = (a: Ast) => a.type === 'ref' || a.type === 'range' || a.type === 'name' || a.type === 'union' || (a.type === 'call' && REF_FUNCTIONS.has(a.name))
+
 class Parser {
   i = 0
-  constructor(private readonly toks: Token[]) {}
+  constructor(
+    private readonly toks: Token[],
+    /** whether white space came before each token */
+    private readonly spaced: boolean[] = [],
+  ) {}
 
   private peek(): Token | undefined {
     return this.toks[this.i]
@@ -116,7 +128,17 @@ class Parser {
       this.i++
       return { type: 'call', name: 'SINGLE', args: [this.unary()] }
     }
-    return this.range()
+    return this.intersect()
+  }
+  /** a space between two references: the cells both have (`B2:D4 C1:C9`, `North Q1`) */
+  private intersect(): Ast {
+    let l = this.range()
+    for (;;) {
+      const t = this.toks[this.i]
+      if (!t || !this.spaced[this.i] || !refLike(l)) return l
+      if (!(t.t === 'ref' || t.t === 'name' || t.t === 'func' || (t.t === 'punc' && t.v === '('))) return l
+      l = { type: 'call', name: INTERSECT, args: [l, this.range()] }
+    }
   }
   private range(): Ast {
     let l = this.spilled()
@@ -235,9 +257,19 @@ class Parser {
 /** Parse formula text (OOXML stored form, without '='; a leading '=' is tolerated). Throws FormulaSyntaxError. */
 export function parseFormula(text: string): Ast {
   const src = text.startsWith('=') ? text.slice(1) : text
-  const toks = tokenize(src).filter((t) => t.t !== 'ws')
+  const toks: Token[] = []
+  const spaced: boolean[] = []
+  let space = false
+  for (const t of tokenize(src)) {
+    if (t.t === 'ws') space = true
+    else {
+      toks.push(t)
+      spaced.push(space)
+      space = false
+    }
+  }
   if (!toks.length) throw new FormulaSyntaxError('empty formula', 0)
-  const p = new Parser(toks)
+  const p = new Parser(toks, spaced)
   const ast = p.expr()
   if (p.i < toks.length) throw new FormulaSyntaxError('unexpected token', toks[p.i].s)
   return ast

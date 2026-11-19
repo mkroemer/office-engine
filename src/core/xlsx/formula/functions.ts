@@ -39,7 +39,9 @@ export const FUNCTIONS: Readonly<Record<string, FnDef>> = {
   SINGLE: { kind: 'eager', min: 1, max: 1, scalarArgs: false, fn: ([v], ev) => ev.scalar(v) },
 }
 
-/** Names of all supported functions. */
+/** Names of all supported functions (not the operators kept as functions: the space of an intersection). */
 export function supportedFunctions(): string[] {
-  return Object.keys(FUNCTIONS).sort()
+  return Object.keys(FUNCTIONS)
+    .filter((n) => /^[A-Z]/.test(n))
+    .sort()
 }
