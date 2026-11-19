@@ -274,9 +274,14 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     const el = pagesRef.current
     if (!isEditing || !el) { editor.input.clearSelection(); return }
     editor.input.attach(el)
-    editor.onDirty = () => viewer.setDirty(true)
     return () => editor.input.detach()
-  }, [isEditing, editor, viewer])
+  }, [isEditing, editor])
+
+  // Host callback updates must not detach the input and cancel a queued selection update.
+  const setDirty = viewer.setDirty
+  useEffect(() => {
+    if (isEditing) editor.onDirty = () => setDirty(true)
+  }, [editor, isEditing, setDirty])
 
   // Ctrl/⌘+A: every paragraph when editing, the rendered pages' text when viewing (not the viewer around them)
   useSelectAll(() => {
