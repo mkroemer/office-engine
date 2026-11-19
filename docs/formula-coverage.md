@@ -6,37 +6,37 @@ The lists are taken as published: a function a help center has not listed is cou
 
 ## Summary
 
-| Reference | Functions | Computed | Missing | Coverage |
-| --- | ---: | ---: | ---: | ---: |
-| Excel | 521 | 504 | 17 | 97% |
-| Google Sheets | 515 | 504 | 11 | 98% |
-| In both | 468 | 466 | 2 | 100% |
-| In either | 568 | 542 | 26 | 95% |
+| Reference     | Functions | Computed | Missing | Coverage |
+| ------------- | --------: | -------: | ------: | -------: |
+| Excel         |       521 |      505 |      16 |      97% |
+| Google Sheets |       515 |      504 |      11 |      98% |
+| In both       |       468 |      466 |       2 |     100% |
+| In either     |       568 |      543 |      25 |      96% |
 
-The engine computes **542** of them (and `ANCHORARRAY` `SINGLE`, which neither list names); **26** are missing, all of them out of reach (see below). A formula that uses a missing one is not computed: it keeps the value the file holds, which no longer follows the cells it reads, and shows `#NAME?` when typed in the editor.
+The engine computes **543** of them (and `ANCHORARRAY` `SINGLE`, which neither list names); **25** are missing, all of them out of reach (see below). A formula that uses a missing one is not computed: it keeps the value the file holds, which no longer follows the cells it reads, and shows `#NAME?` when typed in the editor.
 
 ## By category
 
-| Category | Functions | Computed | Missing | Coverage |
-| --- | ---: | ---: | ---: | ---: |
-| Math | 83 | 83 | 0 | 100% |
-| Statistical | 151 | 151 | 0 | 100% |
-| Text | 53 | 51 | 2 | 96% |
-| Date | 26 | 26 | 0 | 100% |
-| Logical | 19 | 19 | 0 | 100% |
-| Lookup | 41 | 39 | 2 | 95% |
-| Info | 24 | 22 | 2 | 92% |
-| Array | 2 | 2 | 0 | 100% |
-| Financial | 55 | 55 | 0 | 100% |
-| Engineering | 57 | 57 | 0 | 100% |
-| Database | 12 | 12 | 0 | 100% |
-| Operator | 15 | 15 | 0 | 100% |
-| Parser | 5 | 5 | 0 | 100% |
-| Web | 9 | 3 | 6 | 33% |
-| Google | 5 | 2 | 3 | 40% |
-| AI | 1 | 0 | 1 | 0% |
-| Cube | 7 | 0 | 7 | 0% |
-| Add-in | 3 | 0 | 3 | 0% |
+| Category    | Functions | Computed | Missing | Coverage |
+| ----------- | --------: | -------: | ------: | -------: |
+| Math        |        83 |       83 |       0 |     100% |
+| Statistical |       151 |      151 |       0 |     100% |
+| Text        |        53 |       51 |       2 |      96% |
+| Date        |        26 |       26 |       0 |     100% |
+| Logical     |        19 |       19 |       0 |     100% |
+| Lookup      |        41 |       39 |       2 |      95% |
+| Info        |        24 |       22 |       2 |      92% |
+| Array       |         2 |        2 |       0 |     100% |
+| Financial   |        55 |       55 |       0 |     100% |
+| Engineering |        57 |       57 |       0 |     100% |
+| Database    |        12 |       12 |       0 |     100% |
+| Operator    |        15 |       15 |       0 |     100% |
+| Parser      |         5 |        5 |       0 |     100% |
+| Web         |         9 |        3 |       6 |      33% |
+| Google      |         5 |        2 |       3 |      40% |
+| AI          |         1 |        0 |       1 |       0% |
+| Cube        |         7 |        0 |       7 |       0% |
+| Add-in      |         3 |        1 |       2 |      33% |
 
 Categories are those of Excel, shortened; a function only Google Sheets has keeps the category it has there (*Array*, *Operator*, *Parser*, *Google*, *AI*). The old names Excel lists under *Compatibility* are counted with what they compute.
 
@@ -44,59 +44,58 @@ Categories are those of Excel, shortened; a function only Google Sheets has keep
 
 - **Names inside a formula**: `LET` and `LAMBDA` (with optional parameters, `ISOMITTED`, a LAMBDA called at once or passed to `MAP`, `REDUCE`, `SCAN`, `BYROW`, `BYCOL`, `MAKEARRAY`, a function named without being called: `BYROW(rows, SUM)`).
 - **Dynamic arrays**: a formula that gives several values fills the cells next to it; `#SPILL!` when a cell is in the way; `A1#` for the cells a formula fills, `@` for the one value of a range that is the formula's own. Saved as Excel saves them (an array formula marked dynamic), so they stay dynamic there and here.
-- **Defined names**, of the workbook and local to a sheet, **structured references** (`Table1[Qty]`, `Table1[@Qty]`, `[@Qty]`, `Table1[[#Headers],[Qty]]`, `Table1[#All]`) and **3-D references** (`First:Last!A1`).
+- **Defined names**, of the workbook and local to a sheet, **structured references** (`Table1[Qty]`, `Table1[@Qty]`, `[@Qty]`, `Table1[[#Headers],[Qty]]`, `Table1[#All]`) **3-D references** (`First:Last!A1`) and the **intersection** of two references (a space: `B2:D4 C1:C9`, `North Q1`).
 
 ## Out of reach
 
 Not to be written: the value the file holds is the best there is.
 
-| Function | Category | Excel | Google Sheets | Notes |
-| --- | --- | --- | --- | --- |
-| `DETECTLANGUAGE` | Text | [Microsoft 365](https://support.microsoft.com/en-us/excel/functions/detectlanguage-function) | [yes](https://support.google.com/docs/answer/3093278) |  |
-| `TRANSLATE` | Text | [Microsoft 365](https://support.microsoft.com/en-us/excel/functions/translate-function) |  |  |
-| `IMAGE` | Lookup | [2024](https://support.microsoft.com/en-us/excel/functions/image-function) | [yes](https://support.google.com/docs/answer/3093333) |  |
-| `RTD` | Lookup | [yes](https://support.microsoft.com/en-us/excel/functions/rtd-function) |  |  |
-| `INFO` | Info | [yes](https://support.microsoft.com/en-us/excel/functions/info-function) |  |  |
-| `STOCKHISTORY` | Info | [yes](https://support.microsoft.com/en-us/excel/functions/stockhistory-function) |  |  |
-| `IMPORTDATA` | Web |  | [yes](https://support.google.com/docs/answer/3093335) |  |
-| `IMPORTFEED` | Web |  | [yes](https://support.google.com/docs/answer/3093337) |  |
-| `IMPORTHTML` | Web |  | [yes](https://support.google.com/docs/answer/3093339) |  |
-| `IMPORTRANGE` | Web |  | [yes](https://support.google.com/docs/answer/3093340) |  |
-| `IMPORTXML` | Web |  | [yes](https://support.google.com/docs/answer/3093342) |  |
-| `WEBSERVICE` | Web | [2013](https://support.microsoft.com/en-us/excel/functions/webservice-function) |  |  |
-| `GOOGLEFINANCE` | Google |  | [yes](https://support.google.com/docs/answer/3093281) |  |
-| `GOOGLETRANSLATE` | Google |  | [yes](https://support.google.com/docs/answer/3093331) |  |
-| `SPARKLINE` | Google |  | [yes](https://support.google.com/docs/answer/3093289) |  |
-| `AI` | AI |  | [yes](https://support.google.com/docs/answer/15877199) |  |
-| `CUBEKPIMEMBER` | Cube | [yes](https://support.microsoft.com/en-us/excel/functions/cubekpimember-function) |  |  |
-| `CUBEMEMBER` | Cube | [yes](https://support.microsoft.com/en-us/excel/functions/cubemember-function) |  |  |
-| `CUBEMEMBERPROPERTY` | Cube | [yes](https://support.microsoft.com/en-us/excel/functions/cubememberproperty-function) |  |  |
-| `CUBERANKEDMEMBER` | Cube | [yes](https://support.microsoft.com/en-us/excel/functions/cuberankedmember-function) |  |  |
-| `CUBESET` | Cube | [yes](https://support.microsoft.com/en-us/excel/functions/cubeset-function) |  |  |
-| `CUBESETCOUNT` | Cube | [yes](https://support.microsoft.com/en-us/excel/functions/cubesetcount-function) |  |  |
-| `CUBEVALUE` | Cube | [yes](https://support.microsoft.com/en-us/excel/functions/cubevalue-function) |  |  |
-| `CALL` | Add-in | [yes](https://support.microsoft.com/en-us/excel/functions/call-function) |  |  |
-| `EUROCONVERT` | Add-in | [yes](https://support.microsoft.com/en-us/excel/functions/euroconvert-function) |  |  |
-| `REGISTER.ID` | Add-in | [yes](https://support.microsoft.com/en-us/excel/functions/register-id-function) |  |  |
+| Function             | Category | Excel                                                                                        | Google Sheets                                          | Notes |
+| -------------------- | -------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------ | ----- |
+| `DETECTLANGUAGE`     | Text     | [Microsoft 365](https://support.microsoft.com/en-us/excel/functions/detectlanguage-function) | [yes](https://support.google.com/docs/answer/3093278)  |       |
+| `TRANSLATE`          | Text     | [Microsoft 365](https://support.microsoft.com/en-us/excel/functions/translate-function)      |                                                        |       |
+| `IMAGE`              | Lookup   | [2024](https://support.microsoft.com/en-us/excel/functions/image-function)                   | [yes](https://support.google.com/docs/answer/3093333)  |       |
+| `RTD`                | Lookup   | [yes](https://support.microsoft.com/en-us/excel/functions/rtd-function)                      |                                                        |       |
+| `INFO`               | Info     | [yes](https://support.microsoft.com/en-us/excel/functions/info-function)                     |                                                        |       |
+| `STOCKHISTORY`       | Info     | [yes](https://support.microsoft.com/en-us/excel/functions/stockhistory-function)             |                                                        |       |
+| `IMPORTDATA`         | Web      |                                                                                              | [yes](https://support.google.com/docs/answer/3093335)  |       |
+| `IMPORTFEED`         | Web      |                                                                                              | [yes](https://support.google.com/docs/answer/3093337)  |       |
+| `IMPORTHTML`         | Web      |                                                                                              | [yes](https://support.google.com/docs/answer/3093339)  |       |
+| `IMPORTRANGE`        | Web      |                                                                                              | [yes](https://support.google.com/docs/answer/3093340)  |       |
+| `IMPORTXML`          | Web      |                                                                                              | [yes](https://support.google.com/docs/answer/3093342)  |       |
+| `WEBSERVICE`         | Web      | [2013](https://support.microsoft.com/en-us/excel/functions/webservice-function)              |                                                        |       |
+| `GOOGLEFINANCE`      | Google   |                                                                                              | [yes](https://support.google.com/docs/answer/3093281)  |       |
+| `GOOGLETRANSLATE`    | Google   |                                                                                              | [yes](https://support.google.com/docs/answer/3093331)  |       |
+| `SPARKLINE`          | Google   |                                                                                              | [yes](https://support.google.com/docs/answer/3093289)  |       |
+| `AI`                 | AI       |                                                                                              | [yes](https://support.google.com/docs/answer/15877199) |       |
+| `CUBEKPIMEMBER`      | Cube     | [yes](https://support.microsoft.com/en-us/excel/functions/cubekpimember-function)            |                                                        |       |
+| `CUBEMEMBER`         | Cube     | [yes](https://support.microsoft.com/en-us/excel/functions/cubemember-function)               |                                                        |       |
+| `CUBEMEMBERPROPERTY` | Cube     | [yes](https://support.microsoft.com/en-us/excel/functions/cubememberproperty-function)       |                                                        |       |
+| `CUBERANKEDMEMBER`   | Cube     | [yes](https://support.microsoft.com/en-us/excel/functions/cuberankedmember-function)         |                                                        |       |
+| `CUBESET`            | Cube     | [yes](https://support.microsoft.com/en-us/excel/functions/cubeset-function)                  |                                                        |       |
+| `CUBESETCOUNT`       | Cube     | [yes](https://support.microsoft.com/en-us/excel/functions/cubesetcount-function)             |                                                        |       |
+| `CUBEVALUE`          | Cube     | [yes](https://support.microsoft.com/en-us/excel/functions/cubevalue-function)                |                                                        |       |
+| `CALL`               | Add-in   | [yes](https://support.microsoft.com/en-us/excel/functions/call-function)                     |                                                        |       |
+| `REGISTER.ID`        | Add-in   | [yes](https://support.microsoft.com/en-us/excel/functions/register-id-function)              |                                                        |       |
 
 ## Limits
 
 Functions the engine computes, and what it does not do as their application does:
 
-| Functions | Limit |
-| --- | --- |
+| Functions                                                                            | Limit                                                                                                                                                                                         |
+| ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `FORECAST.ETS` `FORECAST.ETS.CONFINT` `FORECAST.ETS.SEASONALITY` `FORECAST.ETS.STAT` | the model Excel names (exponential triple smoothing, additive), fitted by least squares: Excel does not publish how it fits its own, so a forecast may differ from Excel's in its last digits |
-| `GROUPBY` `PIVOTBY` | one function at a time (not an array of functions side by side); PIVOTBY takes one column of values |
-| `QUERY` | select, where, group by, order by, limit, offset, label; no `pivot`; `format` and `options` are read and left aside |
-| `FILTERXML` | paths with `/`, `//`, `*`, `@attribute`, `text()` and predicates on position, attributes and children: not the whole of XPath |
-| `REGEXTEST` `REGEXEXTRACT` `REGEXREPLACE` `REGEXMATCH` | the regular expressions of JavaScript, close to the PCRE2 of Excel and the RE2 of Google Sheets, not the same in every corner |
-| `ASC` `DBCS` `JIS` `FINDB` `LEFTB` `LENB` `MIDB` `REPLACEB` `RIGHTB` `SEARCHB` | as Excel without a double-byte language set: the byte functions count characters |
-| `PHONETIC` | the text itself: the phonetic reading a file keeps for Japanese text is not read |
-| `TO_DATE` `TO_DOLLARS` `TO_PERCENT` `TO_PURE_NUMBER` | give the number as it is: how a cell shows it is the cell's format |
-| `CELL` | `address`, `col`, `row`, `contents`, `type`, `format`, `color`, `parentheses`, `prefix`, `protect`, `width`; `filename` is empty |
-| `GETPIVOTDATA` | reads the values a pivot table of the file shows (the engine does not compute pivot tables) |
-| `SUBTOTAL` `AGGREGATE` | a row hidden inside a filter or a table counts as filtered out; hiding rows does not by itself compute the formulas again |
-| `BESSELI` `BESSELJ` `BESSELK` `BESSELY` | computed to full precision: the examples of the help center show the fewer digits of older versions of Excel |
+| `GROUPBY` `PIVOTBY`                                                                  | one function at a time (not an array of functions side by side); PIVOTBY takes one column of values                                                                                           |
+| `QUERY`                                                                              | select, where, group by, order by, limit, offset, label; no `pivot`; `format` and `options` are read and left aside                                                                           |
+| `FILTERXML`                                                                          | paths with `/`, `//`, `*`, `@attribute`, `text()` and predicates on position, attributes and children: not the whole of XPath                                                                 |
+| `REGEXTEST` `REGEXEXTRACT` `REGEXREPLACE` `REGEXMATCH`                               | the regular expressions of JavaScript, close to the PCRE2 of Excel and the RE2 of Google Sheets, not the same in every corner                                                                 |
+| `ASC` `DBCS` `JIS` `FINDB` `LEFTB` `LENB` `MIDB` `REPLACEB` `RIGHTB` `SEARCHB`       | as Excel without a double-byte language set: the byte functions count characters                                                                                                              |
+| `PHONETIC`                                                                           | the text itself: the phonetic reading a file keeps for Japanese text is not read                                                                                                              |
+| `TO_DATE` `TO_DOLLARS` `TO_PERCENT` `TO_PURE_NUMBER`                                 | give the number as it is: how a cell shows it is the cell's format                                                                                                                            |
+| `CELL`                                                                               | `address`, `col`, `row`, `contents`, `type`, `format`, `color`, `parentheses`, `prefix`, `protect`, `width`; `filename` is empty                                                              |
+| `GETPIVOTDATA`                                                                       | reads the values a pivot table of the file shows (the engine does not compute pivot tables)                                                                                                   |
+| `SUBTOTAL` `AGGREGATE`                                                               | a row hidden inside a filter or a table counts as filtered out; hiding rows does not by itself compute the formulas again                                                                     |
+| `BESSELI` `BESSELJ` `BESSELK` `BESSELY`                                              | computed to full precision: the examples of the help center show the fewer digits of older versions of Excel                                                                                  |
 
 The engine opens the formats of Excel, and Google Sheets saves a function Excel does not have as `IFERROR(__xludf.DUMMYFUNCTION("…"), value)`: such a file opens with its values. The functions of Google Sheets count for formulas typed in the editor.
 
@@ -131,5 +130,7 @@ The engine opens the formats of Excel, and Google Sheets saves a function Excel 
 - **Web** (3): `ENCODEURL` `FILTERXML` `ISURL`
 
 - **Google** (2): `ARRAYFORMULA` `QUERY`
+
+- **Add-in** (1): `EUROCONVERT`
 
 - **In neither list** (2): `ANCHORARRAY` (how a file writes the `#` operator: `A1#`), `SINGLE` (how a file writes the `@` operator)

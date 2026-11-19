@@ -154,6 +154,15 @@ async function refresh() {
 const load = (file: string): List => JSON.parse(readFileSync(join(DIR, file), 'utf8'))
 
 const pct = (a: number, b: number) => (b ? `${Math.round((100 * a) / b)}%` : '-')
+
+/** a table with its columns padded to one width (`right`: the columns of numbers) */
+function grid(head: string[], rows: string[][], right: number[] = []): string {
+  const w = head.map((h, i) => Math.max(3, h.length, ...rows.map((r) => (r[i] ?? '').length)))
+  const cell = (t: string, i: number) => (right.includes(i) ? t.padStart(w[i]) : t.padEnd(w[i]))
+  const line = (r: string[]) => `| ${head.map((_, i) => cell(r[i] ?? '', i)).join(' | ')} |`
+  const rule = `| ${w.map((n, i) => (right.includes(i) ? `${'-'.repeat(n - 1)}:` : '-'.repeat(n))).join(' | ')} |`
+  return [line(head), rule, ...rows.map(line)].join('\n')
+}
 const code = (names: string[]) => names.map((n) => `\`${n}\``).join(' ')
 
 function report(): string {
@@ -173,17 +182,17 @@ function report(): string {
   const reachable = missing.filter((n) => !OUT_OF_REACH.has(n))
   const both = all.filter((n) => inExcel.has(n) && inSheets.has(n))
   const count = (names: string[]) => names.filter((n) => have.has(n)).length
-  const line = (label: string, names: string[]) => `| ${label} | ${names.length} | ${count(names)} | ${names.length - count(names)} | ${pct(count(names), names.length)} |`
+  const line = (label: string, names: string[]) => [label, String(names.length), String(count(names)), String(names.length - count(names)), pct(count(names), names.length)]
+  const COUNTS = ['Functions', 'Computed', 'Missing', 'Coverage']
   const link = (n: string, of: Map<string, Entry>) => {
     const f = of.get(n)
     return f ? `[${f.since ?? 'yes'}](${f.url})` : ''
   }
   const table = (names: string[], withCategory: boolean) =>
-    [
-      `| Function |${withCategory ? ' Category |' : ''} Excel | Google Sheets | Notes |`,
-      `| --- |${withCategory ? ' --- |' : ''} --- | --- | --- |`,
-      ...names.map((n) => `| \`${n}\` |${withCategory ? ` ${category(n)} |` : ''} ${link(n, inExcel)} | ${link(n, inSheets)} | ${inExcel.get(n)?.old ? 'old name' : ''} |`),
-    ].join('\n')
+    grid(
+      ['Function', ...(withCategory ? ['Category'] : []), 'Excel', 'Google Sheets', 'Notes'],
+      names.map((n) => [`\`${n}\``, ...(withCategory ? [category(n)] : []), link(n, inExcel), link(n, inSheets), inExcel.get(n)?.old ? 'old name' : '']),
+    )
   const byCategory = (names: string[]) => ORDER.map((c) => [c, names.filter((n) => category(n) === c)] as const).filter(([, list]) => list.length)
 
   const out: string[] = []
@@ -196,8 +205,8 @@ function report(): string {
     'The lists are taken as published: a function a help center has not listed is counted as not being there (Google Sheets computes `XMATCH`, its list does not have it), and neither list tells how much of a function the engine computes: only whether it has one of that name. What is known to differ is under [Limits](#limits).',
     '',
   )
-  out.push('## Summary', '', '| Reference | Functions | Computed | Missing | Coverage |', '| --- | ---: | ---: | ---: | ---: |')
-  out.push(line('Excel', [...inExcel.keys()]), line('Google Sheets', [...inSheets.keys()]), line('In both', both), line('In either', all), '')
+  out.push('## Summary', '')
+  out.push(grid(['Reference', ...COUNTS], [line('Excel', [...inExcel.keys()]), line('Google Sheets', [...inSheets.keys()]), line('In both', both), line('In either', all)], [1, 2, 3, 4]), '')
   const extra = [...have].filter((n) => !inExcel.has(n) && !inSheets.has(n)).sort()
   out.push(
     `The engine computes **${count(all)}** of them${extra.length ? ` (and ${code(extra)}, which neither list names)` : ''}; **${missing.length}** are missing${
@@ -209,14 +218,22 @@ function report(): string {
     const core = reachable.filter((n) => CORE.has(n))
     const shared = reachable.filter((n) => !CORE.has(n) && inExcel.has(n) && inSheets.has(n))
     const one = reachable.filter((n) => !CORE.has(n) && !(inExcel.has(n) && inSheets.has(n)))
-    out.push('| Priority | Missing | What |', '| --- | ---: | --- |')
-    out.push(`| 1 | ${core.length} | everyday functions, picked by hand (\`CORE\` in the script) |`)
-    out.push(`| 2 | ${shared.length} | the other functions both applications have: a workbook of either may use them |`)
-    out.push(`| 3 | ${one.length} | functions only one of the two has |`)
-    out.push(`| [none](#out-of-reach) | ${missing.length - reachable.length} | the value comes from a service or the application itself: out of reach of a library that runs in the browser alone |`, '')
+    out.push(
+      grid(
+        ['Priority', 'Missing', 'What'],
+        [
+          ['1', String(core.length), 'everyday functions, picked by hand (`CORE` in the script)'],
+          ['2', String(shared.length), 'the other functions both applications have: a workbook of either may use them'],
+          ['3', String(one.length), 'functions only one of the two has'],
+          ['[none](#out-of-reach)', String(missing.length - reachable.length), 'the value comes from a service or the application itself: out of reach of a library that runs in the browser alone'],
+        ],
+        [1],
+      ),
+      '',
+    )
   }
-  out.push('## By category', '', '| Category | Functions | Computed | Missing | Coverage |', '| --- | ---: | ---: | ---: | ---: |')
-  for (const [c, names] of byCategory(all)) out.push(line(c, names))
+  out.push('## By category', '')
+  out.push(grid(['Category', ...COUNTS], byCategory(all).map(([c, names]) => line(c, names)), [1, 2, 3, 4]))
   out.push(
     '',
     'Categories are those of Excel, shortened; a function only Google Sheets has keeps the category it has there (*Array*, *Operator*, *Parser*, *Google*, *AI*). The old names Excel lists under *Compatibility* are counted with what they compute.',
@@ -226,7 +243,7 @@ function report(): string {
   out.push(
     '- **Names inside a formula**: `LET` and `LAMBDA` (with optional parameters, `ISOMITTED`, a LAMBDA called at once or passed to `MAP`, `REDUCE`, `SCAN`, `BYROW`, `BYCOL`, `MAKEARRAY`, a function named without being called: `BYROW(rows, SUM)`).',
     '- **Dynamic arrays**: a formula that gives several values fills the cells next to it; `#SPILL!` when a cell is in the way; `A1#` for the cells a formula fills, `@` for the one value of a range that is the formula\'s own. Saved as Excel saves them (an array formula marked dynamic), so they stay dynamic there and here.',
-    '- **Defined names**, of the workbook and local to a sheet, **structured references** (`Table1[Qty]`, `Table1[@Qty]`, `[@Qty]`, `Table1[[#Headers],[Qty]]`, `Table1[#All]`) and **3-D references** (`First:Last!A1`).',
+    '- **Defined names**, of the workbook and local to a sheet, **structured references** (`Table1[Qty]`, `Table1[@Qty]`, `[@Qty]`, `Table1[[#Headers],[Qty]]`, `Table1[#All]`) **3-D references** (`First:Last!A1`) and the **intersection** of two references (a space: `B2:D4 C1:C9`, `North Q1`).',
     '',
   )
   if (reachable.length) {
@@ -249,11 +266,12 @@ function report(): string {
     out.push(table(ORDER.flatMap((c) => out_.filter((n) => category(n) === c)), true), '')
   }
   out.push('## Limits', '', 'Functions the engine computes, and what it does not do as their application does:', '')
-  out.push('| Functions | Limit |', '| --- | --- |')
+  const limits: string[][] = []
   for (const [names, note] of LIMITS) {
     const list = names.split(' ').filter((n) => have.has(n))
-    if (list.length) out.push(`| ${code(list)} | ${note} |`)
+    if (list.length) limits.push([code(list), note])
   }
+  out.push(grid(['Functions', 'Limit'], limits))
   out.push(
     '',
     'The engine opens the formats of Excel, and Google Sheets saves a function Excel does not have as `IFERROR(__xludf.DUMMYFUNCTION("…"), value)`: such a file opens with its values. The functions of Google Sheets count for formulas typed in the editor.',
