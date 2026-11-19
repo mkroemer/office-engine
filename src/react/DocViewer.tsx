@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useInsertionEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useInsertionEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import type { DocSource } from '../core/source'
 import type { DocumentClient, OpenOptions } from '../core/worker/client'
 import type { Zoom } from './common/ZoomControl'
@@ -7,13 +7,14 @@ import { ViewerContext, type FileOps, type ViewerApi } from './common/Slots'
 import { StatusContext } from './common/Status'
 import { ConfirmDialog, PromptDialog, Toast } from './common/Dialog'
 import { download, Icon, IconsProvider, type Icons } from './edit/Toolbar'
+import { UIComponentsProvider, type UIComponents } from './ui'
+import { createViewerController, internalController, type ViewerController } from './controller'
 import { DetailsDialog } from './file/DetailsDialog'
-import { FileMenu, KIND_LABEL, useFileActions, type FileMenuItem } from './file/FileMenu'
+import { FileMenu, useFileActions, type FileMenuItem } from './file/FileMenu'
 import { importFile, type Imported } from './file/importFile'
 import { blankPptx, parasToDocx, rowsToXlsx } from '../core/convert'
 import type { DocKind } from '../core/opc'
 import { extOf, HAS_SOURCE, PLAIN_EXT, PLAIN_FILE, unpackedName, type PlainFormat } from '../core/plain'
-import type { LegacyFormat } from '../core/legacy'
 import { injectStyles } from './injectStyles'
 import { isTextEntry, useSize } from './common/hooks'
 import { useThemeRoot, type Theme } from './theme'
@@ -26,6 +27,7 @@ import type { CollabOptions } from '../collab'
 import { CollabBar, PeerOverlay, useCollab } from '../collab/react'
 import { CommentsContext, CommentsCtl, useCommentsState, type CommentOptions } from './comments/Comments'
 import { COMMENT_KEYS, CommentsPanel } from './comments/CommentsPanel'
+import { formatBytes, StringsProvider, useStrings, type Locale, type StringsOverride } from './strings'
 
 export interface DocViewerProps {
   /**
@@ -112,39 +114,32 @@ export interface DocViewerProps {
    * Each is rendered in `span.de-icon`, sized by font-size (1em).
    */
   icons?: Icons
+  /**
+   * The host's own UI components (`Button`, `Select`, `Separator`, `Dialog`, `Toast`), rendered in the toolbars and
+   * dialogs instead of the built-in ones; each one left out keeps the built-in one. See docs/theming.md.
+   */
+  components?: Partial<UIComponents>
+  /** BCP 47 number/date formatting tag; defaults to the enclosing table or browser. Does not select UI texts. */
+  locale?: Locale
+  /** Texts replacing the enclosing provider's or English texts, key by key (see `Strings`): a group may be given in part, e.g. `{ file: { menu: 'Datei' } }`. */
+  strings?: StringsOverride
+  /**
+   * The viewer's state and commands for the host (`createViewerController()`): zoom, page, outline, editing, unsaved
+   * changes, save, undo… Subscribe to it to draw your own controls; see `headless`.
+   */
+  controller?: ViewerController
+  /**
+   * The document alone: no top bar, zoom control, outline panel, sheet tabs or slide list (the host draws its own,
+   * driven by `controller`). While editing, the formatting toolbar keeps its row. The top bar shows when `toolbar` is
+   * set explicitly. Default false.
+   */
+  headless?: boolean
 }
 
 const EXT: Record<string, string> = { docx: '.docx', xlsx: '.xlsx', pptx: '.pptx' }
-const FROM_LABEL: Record<'pages' | 'keynote' | 'numbers' | 'visio', string> = {
-  pages: 'Apple Pages document',
-  keynote: 'Apple Keynote presentation',
-  numbers: 'Apple Numbers spreadsheet',
-  visio: 'Microsoft Visio drawing',
-}
-const CONVERTED_LABEL: Record<LegacyFormat, string> = {
-  doc: 'Word 97-2003 document',
-  xls: 'Excel 97-2003 workbook',
-  ppt: 'PowerPoint 97-2003 presentation',
-  rtf: 'Rich Text Format document',
-  odt: 'OpenDocument text',
-  ods: 'OpenDocument spreadsheet',
-  odp: 'OpenDocument presentation',
-}
 const IMPORTED_BADGE: Record<PlainFormat, string> = { csv: 'csv', tsv: 'tsv', text: 'txt', markdown: 'md', html: 'html', svg: 'svg', mermaid: 'mmd', plantuml: 'puml', graphviz: 'dot' }
-const IMPORTED_LABEL: Record<PlainFormat, string> = {
-  csv: 'CSV file',
-  tsv: 'Tab-separated values',
-  text: 'Plain text',
-  markdown: 'Markdown',
-  html: 'HTML page',
-  svg: 'SVG picture',
-  mermaid: 'Mermaid diagram',
-  plantuml: 'PlantUML diagram',
-  graphviz: 'Graphviz diagram',
-}
 /** plain formats saved back as themselves: Markdown and HTML built again from the document when it was edited, SVG from its text */
 const SAVES_SOURCE = new Set<PlainFormat>(['markdown', 'html', 'svg'])
-const UNTITLED: Record<DocKind, string> = { docx: 'Untitled document', xlsx: 'Untitled spreadsheet', pptx: 'Untitled presentation' }
 
 /** a key per opened client: a view is built again for each (the edited source's previews have one name) */
 const clientIds = new WeakMap<object, number>()
@@ -155,14 +150,24 @@ const clientKey = (c: object) => {
   return id
 }
 
-function fmtBytes(n: number) {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`
-  return `${(n / 1024 / 1024).toFixed(1)} MB`
+export function DocViewer(props: DocViewerProps) {
+  return (
+    <StringsProvider locale={props.locale} strings={props.strings}>
+      <Viewer {...props} />
+    </StringsProvider>
+  )
 }
 
-export function DocViewer(props: DocViewerProps) {
-  const { src, name, className, style, toolbar = true, toolbarExtra, zoom, thumbnails, headers, credentials, worker, styleTarget, theme, onLoad, onError } = props
+function Viewer(props: DocViewerProps) {
+  const t = useStrings()
+  const fmtBytes = (n: number) => formatBytes(t, n)
+  const { src, name, className, style, toolbarExtra, zoom, thumbnails, headers, credentials, worker, styleTarget, theme, onLoad, onError } = props
+  const headless = !!props.headless
+  const toolbar = props.toolbar ?? !headless
+  // without a controller from the host the viewer keeps its own: the view publishes to one either way
+  const ownCtl = useMemo(() => createViewerController(), [])
+  const controller = internalController(props.controller ?? ownCtl)
+  const ctl = useMemo(() => controller.createBinding(), [controller])
   const root = useThemeRoot(theme, style)
   const { allowEdit = true, allowSave = true, allowDownload = true, fileMenu = true, allowOpen = true, captureSelectAll = true, onSave, onDirtyChange } = props
   const [editing, setEditing] = useState(!!props.editable)
@@ -196,6 +201,7 @@ export function DocViewer(props: DocViewerProps) {
       saveSession.live = false
     }
   }, [saveSession])
+  const viewCtl = useMemo(() => ctl.createView(), [ctl, client])
   const docName = renamed ?? loadName
   const collab = useCollab(client, props.collab)
   const srcFormat = client?.info?.imported
@@ -290,6 +296,7 @@ export function DocViewer(props: DocViewerProps) {
   const cmOpts = props.comments || {}
   if (cmCtl) {
     cmCtl.opts = cmOpts
+    cmCtl.t = t
     cmCtl.me = cmOpts.user ?? props.collab?.user ?? { name: 'Me' }
     cmCtl.canComment = !readOnly && (cmOpts.canComment ?? (editing && canEdit))
   }
@@ -401,8 +408,8 @@ export function DocViewer(props: DocViewerProps) {
   // next to its source, the document is a preview: it is edited through the source
   const docEditable = editing && canEdit && !codeShown
   const api = useMemo<ViewerApi>(
-    () => ({ bar: barEl, editable: docEditable, setDirty: setDocDirty, save, canDownload: allowDownload, client, fileOps, selectAll }),
-    [barEl, docEditable, setDocDirty, save, allowDownload, client],
+    () => ({ bar: barEl, editable: docEditable, setDirty: setDocDirty, save, canDownload: allowDownload, client, fileOps, selectAll, ctl: viewCtl, headless }),
+    [barEl, docEditable, setDocDirty, save, allowDownload, client, viewCtl, headless],
   )
 
   const editSource = (text: string) => {
@@ -496,30 +503,30 @@ export function DocViewer(props: DocViewerProps) {
     setOpened(doc)
     if (edit) setEditing(true)
   }, [])
-  const canOpen = fileMenu && allowOpen && !props.collab
+  const canOpen = allowOpen && !props.collab
   const fileActions = useFileActions({
     kind: client?.kind,
     ext: officeExt,
     base: baseName,
     canOpen,
-    canImport: fileMenu && allowEdit && canEdit,
-    canSave: fileMenu && canSave,
-    canDownload: fileMenu && allowDownload && !!client,
+    canImport: allowEdit && canEdit,
+    canSave,
+    canDownload: allowDownload && !!client,
     ops: fileOps,
     create: (kind: DocKind) =>
-      replace(`A new ${UNTITLED[kind].split(' ')[1]} replaces the current document. Your changes are not saved.`, () => {
+      replace(t.bar.replaceNew(t.newWhat[kind]), () => {
         const blank = kind === 'docx' ? parasToDocx([]) : kind === 'xlsx' ? rowsToXlsx([], 'Sheet1') : blankPptx()
-        blank.then((src) => show({ src, name: UNTITLED[kind] + EXT[kind], converted: false }, allowEdit), (e: Error) => setToast(e.message))
+        blank.then((src) => show({ src, name: t.untitled[kind] + EXT[kind], converted: false }, allowEdit), (e: Error) => setToast(e.message))
       }),
     open: (file) =>
-      replace(`Opening “${file.name}” replaces the current document. Your changes are not saved.`, () => {
-        importFile(file).then(show, (e: Error) => setToast(e.message))
+      replace(t.bar.replaceOpen(file.name), () => {
+        importFile(file, t.file.unsupported).then(show, (e: Error) => setToast(e.message))
       }),
     save,
     downloadOriginal: () => saveFile(true),
     picture: isPicture
       ? {
-          label: 'SVG picture',
+          label: t.file.picture,
           ext: '.svg',
           download: async () => download(new Blob([await sourceText()], { type: 'image/svg+xml' }), saveName),
         }
@@ -559,12 +566,31 @@ export function DocViewer(props: DocViewerProps) {
   const busy = loading || (!!progress && pct < 100)
   const title = renamed ?? client?.name ?? docName ?? (typeof src === 'string' ? decodeURIComponent(src.split(/[?#]/)[0].split('/').pop() ?? '') : (src as File | undefined)?.name) ?? ''
 
+  // ---- controller: the viewer's part of the state, and its commands ----
+  const editAllowed = !readOnly && !codeShown
+  useEffect(() => {
+    ctl.update({ kind: client?.kind ?? null, loading: busy, editing: docEditable, canEdit: !!client && editAllowed && canEdit, dirty, saving })
+  }, [ctl, client, busy, docEditable, editAllowed, canEdit, dirty, saving])
+  const commands = useRef({ editAllowed, save, fileActions, cmCtl })
+  commands.current = { editAllowed, save, fileActions, cmCtl }
+  useLayoutEffect(() => {
+    return ctl.attachViewer({
+      setEditing: (on) => {
+        if (!on || commands.current.editAllowed) setEditing(on)
+      },
+      save: () => commands.current.save(),
+      fileAction: (id) => commands.current.fileActions.run(id),
+      toggleComments: (open) => commands.current.cmCtl?.toggle(open),
+    })
+  }, [ctl])
+  useLayoutEffect(() => viewCtl.activate(), [viewCtl])
+
   let body: ReactNode
   if (error) {
     body = (
       <div className="de-center">
         <div className="de-error" role="alert">
-          <strong>Cannot open document.</strong>
+          <strong>{t.bar.cannotOpen}</strong>
           <div>{error.message}</div>
         </div>
       </div>
@@ -573,10 +599,10 @@ export function DocViewer(props: DocViewerProps) {
     body = src || opened ? (
       <div className="de-center">
         <div className="de-spinner" />
-        <div>{progress?.phase === 'download' && progress.total ? `Downloading… ${fmtBytes(progress.loaded)} / ${fmtBytes(progress.total)}` : 'Opening…'}</div>
+        <div>{progress?.phase === 'download' && progress.total ? t.bar.downloading(fmtBytes(progress.loaded), fmtBytes(progress.total)) : t.bar.opening}</div>
       </div>
     ) : (
-      <div className="de-center">No document</div>
+      <div className="de-center">{t.bar.noDocument}</div>
     )
   } else if (isPicture) body = <PictureView key={clientKey(client)} client={client} />
   else if (client.kind === 'docx') body = <DocxView key={clientKey(client)} client={client} initialZoom={zoom} />
@@ -585,7 +611,8 @@ export function DocViewer(props: DocViewerProps) {
 
   return (
     <IconsProvider icons={props.icons}>
-    <div ref={rootRef} className={root.className + (className ? ` ${className}` : '')} style={root.style} onKeyDown={onKeyDown}>
+    <UIComponentsProvider components={props.components}>
+    <div ref={rootRef} className={root.className + (headless ? ' de-headless' : '') + (className ? ` ${className}` : '')} style={root.style} onKeyDown={onKeyDown}>
       {toolbar && (
         <div className="de-bar">
           {client && <span className={`de-badge de-badge-${client.kind}`}>{client.info?.from ?? client.info?.converted ?? (client.info?.imported ? IMPORTED_BADGE[client.info.imported] : client.kind)}</span>}
@@ -603,11 +630,11 @@ export function DocViewer(props: DocViewerProps) {
               className={'de-mode' + (codeShown ? ' de-mode-on' : '')}
               onClick={() => setCodeOpen((v) => !v)}
               aria-pressed={codeShown}
-              title={codeShown ? 'Hide the source' : 'Edit the source side by side with the document'}
+              title={codeShown ? t.bar.codeHide : t.bar.codeShow}
               data-testid="de-code-toggle"
             >
               <Icon name="code" size={16} />
-              Code
+              {t.bar.code}
             </button>
           )}
           {cmCtl && (
@@ -615,31 +642,31 @@ export function DocViewer(props: DocViewerProps) {
               type="button"
               className={'de-mode de-cm-toggle' + (cmState.open ? ' de-mode-on' : '')}
               onClick={() => cmCtl.toggle()}
-              title={cmCtl.canComment ? `Comments (${COMMENT_KEYS} to comment on the selection)` : 'Comments'}
+              title={cmCtl.canComment ? t.bar.commentsTitle(COMMENT_KEYS) : t.bar.comments}
               aria-pressed={cmState.open}
               data-testid="de-comments-toggle"
             >
               <Icon name="comment" size={16} />
-              Comments
+              {t.bar.comments}
               {cmCount > 0 && <span className="de-cm-n">{cmCount}</span>}
             </button>
           )}
           {client && allowEdit && !readOnly && !codeShown && (
-            <button type="button" className={editing ? 'de-mode de-mode-on' : 'de-mode'} onClick={() => setEditing((v) => !v)} title={editing ? 'Switch to viewing' : 'Edit document'}>
+            <button type="button" className={editing ? 'de-mode de-mode-on' : 'de-mode'} onClick={() => setEditing((v) => !v)} title={editing ? t.bar.toView : t.bar.toEdit}>
               <Icon name={editing ? 'view' : 'edit'} size={16} />
-              {editing ? 'View' : 'Edit'}
+              {editing ? t.bar.view : t.bar.edit}
             </button>
           )}
           {client && canSave && ((editing && !readOnly) || dirty) && (
-            <button type="button" className={dirty ? 'de-mode de-save-dirty' : 'de-mode'} disabled={saving} onClick={() => void save()} title="Save a copy (Ctrl+S)">
+            <button type="button" className={dirty ? 'de-mode de-save-dirty' : 'de-mode'} disabled={saving} onClick={() => void save()} title={t.bar.saveTitle}>
               <Icon name="save" size={16} />
-              {saving ? 'Saving…' : dirty || onSave ? 'Save' : 'Download'}
+              {saving ? t.bar.saving : dirty || onSave ? t.bar.save : t.bar.download}
             </button>
           )}
           <div className="de-progress" style={{ width: `${busy ? Math.max(pct, 3) : 100}%`, opacity: busy ? 1 : 0 }} />
         </div>
       )}
-      {toolbar && client && docEditable && <div className="de-ebar-host" ref={setBarEl} />}
+      {(toolbar || headless) && client && docEditable && <div className="de-ebar-host" ref={setBarEl} />}
       <div className={'de-body' + (codeShown && stacked ? ' de-body-stacked' : '')} ref={bodyRef}>
         {codeShown && (
           <div className="de-src-pane" style={stacked ? { height: `${split * 100}%` } : { width: `${split * 100}%` }}>
@@ -655,13 +682,13 @@ export function DocViewer(props: DocViewerProps) {
                 readOnly={!allowEdit || !!props.collab}
                 notice={
                   dirty && !sourceEdited.current && !rebuilds
-                    ? 'Changes made in the document are not in this source: editing it builds the document again from the source.'
+                    ? t.bar.sourceStale
                     : undefined
                 }
                 onCopy={() =>
                   navigator.clipboard?.writeText(code).then(
-                    () => setToast('Source copied'),
-                    () => setToast('Cannot copy here'),
+                    () => setToast(t.bar.sourceCopied),
+                    () => setToast(t.bar.cannotCopy),
                   )
                 }
                 onDownload={allowDownload ? () => download(new Blob([code], { type: PLAIN_FILE[srcFormat!].mime }), sourceName()) : undefined}
@@ -674,7 +701,7 @@ export function DocViewer(props: DocViewerProps) {
             className="de-split-handle"
             role="separator"
             aria-orientation={stacked ? 'horizontal' : 'vertical'}
-            aria-label="Resize the source"
+            aria-label={t.bar.resizeSource}
             aria-valuenow={Math.round(split * 100)}
             aria-valuemin={15}
             aria-valuemax={85}
@@ -699,14 +726,14 @@ export function DocViewer(props: DocViewerProps) {
         {cmCtl && cmState.open && <CommentsPanel ctl={cmCtl} />}
       </div>
       {toast && <Toast text={toast} onDone={clearToast} />}
-      {confirm && <ConfirmDialog title="Discard unsaved changes?" message={confirm.message} ok="Continue" onOk={confirm.run} onClose={() => setConfirm(null)} />}
+      {confirm && <ConfirmDialog title={t.bar.discardTitle} message={confirm.message} ok={t.bar.discardOk} onOk={confirm.run} onClose={() => setConfirm(null)} />}
       {renaming && client && (
         <PromptDialog
           spec={{
-            title: 'Rename',
-            label: 'File name',
+            title: t.bar.renameTitle,
+            label: t.bar.renameLabel,
             initial: baseName,
-            ok: 'Rename',
+            ok: t.bar.renameOk,
             onOk: (v) => {
               const next = v.trim().replace(/[\\/:*?"<>|]+/g, ' ').replace(new RegExp(`(\\${officeExt}|\\${saveExt})$`, 'i'), '')
               if (!next) return
@@ -721,25 +748,26 @@ export function DocViewer(props: DocViewerProps) {
         <DetailsDialog
           client={client}
           file={[
-            ['Name', saveName],
+            [t.details.name, saveName],
             [
-              'Type',
+              t.details.type,
               client.info?.from
-                ? `${FROM_LABEL[client.info.from]} (view only)`
+                ? t.details.viewOnly(t.from[client.info.from])
                 : client.info?.converted
-                  ? `${CONVERTED_LABEL[client.info.converted]}, opened as ${KIND_LABEL[client.kind]}`
+                  ? t.details.openedAs(t.converted[client.info.converted], t.kind[client.kind])
                   : client.info?.imported
-                    ? `${IMPORTED_LABEL[client.info.imported]}, opened as ${KIND_LABEL[client.kind]}`
-                    : KIND_LABEL[client.kind],
+                    ? t.details.openedAs(t.imported[client.info.imported], t.kind[client.kind])
+                    : t.kind[client.kind],
             ],
-            ...(client.size > 0 ? [['File size', fmtBytes(client.size)] as [string, string]] : []),
-            ...(dirty ? [['Status', 'Unsaved changes'] as [string, string]] : []),
+            ...(client.size > 0 ? [[t.details.fileSize, fmtBytes(client.size)] as [string, string]] : []),
+            ...(dirty ? [[t.details.status, t.details.unsaved] as [string, string]] : []),
           ]}
           stats={fileOps.current?.stats() ?? []}
           onClose={() => setDetails(false)}
         />
       )}
     </div>
+    </UIComponentsProvider>
     </IconsProvider>
   )
 }

@@ -1,6 +1,6 @@
 {
   "name": "@p10node/office-engine",
-  "version": "0.1.0",
+  "version": "0.16.0-mk.1",
   "description": "Browser engine to view DOCX, XLSX, PPTX progressively (worker-based, range-loading, virtualized React views)",
   "type": "module",
   "license": "MIT",
@@ -22,6 +22,10 @@
     "./embed": {
       "types": "./dist/types/embed.d.ts",
       "import": "./dist/embed.js"
+    },
+    "./locales/de": {
+      "types": "./dist/types/locales/de.d.ts",
+      "import": "./dist/locales/de.js"
     },
     "./worker": "./dist/office-engine.worker.js",
     "./embed.js": "./dist/office-engine.embed.js",

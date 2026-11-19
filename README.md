@@ -78,6 +78,7 @@ Also online at [p10node.github.io/office-engine](https://p10node.github.io/offic
 - **Comments**: threads with replies, resolve, edit / delete, @mentions; on DOCX text, XLSX cells and PPTX slides, stored in the file the way Word, Excel and PowerPoint store them
 - **Real-time collaboration**: live edits, avatars, collaborators' cursors, offline edits sync on reconnect
 - **Dark mode and theming**: `theme="dark"` or `"auto"` (follows the OS), or a theme object with design tokens for colors, type and shape ([Theming](docs/theming.md)); documents keep their own colors
+- **Translatable UI**: every text of the bars, menus and dialogs from one typed table; only English bundled by default; German available through an optional import with `de-DE` formatting (see [UI texts](docs/api.md#ui-texts)); any text replaceable through `strings`
 - **Embed anywhere**: React component, hook, vanilla `mount()`, `<office-viewer>` web component, single `<script>` file
 
 Full list, format coverage and limitations: [Features](docs/features.md).

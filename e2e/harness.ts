@@ -38,7 +38,8 @@ export function useBrowser() {
   beforeAll(async () => {
     server = await createServer({ configFile: 'vite.e2e.config.ts', server: { port: 0, strictPort: false } })
     await server.listen()
-    const browser = await chromium.launch()
+    // PLAYWRIGHT_CHANNEL=chrome / msedge: an installed browser instead of Playwright's own Chromium
+    const browser = await chromium.launch({ channel: process.env.PLAYWRIGHT_CHANNEL || undefined })
     shared = { base: server.resolvedUrls!.local[0], browser }
   })
   afterEach(async () => {
@@ -56,9 +57,9 @@ export function useBrowser() {
 export type Params = Record<string, string | number | boolean>
 
 /** Opens the fixture with DocViewer props from `params` and waits for the document. */
-export async function viewer(params: Params, opts: { wait?: boolean; page?: string; viewport?: { width: number; height: number } } = {}) {
+export async function viewer(params: Params, opts: { wait?: boolean; page?: string; viewport?: { width: number; height: number }; locale?: string } = {}) {
   if (!shared) throw new Error('useBrowser() missing')
-  const ctx = await shared.browser.newContext({ viewport: opts.viewport ?? { width: 1600, height: 1000 }, acceptDownloads: true })
+  const ctx = await shared.browser.newContext({ viewport: opts.viewport ?? { width: 1600, height: 1000 }, acceptDownloads: true, locale: opts.locale })
   open.add(ctx)
   const page = await ctx.newPage()
   const v = new Viewer(page, ctx)

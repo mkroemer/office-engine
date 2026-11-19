@@ -540,6 +540,9 @@
   pointer-events: none;
   z-index: 3;
 }
+.de-tabs[hidden] {
+  display: none;
+}
 .de-tabs {
   display: flex;
   align-items: stretch;
@@ -627,7 +630,7 @@
 /* empty placeholders while editing (new slides, blank presentations) */
 .de-slide-editable .de-el > .de-txt:empty { outline: 1.5px dashed var(--de-ph-outline); outline-offset: -1px; }
 .de-slide-editable .de-el > .de-txt:empty::after {
-  content: 'Click to add text';
+  content: attr(data-placeholder);
   color: var(--de-ph-hint);
   font: 28px/1.2 var(--de-font);
   text-align: center;
@@ -688,7 +691,7 @@
   color: var(--de-ink);
 }
 .de-ebar-it { display: inline-flex; align-items: center; flex: none; }
-.de-ebar-morewrap { margin-left: auto; }
+.de-ebar-morewrap { margin-left: auto; flex: none; }
 .de-tb-pop.de-ebar-more {
   left: auto;
   right: 0;
@@ -1137,6 +1140,12 @@
 }
 .de-outline-item:hover { background: var(--de-hover-solid); }
 .de-outline-item.on { color: var(--de-on-ink); font-weight: 600; }
+/* controls a host places around a headless viewer (chrome.tsx), in a root of their own (useThemeRoot host): sized by
+   them, and stacked above the viewer that follows so their popups are not covered or clipped */
+.de-root.de-host { height: auto; min-height: 0; overflow: visible; z-index: 30; }
+.de-ctl-zoom { display: inline-flex; align-items: center; gap: 2px; }
+.de-ctl-outline { display: flex; flex-direction: column; min-height: 0; overflow-y: auto; }
+.de-ctl-status { color: var(--de-muted); font-size: 12px; white-space: nowrap; }
 .de-outline-empty { flex-shrink: 0; padding: 8px 10px; color: var(--de-muted); }
 .de-outline-toggle {
   position: absolute;
