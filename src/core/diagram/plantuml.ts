@@ -30,7 +30,7 @@ export const renderPlantUml = (src: string): Rendered[] => parsePlantUml(src).ma
 
 function parseBlock(kind: string, raw: string[]): Model {
   if (kind === 'dot') return { t: 'graph', graph: parseDot(raw.join('\n'))[0] }
-  const { lines, title, dir } = clean(raw)
+  const { lines, title, dir } = clean(preprocess(raw))
   switch (kind) {
     case 'uml':
       break
@@ -50,6 +50,101 @@ function parseBlock(kind: string, raw: string[]): Model {
     default:
       return { t: 'graph', graph: { ...description(lines, dir), title } }
   }
+}
+
+/** a quoted / bracketed text without its delimiters */
+const unwrap = (s: string) => s.trim().replace(/^"(.*)"$/s, '$1').replace(/^\((.*)\)$|^\[(.*)\]$|^:(.*):$/s, '$1$2$3')
+
+/**
+ * `Guest as g`, `"Guest User" as g`, `g as "Guest User"`, `(Use) as UC`: the quoted / bracketed side is the name; with two plain
+ * words the first is the name and the last the alias (as in the official examples). Alone, the text is both.
+ */
+function nameAlias(rest: string): { id: string; label: string } {
+  const m = /^("[^"]*"|\([^)]*\)|\[[^\]]*\]|:[^:]*:|\S+)\s+as\s+(.+)$/.exec(rest.trim())
+  if (!m) {
+    const v = unwrap(rest)
+    return { id: v, label: v }
+  }
+  const [x, y] = [m[1], m[2].trim()]
+  if (y.startsWith('"') && !/^["([:]/.test(x)) return { id: unwrap(x), label: unwrap(y) }
+  return { id: unwrap(y), label: unwrap(x) }
+}
+
+const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** `!define`, `!$var`, `!undef`, `!if` / `!ifdef` / `!ifndef` / `!else` / `!endif`: expanded in place (other `!` lines are left for `clean`) */
+function preprocess(raw: string[]): string[] {
+  if (!raw.some((l) => l.trimStart().startsWith('!'))) return raw
+  const defs = new Map<string, { params?: string[]; body: string }>()
+  const stack: { on: boolean; taken: boolean }[] = []
+  const out: string[] = []
+  const unq = (v: string) => v.trim().replace(/^(["'])(.*)\1$/, '$2')
+  const expand = (t: string): string => {
+    for (let pass = 0; pass < 4 && defs.size; pass++) {
+      const names = [...defs.keys()].sort((a, b) => b.length - a.length).map(esc)
+      const before = t
+      t = t.replace(new RegExp(`(?<![\\w$])(${names.join('|')})(?![\\w])(\\([^)]*\\))?`, 'g'), (all, name: string, args?: string) => {
+        const d = defs.get(name)!
+        if (!d.params) return d.body + (args ?? '')
+        if (!args) return all
+        const vals = args.slice(1, -1).split(',').map((x) => unq(x))
+        return d.params.reduce((b, p, k) => b.replace(new RegExp(`(?<![\\w$])${esc(p)}(?!\\w)`, 'g'), () => vals[k] ?? ''), d.body)
+      })
+      if (t === before) break
+    }
+    return t
+  }
+  const truthy = (e: string) => {
+    const x = expand(e).trim()
+    let m: RegExpExecArray | null
+    if ((m = /^(.*?)\s*(==|!=|<=|>=|<|>)\s*(.*)$/.exec(x))) {
+      const [a, b] = [unq(m[1]), unq(m[3])]
+      const [na, nb] = [Number(a), Number(b)]
+      const num = a !== '' && b !== '' && !Number.isNaN(na) && !Number.isNaN(nb)
+      switch (m[2]) {
+        case '==': return a === b
+        case '!=': return a !== b
+        case '<': return num && na < nb
+        case '>': return num && na > nb
+        case '<=': return num && na <= nb
+        default: return num && na >= nb
+      }
+    }
+    const v = unq(x).toLowerCase()
+    return !!v && v !== '0' && v !== 'false' && v !== '%false()'
+  }
+  const on = () => stack.every((f) => f.on)
+  for (const line of raw) {
+    const t = line.trim()
+    let m: RegExpExecArray | null
+    if (!t.startsWith('!')) {
+      if (on()) out.push(expand(line))
+      continue
+    }
+    if ((m = /^!(ifdef|ifndef)\s+(\S+)/i.exec(t))) {
+      const c = defs.has(m[2]) === (m[1].toLowerCase() === 'ifdef')
+      stack.push({ on: c, taken: c })
+    } else if ((m = /^!if\s+(.*)$/i.exec(t))) {
+      const c = truthy(m[1])
+      stack.push({ on: c, taken: c })
+    } else if ((m = /^!elseif\s+(.*)$/i.exec(t)) && stack.length) {
+      const f = stack[stack.length - 1]
+      f.on = !f.taken && truthy(m[1])
+      f.taken ||= f.on
+    } else if (/^!else\b/i.test(t) && stack.length) {
+      const f = stack[stack.length - 1]
+      f.on = !f.taken
+      f.taken = true
+    } else if (/^!endif\b/i.test(t)) stack.pop()
+    else if (!on()) continue
+    else if ((m = /^!(\$[\w]+)\s*(\?)?=\s*(.*)$/.exec(t))) {
+      if (!m[2] || !defs.has(m[1])) defs.set(m[1], { body: unq(expand(m[3])) })
+    } else if ((m = /^!define\s+(\w+)\(([^)]*)\)\s*(.*)$/i.exec(t))) defs.set(m[1], { params: m[2].split(',').map((x) => x.trim()).filter(Boolean), body: m[3] })
+    else if ((m = /^!define\s+(\w+)\s*(.*)$/i.exec(t))) defs.set(m[1], { body: m[2] })
+    else if ((m = /^!undef\s+(\S+)/i.exec(t))) defs.delete(m[1])
+    else out.push(line)
+  }
+  return out
 }
 
 /** creole / HTML markup out of a label */
@@ -127,10 +222,12 @@ function umlKind(lines: string[]): 'activity' | 'sequence' | 'state' | 'descript
   const has = (re: RegExp) => lines.some((l) => re.test(l))
   if (has(/^(start|stop)$/) || has(/^:[\s\S]*[;|<>/\]}]$/) || has(/^:/) || has(/^(if\s*\(.*\)\s*then|while\s*\(|repeat\b|fork$|endif$)/)) return 'activity'
   if (has(/\[\*\]/) || has(/^state\s/)) return 'state'
-  if (has(/^(participant|boundary|control|collections|queue|autonumber|activate|deactivate|alt|loop|return|ref\s+over)\b/) || has(/^(==.*==|\.\.\.|\|\|\d*\|\|)$/)) return 'sequence'
+  if (has(/^(participant|autonumber|activate|deactivate|alt|loop|return|ref\s+over)\b/) || has(/^(==.*==|\.\.\.|\|\|\d*\|\|)$/)) return 'sequence'
   if (has(/^(abstract|class|interface|enum|annotation|struct|protocol|object|map|json|usecase|component|node|cloud|package|namespace|folder|frame|rectangle|artifact|storage|card|file|agent|person|hexagon|together)\b/)) return 'description'
+  // actor / database / boundary… with plain messages and no shorthand or UML link: a sequence (they also exist in deployment diagrams, but those have the keywords above)
+  if (has(/^(actor|database|entity|boundary|control|queue|collections)\b/) && !has(/^[(\[:]|<\|--|--\|>|\*--|\bo--|\.\.>/)) return 'sequence'
   if (has(/\([^)]*\)|\[[^\]*]+\]|<\|--|--\|>|\*--|o--|\.\.>/)) return 'description'
-  if (has(/^(actor|database|entity)\b/) || has(/^\S+\s*<?-{1,2}>?>?\s*\S+\s*:/)) return 'sequence'
+  if (has(/^(actor|database|entity|boundary|control|queue|collections)\b/) || has(/^\S+\s*<?-{1,2}>?>?\s*\S+\s*:/)) return 'sequence'
   return 'description'
 }
 
@@ -162,13 +259,7 @@ function sequence(lines: string[]) {
       const col = /\s+(#\w+)\s*$/.exec(rest)
       if (col) rest = rest.slice(0, col.index).trim()
       rest = rest.replace(/<<[^>]*>>/g, '').trim()
-      let pid = rest
-      let label = rest
-      const as1 = /^"([^"]+)"\s+as\s+(\S+)$/.exec(rest)
-      const as2 = /^(\S+)\s+as\s+"?([^"]+)"?$/.exec(rest)
-      if (as1) [pid, label] = [as1[2], as1[1]]
-      else if (as2) [pid, label] = [as2[1], as2[2]]
-      else pid = label = id(rest)
+      const { id: pid, label } = nameAlias(rest)
       b.participant(pid, { kind: KIND[m[1].toLowerCase()], label: pText(label), fill: col ? color(col[1].slice(1)) ?? color(col[1]) : undefined })
       continue
     }
@@ -396,19 +487,18 @@ function description(lines: string[], dir?: 'LR' | 'TB') {
       continue
     }
     // class-like declaration
-    if ((m = /^(abstract\s+class|abstract|class|interface|enum|annotation|struct|protocol|entity|exception|metaclass|stereotype|object|map|json)\s+(?:"([^"]+)"\s+as\s+(\S+)|(\S+)\s+as\s+"([^"]+)"|([^\s{<#]+))(?:\s*<([^>]+)>)?\s*(<<.+?>>)?\s*(#\S+)?\s*(\{)?\s*(\})?$/.exec(l)) && CLASSES.has(m[1].toLowerCase().replace(/\s+/, ' '))) {
+    if ((m = /^(abstract\s+class|abstract|class|interface|enum|annotation|struct|protocol|entity|exception|metaclass|stereotype|object|map|json)\s+("[^"]+"|[^\s{<#"]+)(?:\s+as\s+("[^"]+"|[^\s{<#]+))?(?:\s*<([^>]+)>)?\s*(<<.+?>>)?\s*(#\S+)?\s*(\{)?\s*(\})?$/.exec(l)) && CLASSES.has(m[1].toLowerCase().replace(/\s+/, ' '))) {
       const kind = m[1].toLowerCase().replace(/\s+/, ' ')
-      const cid = m[3] ?? m[4] ?? m[6]
-      const label = m[2] ?? m[5] ?? cid
-      const generic = m[7] ? `<${m[7]}>` : ''
+      const { id: cid, label } = nameAlias(m[3] ? `${m[2]} as ${m[3]}` : m[2])
+      const generic = m[4] ? `<${m[4]}>` : ''
       b.node(cid, { label: pText(label) + generic, shape: 'rect' }, cur())
       const c: ClassInfo = info.get(cid) ?? { kind, sections: [[], []] }
       c.kind = kind
-      if (m[8]) c.stereo = m[8].replace(/^<<|>>$/g, '').trim()
-      const fill = m[9] ? color(m[9].slice(1)) ?? color(m[9]) : undefined
+      if (m[5]) c.stereo = m[5].replace(/^<<|>>$/g, '').trim()
+      const fill = m[6] ? color(m[6].slice(1)) ?? color(m[6]) : undefined
       if (fill) b.node(cid).style = { fill }
       info.set(cid, c)
-      if (m[10] && !m[11]) {
+      if (m[7] && !m[8]) {
         c.sections = [[]]
         body = { id: cid, c }
       }
@@ -422,17 +512,7 @@ function description(lines: string[], dir?: 'LR' | 'TB') {
       if (col) rest = rest.slice(0, col.index).trim()
       const stereo = /\s*<<(.+?)>>\s*$/.exec(rest)
       if (stereo) rest = rest.slice(0, stereo.index).trim()
-      let id = rest
-      let label = rest
-      const a1 = /^(.+?)\s+as\s+(.+)$/.exec(rest)
-      if (a1) {
-        const [x, y] = [a1[1].trim(), a1[2].trim()]
-        // the quoted / bracketed side is the label
-        if (/^["([:]/.test(x)) [label, id] = [x, y]
-        else [id, label] = [x, y]
-      }
-      label = label.replace(/^\((.*)\)$|^\[(.*)\]$|^:(.*):$/, '$1$2$3')
-      id = id.replace(/^\((.*)\)$|^\[(.*)\]$|^:(.*):$/, '$1$2$3').replace(/^"(.*)"$/, '$1')
+      const { id, label } = nameAlias(rest)
       const shape = kind === 'usecase' ? 'ellipse' : kind === 'actor' ? 'actor' : (ELEMENT[kind] ?? 'rect')
       const n = b.node(id, { label: pText(label) + (stereo ? `\n«${stereo[1]}»` : ''), shape }, cur())
       const fill = col ? color(col[1].slice(1)) ?? color(col[1]) : undefined
@@ -538,11 +618,10 @@ function state(lines: string[], dir?: 'LR' | 'TB') {
     }
     if (l === '--' || l === '||') continue
     let m: RegExpExecArray | null
-    if ((m = /^state\s+(?:"([^"]+)"\s+as\s+(\S+?)|(\S+?)\s+as\s+"([^"]+)"|("[^"]+"|[^\s{<#]+))\s*(<<(\w+)>>)?\s*(#\S+)?\s*(\{)?$/i.exec(l))) {
-      const id = (m[2] ?? m[3] ?? m[5]).replace(/^"(.*)"$/, '$1')
-      const label = m[1] ?? m[4] ?? id
-      const kind = m[7]?.toLowerCase()
-      if (m[9]) {
+    if ((m = /^state\s+("[^"]+"|[^\s{<#"]+)(?:\s+as\s+("[^"]+"|[^\s{<#]+))?\s*(<<(\w+)>>)?\s*(#\S+)?\s*(\{)?$/i.exec(l))) {
+      const { id, label } = nameAlias(m[2] ? `${m[1]} as ${m[2]}` : m[1])
+      const kind = m[4]?.toLowerCase()
+      if (m[6]) {
         b.cluster(id, pText(label), cur())
         scope.push(id)
         continue
@@ -550,7 +629,7 @@ function state(lines: string[], dir?: 'LR' | 'TB') {
       const shape: Shape | undefined =
         kind === 'fork' || kind === 'join' ? 'bar' : kind === 'choice' ? 'diamond' : kind === 'start' || kind === 'entrypoint' ? 'start' : kind === 'end' || kind === 'exitpoint' ? 'end' : undefined
       b.node(id, { label: shape ? '' : pText(label), shape }, cur())
-      const fill = m[8] ? color(m[8].slice(1)) ?? color(m[8]) : undefined
+      const fill = m[5] ? color(m[5].slice(1)) ?? color(m[5]) : undefined
       if (fill) b.node(id).style = { fill }
       continue
     }
@@ -613,9 +692,13 @@ function activity(raw: string[]) {
   let i = 0
   let n = 0
   const scope: string[] = []
+  let lane: string | undefined
+  let lastNode: string | undefined
+  const here = () => scope[scope.length - 1] ?? lane
   const node = (shape: Shape, label = '') => {
     const id = `a${n++}`
-    b.node(id, { shape, label }, scope[scope.length - 1])
+    b.node(id, { shape, label }, here())
+    lastNode = id
     return id
   }
   let pendingLabel: string | undefined
@@ -729,13 +812,26 @@ function activity(raw: string[]) {
       } else if ((m = /^(?:partition|group|package|rectangle|card)\s+(?:"([^"]*)"|(\S[^{]*?))\s*(?:#\S+)?\s*\{?$/i.exec(l))) {
         const name = (m[1] ?? m[2]).trim()
         const cid = `__p${n++}`
-        b.cluster(cid, pText(name), scope[scope.length - 1])
+        b.cluster(cid, pText(name), here())
         scope.push(cid)
       } else if (l === '}' || /^end\s*group$/i.test(l)) scope.pop()
-      else if (/^[rh]?note\b/i.test(l) || /^floating\s+note\b/i.test(l)) {
-        if (!/:/.test(l)) while (i < lines.length && !/^end\s*note$/i.test(lines[i++]));
+      else if ((m = /^(floating\s+)?[rh]?note\s+(?:left|right|top|bottom)\b\s*(?:#\w+)?\s*(?::\s*(.*))?$/i.exec(l))) {
+        let text = m[2]
+        if (text === undefined) {
+          const buf: string[] = []
+          while (i < lines.length && !/^end\s*note$/i.test(lines[i])) buf.push(lines[i++])
+          i++
+          text = buf.join('\n')
+        }
+        const id = `a${n++}`
+        b.node(id, { shape: 'note', label: pText(text), style: { fill: '#fff6c8', stroke: '#c9a227' } }, here())
+        if (!m[1] && lastNode) b.edge({ from: lastNode, to: id, line: 'dashed', head: 'none' })
+      } else if ((m = /^\|(?:#\w+\|)?([^|]+)\|$/.exec(l))) {
+        // a swimlane: the nodes after it are its members
+        lane = `__lane:${m[1].trim()}`
+        b.cluster(lane, pText(m[1]))
       }
-      // swimlanes, arrows styles, labels we do not draw
+      // arrow styles, labels we do not draw
     }
     return cur
   }

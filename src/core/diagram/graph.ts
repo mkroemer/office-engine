@@ -283,6 +283,7 @@ function drawNode(svg: Svg, n: GNode, b: Box, cx: number, cy: number) {
     case 'none':
       return void txt()
     case 'round':
+      if (n.sections?.length) return drawSections(svg, n, x, y, w)
       svg.rect(x, y, w, h, p, 6)
       break
     case 'stadium':

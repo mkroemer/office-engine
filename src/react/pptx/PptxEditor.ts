@@ -83,6 +83,8 @@ export class PptxEditor implements RichHost<EPara> {
   body?: TextBody
   slide = -1
   sid = -1
+  /** [row, column] when the text is a table cell's (`sid` is then the table's id) */
+  cell?: [number, number]
   pendingSel: Sel | null = null
   pendingNoRefocus = false
   private history: Entry[] = []
@@ -90,12 +92,14 @@ export class PptxEditor implements RichHost<EPara> {
   private pend: { s: Partial<RunStyle>; d: PRunSet; at: { pa: string; o: number } } | null = null
   private timer: ReturnType<typeof setTimeout> | undefined
   private changedSinceCommit = false
-  private commits: { slide: number; sid: number; specs: PParaSpec[]; failed?: number }[] = []
+  private commits: { slide: number; sid: number; cell?: [number, number]; specs: PParaSpec[]; failed?: number }[] = []
   private committing?: Promise<void>
   onChange?: () => void
   onCommitted?: (slide: number, model: SlideModel) => void
   onDirty?: () => void
   onState?: (s: PptxFormat | null) => void
+  /** Tab / Shift+Tab in a table cell: go to the next / previous cell */
+  onCellMove?: (d: 1 | -1) => void
   private stateSubs = new Set<(s: PptxFormat | null) => void>()
   /** hears the current formatting state, then every one `onState` does (the viewer's controller, beside the toolbar) */
   subscribeState(fn: (s: PptxFormat | null) => void): () => void {
@@ -118,10 +122,11 @@ export class PptxEditor implements RichHost<EPara> {
     return this.sid >= 0
   }
 
-  begin(slide: number, sid: number, body: TextBody) {
+  begin(slide: number, sid: number, body: TextBody, cell?: [number, number]) {
     this.end()
     this.slide = slide
     this.sid = sid
+    this.cell = cell
     this.body = body
     this.paras = (body.paras.length ? body.paras : [{ algn: 'left', marL: 0, indent: 0, spcBef: 0, spcAft: 0, runs: [], endSz: 18 } as TPara]).map(toEdit)
     this.history = []
@@ -136,6 +141,7 @@ export class PptxEditor implements RichHost<EPara> {
     this.input.clearSelection()
     this.sid = -1
     this.slide = -1
+    this.cell = undefined
     this.body = undefined
     this.emitState(null)
   }
@@ -268,7 +274,7 @@ export class PptxEditor implements RichHost<EPara> {
           r.t === 'fld' ? { text: '', src: r.src as [number, number], fld: true } : { text: r.text ?? '', src: r.src as [number, number] | undefined, set: r.d as PRunSet | undefined },
         ),
       }))
-      this.commits.push({ slide: this.slide, sid: this.sid, specs })
+      this.commits.push({ slide: this.slide, sid: this.sid, cell: this.cell, specs })
     }
     if (!this.committing) {
       this.committing = this.drainCommits().finally(() => {
@@ -283,7 +289,7 @@ export class PptxEditor implements RichHost<EPara> {
       const c = this.commits[0]
       let model: SlideModel
       try {
-        model = await this.client.call('pptx.setText', c.slide, c.sid, c.specs)
+        model = await this.client.call('pptx.setText', c.slide, c.sid, c.specs, c.cell)
       } catch (e) {
         // Retain a failed snapshot for retry, including after the active shape changes: but not for ever. An edit the
         // worker refuses every time would fail every save from here on, the edits made after it never written.
@@ -366,6 +372,22 @@ export class PptxEditor implements RichHost<EPara> {
 
   indentLevel(d: 1 | -1) {
     this.paraOp((p) => ({ ...p, pp: { ...p.pp, lvl: Math.max(0, Math.min(8, lvlOf(p) + d)) } }), 'indent')
+  }
+
+  /**
+   * Tab / Shift+Tab: the level of a list item (the keys of the Increase / Decrease indent buttons), the next / previous
+   * cell in a table. Anywhere else Tab types a tab and Shift+Tab does nothing.
+   */
+  tab(sel: Sel, shift: boolean): boolean {
+    if (this.cell) {
+      this.onCellMove?.(shift ? -1 : 1)
+      return true
+    }
+    const [a, b] = ordered(this, sel)
+    const items = this.span(a.pa, b.pa).filter((pa) => bulletOf(this.para(pa)) !== 'none')
+    if (!items.length) return shift
+    this.indentLevel(shift ? -1 : 1)
+    return true
   }
 
   setLineSpacing(x: number) {

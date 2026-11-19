@@ -79,6 +79,6 @@ export function normalizeRef(a: RefAddr): RefAddr {
   return a
 }
 
-export function refInBounds(a: RefAddr): boolean {
-  return a.r0 >= 0 && a.c0 >= 0 && a.r1 <= MAX_ROW && a.c1 <= MAX_COL && a.r1 >= 0 && a.c1 >= 0
+export function refInBounds(a: RefAddr, maxRow = MAX_ROW): boolean {
+  return a.r0 >= 0 && a.c0 >= 0 && a.r1 <= maxRow && a.c1 <= MAX_COL && a.r1 >= 0 && a.c1 >= 0
 }

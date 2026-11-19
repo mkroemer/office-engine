@@ -123,8 +123,9 @@ export const en = {
     close: 'Close',
     preparingPdf: 'Preparing PDF… choose “Save as PDF” in the print dialog',
     preparing: 'Preparing…',
-    unsupported: (name: string) =>
-      `Cannot open “${name}”: supported files are Word, Excel, PowerPoint (also 97-2003), OpenDocument, RTF, Pages, Keynote, Numbers, Visio, CSV, text, Markdown, HTML, SVG, Mermaid, PlantUML and Graphviz (also gzip-compressed: .svgz, .csv.gz)`,
+    /** `what`: what the file is instead, where its first bytes tell (a ZIP archive, an executable, ...) */
+    unsupported: (name: string, what?: string) =>
+      `Cannot open “${name}”${what ? ` (it is ${what})` : ''}: supported files are Word, Excel, PowerPoint (also 97-2003), OpenDocument, RTF, Pages, Keynote, Numbers, Visio, CSV, text, Markdown, HTML, SVG, Mermaid, PlantUML and Graphviz (also gzip-compressed: .svgz, .csv.gz)`,
   },
 
   zoom: {
@@ -354,6 +355,12 @@ export const en = {
   xlsx: {
     clipboardCopyBlocked: 'The browser blocked clipboard access: select fewer rows to copy them',
     pasteLimit: (max: number, total: number, locale: string | undefined = undefined) => `Only the first ${max.toLocaleString(locale)} of the ${total.toLocaleString(locale)} cells were pasted`,
+    fillLimit: (max: number, locale: string | undefined = undefined) => `The selection has more than ${max.toLocaleString(locale)} cells: select fewer to fill them`,
+    mergedPaste: 'Cannot paste here: the cells would fill merged cells. Unmerge them, or paste into one cell.',
+    /** after a merge that dropped `n` values; `undo` is the Undo shortcut */
+    mergeDropped: (n: number, undo: string) => `Merging keeps only the upper-left value of each merged cell: ${n} other value${n > 1 ? 's were' : ' was'} removed. Undo (${undo}) brings ${n > 1 ? 'them' : 'it'} back.`,
+    /** the cell's input field */
+    cell: 'Cell',
     status: (rows: number, cols: number, locale: string | undefined = undefined) => `${rows.toLocaleString(locale)} ${rows === 1 ? 'row' : 'rows'} × ${cols.toLocaleString(locale)} ${cols === 1 ? 'col' : 'cols'}`,
     statusLoading: ' · loading…',
     overLimit: (max: number, locale: string | undefined = undefined) => ` · over Excel’s ${max.toLocaleString(locale)}-row limit: save as CSV`,
@@ -366,7 +373,7 @@ export const en = {
     commentHint: 'Select a cell to comment on.',
     addSheet: 'Add sheet',
     renameSheet: 'Rename',
-    duplicateSheet: 'Duplicate name → new sheet',
+    duplicateSheet: 'Duplicate sheet',
     moveLeft: 'Move left',
     moveRight: 'Move right',
     deleteSheet: 'Delete sheet',
@@ -403,6 +410,9 @@ export const en = {
     decLess: 'Decrease decimal places',
     decMore: 'Increase decimal places',
     numberFormat: (name: string) => `Number format: ${name}`,
+    customFormat: 'Custom format…',
+    customFormatTitle: 'Custom number format',
+    formatCode: 'Format code: #,##0 "đ", ddd dd/mm',
     formats: {
       automatic: 'Automatic',
       text: 'Plain text',

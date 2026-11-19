@@ -9,6 +9,7 @@
  * used pages making room (`RowPages`). A sheet under the budget is not affected: all its rows are in memory.
  */
 import { detectSeparator, fieldValue } from '../convert'
+import { composes, isWindows1258, knownEncoding } from '../encoding'
 import type { ByteSource } from '../source'
 import type { ColInfo } from './types'
 import { MAX_COL, T_BOOL, T_NUM, T_STR, type SheetData } from './workbook'
@@ -22,6 +23,10 @@ export interface DelimitedImport {
   budget?: number
   /** rows read from the file at a time, past the budget (PAGE_ROWS) */
   pageRows?: number
+  /** the text's encoding (a `TextDecoder` label), instead of the byte order mark / declared charset / guess */
+  encoding?: string
+  /** told when the file holds more than the sheet does (more columns than a sheet has): what is missing from the document */
+  onWarning?: (text: string) => void
 }
 
 /** what a loader reports while it fills a sheet */
@@ -57,10 +62,19 @@ interface Encoding {
   /** bytes per code unit (2 for UTF-16), and their order */
   unit: 1 | 2
   le: boolean
+  /** the decoded text is put in NFC (Windows-1258 writes a letter and its tone mark apart) */
+  compose?: boolean
 }
 
 /** byte order mark, then the declared charset, then UTF-8 (Windows-1252 when the bytes are not UTF-8: Excel's CSV on Windows) */
-function encodingOf(head: Uint8Array, type?: string): Encoding {
+function encodingOf(head: Uint8Array, type?: string, explicit?: string): Encoding {
+  if (explicit) {
+    const label = knownEncoding(explicit)
+    if (!label) throw new Error(`Unknown text encoding “${explicit}”`)
+    const utf16 = /^utf-16/.test(label)
+    const bom = label === 'utf-8' ? head[0] === 0xef && head[1] === 0xbb && head[2] === 0xbf : utf16 && ((head[0] === 0xff && head[1] === 0xfe) || (head[0] === 0xfe && head[1] === 0xff))
+    return { label, skip: bom ? (utf16 ? 2 : 3) : 0, strict: false, unit: utf16 ? 2 : 1, le: label !== 'utf-16be', compose: composes(label) }
+  }
   if (head[0] === 0xef && head[1] === 0xbb && head[2] === 0xbf) return { label: 'utf-8', skip: 3, strict: false, unit: 1, le: true }
   if (head[0] === 0xff && head[1] === 0xfe) return { label: 'utf-16le', skip: 2, strict: false, unit: 2, le: true }
   if (head[0] === 0xfe && head[1] === 0xff) return { label: 'utf-16be', skip: 2, strict: false, unit: 2, le: false }
@@ -87,21 +101,22 @@ export interface RowSink {
 /** Streams a delimited text file into `d`; the rows are reported as they come. */
 export async function loadDelimited(d: SheetData, imp: DelimitedImport, report: LoadReport): Promise<void> {
   const src = imp.source
-  let enc = encodingOf(src.size ? await src.read(0, Math.min(src.size, 3)) : new Uint8Array(0), src.type)
+  let enc = encodingOf(src.size ? await src.read(0, Math.min(src.size, 3)) : new Uint8Array(0), src.type, imp.encoding)
   for (;;) {
     try {
       await parseStream(d, imp, enc, report)
       return
     } catch (e) {
       if (!(e instanceof BadEncoding)) throw e
-      // not UTF-8 after all: start over as Windows-1252
+      // not UTF-8 after all: start over as Windows-1252 (Windows-1258 when the text reads as Vietnamese)
       d.rows = []
       d.maxRow = -1
       d.maxCol = -1
       d.colInfo = []
       d.pages = undefined
       report.reset()
-      enc = { label: 'windows-1252', skip: 0, strict: false, unit: 1, le: true }
+      const vi = isWindows1258(await src.read(0, Math.min(src.size, 1 << 22)))
+      enc = { label: vi ? 'windows-1258' : 'windows-1252', skip: 0, strict: false, unit: 1, le: true, compose: vi }
     }
   }
 }
@@ -114,7 +129,8 @@ async function parseStream(d: SheetData, imp: DelimitedImport, enc: Encoding, re
   const decoder = new TextDecoder(enc.label, { fatal: enc.strict })
   const decode = (b: Uint8Array): string => {
     try {
-      return decoder.decode(b)
+      const t = decoder.decode(b)
+      return enc.compose ? t.normalize('NFC') : t
     } catch {
       throw new BadEncoding()
     }
@@ -136,7 +152,8 @@ async function parseStream(d: SheetData, imp: DelimitedImport, enc: Encoding, re
     const b = scanner!.starts[p + 1]
     const sink: RowSink = { rows: [], maxRow: -1, maxCol: -1 }
     const ps = new Parser(sink, sep, pool, false)
-    ps.push(new TextDecoder(enc.label).decode(await src.read(a, b - a)))
+    const t = new TextDecoder(enc.label).decode(await src.read(a, b - a))
+    ps.push(enc.compose ? t.normalize('NFC') : t)
     ps.end()
     return sink.rows
   }
@@ -181,7 +198,7 @@ async function parseStream(d: SheetData, imp: DelimitedImport, enc: Encoding, re
     }
     if (d.pages) {
       if (scanner.lastContent > d.maxRow) d.maxRow = scanner.lastContent
-      if (scanner.maxFields - 1 > d.maxCol) d.maxCol = scanner.maxFields - 1
+      if (Math.min(scanner.maxFields, MAX_COL) - 1 > d.maxCol) d.maxCol = Math.min(scanner.maxFields, MAX_COL) - 1
     }
     if (done) break
     report.bytes?.(loaded, total)
@@ -194,12 +211,18 @@ async function parseStream(d: SheetData, imp: DelimitedImport, enc: Encoding, re
     }
   }
   parser!.end()
+  if (parser!.widest) imp.onWarning?.(columnsWarning(parser!.widest))
+  else if (d.pages && scanner!.maxFields > MAX_COL) imp.onWarning?.(columnsWarning(scanner!.maxFields))
   if (!header) d.colInfo = parser!.header()
   d.pages?.finish()
   // no XML to patch: saving writes every row (and the column widths) from the model
   d.structural = true
   d.dirtyCols = true
 }
+
+/** said when a file has more columns than a sheet can hold: the rest are not in the document (and not in what is saved) */
+const columnsWarning = (n: number) =>
+  `The file has ${n.toLocaleString('en-US')} columns: a sheet holds at most ${MAX_COL.toLocaleString('en-US')} (up to column XFD), so the columns after it were not loaded.`
 
 function concat(parts: Uint8Array[]): Uint8Array {
   if (parts.length === 1) return parts[0]
@@ -400,6 +423,8 @@ class Parser {
   cells = 0
   /** longest text per column, until the header is reported */
   private widths: number[] | null
+  /** columns of the widest row that had text past the last column a sheet has (0: none did) */
+  widest = 0
 
   constructor(
     private sink: RowSink,
@@ -481,7 +506,11 @@ class Parser {
     const v = this.field
     this.field = ''
     const c = this.c++
-    if (v === '' || c >= MAX_COL) return
+    if (v === '') return
+    if (c >= MAX_COL) {
+      if (c + 1 > this.widest) this.widest = c + 1
+      return
+    }
     const k = fieldValue(v, this.decimalComma)
     if (k === null) {
       let text = v

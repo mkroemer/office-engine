@@ -272,6 +272,8 @@ export class DocBuilder {
   splitPieces = false
   /** set fEncrypted */
   encrypted = false
+  /** DOP fFacingPages: different even and odd pages */
+  facingPages = false
   /** FIB version written */
   nFib = 0xc1
   authors: string[] = []
@@ -582,7 +584,7 @@ export class DocBuilder {
     plcFld(18, this.ftn.fields, ccpFtn)
     plcFld(17, this.hdd.fields, ccpHdd)
     // DOP
-    const dop = new Buf().zeros(10).u16(720).zeros(488).done()
+    const dop = new Buf().u8(this.facingPages ? 1 : 0).zeros(9).u16(720).zeros(488).done()
     put(31, dop)
     // Clx: one Prc (a piece's sprm), then the piece table
     const clx = new Buf()

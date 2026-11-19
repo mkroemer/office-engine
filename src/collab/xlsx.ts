@@ -9,7 +9,7 @@ import type { Methods } from '../core/worker/protocol'
 import type { BookOp, Range, SheetOp, WorkbookMeta } from '../core/xlsx/types'
 import { onLocal, setLocalHistory } from './hosts'
 import type { Adapter, ApplyResult } from './session'
-import { conflictsX, isStructural, transformX, type PBookOp, type XOp } from './xlsx-ops'
+import { conflictsX, isStructural, STRUCTURAL, transformX, type PBookOp, type XOp } from './xlsx-ops'
 import { applyComment, revertComment, type CommentOp } from './comments'
 
 const CAPTURED = new Set<keyof Methods>(['comments.set', 'xlsx.set', 'xlsx.format', 'xlsx.sheetOp', 'xlsx.replace', 'xlsx.bookOp', 'xlsx.undo', 'xlsx.redo'])
@@ -86,8 +86,12 @@ export class XlsxCollab implements Adapter<XOp> {
         return this.local({ t: 'set', id: this.id(), sheet: this.path(a[0]), cells: a[1] })
       case 'xlsx.format':
         return this.local({ t: 'fmt', id: this.id(), sheet: this.path(a[0]), range: a[1], patch: a[2] })
-      case 'xlsx.sheetOp':
-        return this.local({ t: 'sheet', id: this.id(), sheet: this.path(a[0]), op: a[1] })
+      case 'xlsx.sheetOp': {
+        const o = a[1] as SheetOp
+        // (rows / columns moving: the name the sheet goes by here, for the formulas others type meanwhile)
+        const name = STRUCTURAL.has(o.op) ? this.meta.sheets[a[0]]?.name : undefined
+        return this.local({ t: 'sheet', id: this.id(), sheet: this.path(a[0]), op: o, ...(name !== undefined ? { name } : {}) })
+      }
       case 'xlsx.replace':
         return this.local({ t: 'replace', id: this.id(), sheet: this.path(a[0]), query: a[1], by: a[2], opts: a[3], at: a[4] })
       case 'xlsx.bookOp':
@@ -105,11 +109,13 @@ export class XlsxCollab implements Adapter<XOp> {
       case 'add':
         return { op: 'add', name: b.name, after: b.after !== undefined ? this.path(b.after) : undefined }
       case 'rename':
-        return { op: 'rename', path: this.path(b.index), name: b.name }
+        return { op: 'rename', path: this.path(b.index), name: b.name, was: this.meta.sheets[b.index]?.name }
       case 'delete':
         return { op: 'delete', path: this.path(b.index) }
       case 'move':
         return { op: 'move', path: this.path(b.from), to: b.to }
+      case 'duplicate':
+        return { op: 'duplicate', path: this.path(b.index) }
     }
   }
 

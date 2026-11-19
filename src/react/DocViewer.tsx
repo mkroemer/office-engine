@@ -140,10 +140,6 @@ const EXT: Record<string, string> = { docx: '.docx', xlsx: '.xlsx', pptx: '.pptx
 const IMPORTED_BADGE: Record<PlainFormat, string> = { csv: 'csv', tsv: 'tsv', text: 'txt', markdown: 'md', html: 'html', svg: 'svg', mermaid: 'mmd', plantuml: 'puml', graphviz: 'dot' }
 /** plain formats saved back as themselves: Markdown and HTML built again from the document when it was edited, SVG from its text */
 const SAVES_SOURCE = new Set<PlainFormat>(['markdown', 'html', 'svg'])
-const savesSource = (name: string) => {
-  const f = PLAIN_EXT[extOf(unpackedName(name) ?? name)]
-  return !!f && SAVES_SOURCE.has(f)
-}
 
 /** a key per opened client: a view is built again for each (the edited source's previews have one name) */
 const clientIds = new WeakMap<object, number>()
@@ -324,7 +320,7 @@ function Viewer(props: DocViewerProps) {
     cmCtl.select(root)
   }, [cmCtl, cmFocus, cmState.rev])
 
-  // once per opened document, also when the host passes a new callback on every render
+  // once per document: a new `onLoad` function (a host's inline callback, with every render) is not another load
   const onLoadRef = useRef(onLoad)
   onLoadRef.current = onLoad
   useEffect(() => {
@@ -337,9 +333,14 @@ function Viewer(props: DocViewerProps) {
   // a converted file (CSV → xlsx…) starts unsaved
   const openedDirty = useRef(false)
   useEffect(() => {
-    setDirtyState(!!client && openedDirty.current)
+    const d = !!client && openedDirty.current
+    // (the host is told too: a new document is not unsaved)
+    setDirtyState((prev) => {
+      if (prev !== d) onDirtyChange?.(d)
+      return d
+    })
     if (client) openedDirty.current = false
-  }, [client])
+  }, [client]) // eslint-disable-line react-hooks/exhaustive-deps
   const setDirty = useCallback(
     (d: boolean) => {
       if (!saveSession.live) return
@@ -488,14 +489,16 @@ function Viewer(props: DocViewerProps) {
   // ---- File menu ----
   const [toast, setToast] = useState<string | null>(null)
   const clearToast = useCallback(() => setToast(null), [])
+  // the file opened but not whole (a CSV with more columns than a sheet holds): what is missing is said, not left to be found
+  useEffect(() => client?.on('warning', (w) => setToast(w.text)), [client])
   const [confirm, setConfirm] = useState<{ message: string; run: () => void } | null>(null)
   const [renaming, setRenaming] = useState(false)
   const [details, setDetails] = useState(false)
   /** replaces the document, after confirmation when there are unsaved changes */
   const replace = (message: string, run: () => void) => (dirty ? setConfirm({ message, run }) : run())
   const show = useCallback((doc: Imported, edit = false) => {
-    // a file saved as itself (Markdown, HTML, SVG) is not unsaved for being shown as a document
-    openedDirty.current = doc.converted && (!!doc.live || !savesSource(doc.name))
+    // a file shown as it is, converted or not, has no changes: only the preview of a source being edited is unsaved
+    openedDirty.current = !!doc.live
     setRenamed(null)
     setOpened(doc)
     if (edit) setEditing(true)

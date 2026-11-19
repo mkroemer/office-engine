@@ -119,8 +119,8 @@ export const de: Strings = {
     close: 'Schließen',
     preparingPdf: 'PDF wird vorbereitet… im Druckdialog „Als PDF speichern“ wählen',
     preparing: 'Wird vorbereitet…',
-    unsupported: (name: string) =>
-      `„${name}“ kann nicht geöffnet werden: unterstützt werden Word, Excel, PowerPoint (auch 97-2003), OpenDocument, RTF, Pages, Keynote, Numbers, Visio, CSV, Text, Markdown, HTML, SVG, Mermaid, PlantUML und Graphviz (auch gzip-komprimiert: .svgz, .csv.gz)`,
+    unsupported: (name: string, what?: string) =>
+      `„${name}“${what ? ` (${what})` : ''} kann nicht geöffnet werden: unterstützt werden Word, Excel, PowerPoint (auch 97-2003), OpenDocument, RTF, Pages, Keynote, Numbers, Visio, CSV, Text, Markdown, HTML, SVG, Mermaid, PlantUML und Graphviz (auch gzip-komprimiert: .svgz, .csv.gz)`,
   },
 
   zoom: {
@@ -345,6 +345,10 @@ export const de: Strings = {
   xlsx: {
     clipboardCopyBlocked: 'Der Browser hat den Zugriff auf die Zwischenablage blockiert. Zum Kopieren weniger Zeilen auswählen.',
     pasteLimit: (max: number, total: number, locale: string | undefined = undefined) => `Nur die ersten ${max.toLocaleString(locale)} von ${total.toLocaleString(locale)} Zellen wurden eingefügt`,
+    fillLimit: (max: number, locale: string | undefined = undefined) => `Die Auswahl hat mehr als ${max.toLocaleString(locale)} Zellen. Zum Ausfüllen weniger Zellen auswählen.`,
+    mergedPaste: 'Hier kann nicht eingefügt werden: verbundene Zellen würden gefüllt. Verbindung aufheben oder in eine einzelne Zelle einfügen.',
+    mergeDropped: (n: number, undo: string) => `Beim Verbinden bleibt nur der Wert oben links: ${n === 1 ? 'ein anderer Wert wurde' : `${n} andere Werte wurden`} entfernt. Rückgängig (${undo}) stellt ${n === 1 ? 'ihn' : 'sie'} wieder her.`,
+    cell: 'Zelle',
     status: (rows: number, cols: number, locale: string | undefined = undefined) => `${rows.toLocaleString(locale)} ${rows === 1 ? 'Zeile' : 'Zeilen'} × ${cols.toLocaleString(locale)} ${cols === 1 ? 'Spalte' : 'Spalten'}`,
     statusLoading: ' · wird geladen…',
     overLimit: (max: number, locale: string | undefined = undefined) => ` · mehr als die ${max.toLocaleString(locale)} Zeilen von Excel: als CSV speichern`,
@@ -357,7 +361,7 @@ export const de: Strings = {
     commentHint: 'Eine Zelle zum Kommentieren auswählen.',
     addSheet: 'Blatt hinzufügen',
     renameSheet: 'Umbenennen',
-    duplicateSheet: 'Name übernehmen → neues Blatt',
+    duplicateSheet: 'Blatt duplizieren',
     moveLeft: 'Nach links verschieben',
     moveRight: 'Nach rechts verschieben',
     deleteSheet: 'Blatt löschen',
@@ -393,6 +397,9 @@ export const de: Strings = {
     decLess: 'Dezimalstelle löschen',
     decMore: 'Dezimalstelle hinzufügen',
     numberFormat: (name: string) => `Zahlenformat: ${name}`,
+    customFormat: 'Benutzerdefiniertes Format…',
+    customFormatTitle: 'Benutzerdefiniertes Zahlenformat',
+    formatCode: 'Formatcode: #,##0 "đ", ddd dd/mm',
     formats: {
       automatic: 'Automatisch',
       text: 'Nur-Text',

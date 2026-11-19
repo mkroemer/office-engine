@@ -78,7 +78,7 @@ export class PptxCollab implements Adapter<POp> {
       case 'comments.set':
         return this.submit({ t: 'comment', id: this.id(), cid: a[0], c: a[1] as CommentOp['c'] })
       case 'pptx.setText':
-        return this.local({ t: 'text', id: this.id(), slide: this.path(a[0]), sid: a[1], paras: a[2] }).then((r) => (r as PptxCollabResult).model)
+        return this.local({ t: 'text', id: this.id(), slide: this.path(a[0]), sid: a[1], paras: a[2], cell: a[3] }).then((r) => (r as PptxCollabResult).model)
       case 'pptx.shapes': {
         const ops = (a[1] as ShapeOp[]).map((o) => (o.op === 'insert' && o.rid && this.ridKey.has(o.rid) ? { ...o, rid: undefined, key: this.ridKey.get(o.rid) } : o))
         return this.local({ t: 'shapes', id: this.id(), slide: this.path(a[0]), ops }).then((r) => (r as PptxCollabResult).model)

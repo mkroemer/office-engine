@@ -478,7 +478,7 @@ describe('OpenDocument text → DOCX', () => {
     const { paras } = await open(bytes)
     expect(run(paras[0], 'the site')!.href).toBe('https://example.com/a%20b')
     expect(run(paras[0], 'part 2')!.href).toBe('#part_2')
-    expect(textOf(paras[1])).toBe('Part[1] two[1]')
+    expect(textOf(paras[1])).toBe('Part[1] two[i]')
     expect(textOf(paras[2])).toBe('Page {PAGE} of {NUMPAGES}, 2024-05-01 Report')
     const part = await docxParts(bytes)
     const doc = await part('word/document.xml')

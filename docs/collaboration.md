@@ -106,7 +106,8 @@ async function takeSnapshot(room: string) {
 
 ## Limitations
 
-- Undo / redo only touches your own changes
+- Undo / redo only touches your own changes: a cell someone else typed over since is left as they left it
+- A formula typed while someone else inserts / deletes rows or columns, or renames a sheet, is rewritten with that operation (it reads the cells meant)
 - DOCX rooms are not snapshotted yet (their edits run in the view's editor): newcomers replay the whole history
 - Deleting rows / columns can't be undone while collaborating
 - One hub process per room; batches not yet flushed (up to 250 ms on S3) are lost if it crashes, and clients ahead of the stored log must reopen

@@ -356,18 +356,74 @@ export interface StreamParseOptions {
   onChunk?: (bytes: number) => void | Promise<void>
 }
 
+/**
+ * How a part is encoded: the byte order mark, else the first bytes of "<?" as UTF-16 (XML 1.0 appendix F), else a
+ * single-byte encoding the declaration names, else UTF-8. The common case costs two comparisons.
+ */
+export function xmlEncoding(b: Uint8Array): string {
+  const a = b[0]
+  const c = b[1]
+  if (a === 0xff && c === 0xfe) return 'utf-16le'
+  if (a === 0xfe && c === 0xff) return 'utf-16be'
+  if (a === 0x3c && c === 0) return 'utf-16le'
+  if (a === 0 && c === 0x3c) return 'utf-16be'
+  if (a !== 0x3c || c !== 0x3f) return 'utf-8'
+  let head = ''
+  for (let i = 0; i < b.length && i < 200 && b[i] !== 0x3e; i++) head += String.fromCharCode(b[i])
+  const label = /encoding\s*=\s*["']([A-Za-z][\w.:-]*)["']/.exec(head)?.[1].toLowerCase()
+  // the bytes are 8-bit here: a "UTF-16" declaration over them is wrong, and UTF-8 is what they are
+  if (!label || label === 'utf-8' || label === 'utf8' || label.startsWith('utf-1') || label.startsWith('utf-3')) return 'utf-8'
+  try {
+    new TextDecoder(label)
+    return label
+  } catch {
+    return 'utf-8'
+  }
+}
+
+/** the text of a part: any encoding XML allows (the byte order mark is dropped) */
+export function decodeXml(b: Uint8Array): string {
+  return new TextDecoder(xmlEncoding(b)).decode(b)
+}
+
+/** a part written out as UTF-8 must not declare another encoding */
+export function utf8Declaration(xml: string): string {
+  if (xml.charCodeAt(0) !== 0x3c || xml.charCodeAt(1) !== 0x3f) return xml
+  return xml.replace(/^(<\?xml[^>]*?\bencoding\s*=\s*)(["'])(?!utf-8\2)[^"']*\2/i, '$1$2UTF-8$2')
+}
+
 export async function parseXmlStream(stream: ReadableStream<Uint8Array>, h: SaxHandler, opts: StreamParseOptions = {}): Promise<void> {
   const reader = stream.getReader()
-  const dec = new TextDecoder()
+  let dec: TextDecoder | undefined
+  // the start of the part, held until there is enough of it to tell the encoding
+  let head: Uint8Array | undefined
   const p = new SaxParser(h, opts.raw)
   try {
     for (;;) {
       if (opts.signal?.aborted) throw new AbortedError()
       const { done, value } = await reader.read()
       if (done) break
-      p.write(dec.decode(value, { stream: true }))
+      let chunk = value
+      if (!dec) {
+        if (head) {
+          const all = new Uint8Array(head.length + value.length)
+          all.set(head)
+          all.set(value, head.length)
+          chunk = all
+        }
+        if (chunk.length < 200) {
+          head = chunk
+          if (opts.onChunk) await opts.onChunk(value.length)
+          continue
+        }
+        head = undefined
+        dec = new TextDecoder(xmlEncoding(chunk))
+      }
+      p.write(dec.decode(chunk, { stream: true }))
       if (opts.onChunk) await opts.onChunk(value.length)
     }
+    if (!dec) dec = new TextDecoder(xmlEncoding(head ?? new Uint8Array(0)))
+    if (head) p.write(dec.decode(head, { stream: true }))
     p.write(dec.decode())
     p.end()
   } catch (e) {

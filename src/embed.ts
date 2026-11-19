@@ -56,9 +56,10 @@ export class OfficeViewerElement extends HTMLElement {
   private _file?: Blob | ArrayBuffer
   private _icons?: Icons
   private _strings?: StringsOverride
-  // Keep event callbacks stable across attribute/property updates: changing UI texts must not replay load/error events.
-  private onLoad: NonNullable<MountOptions['onLoad']> = (client) => this.dispatchEvent(new CustomEvent('load', { detail: { kind: client.kind, name: client.name } }))
-  private onError: NonNullable<MountOptions['onError']> = (error) => this.dispatchEvent(new CustomEvent('error', { detail: error }))
+  // one function each for the element's life: a new one with every update would run the viewer's load effect again (a `load` event per update)
+  private readonly onLoad: NonNullable<MountOptions['onLoad']> = (client) => this.dispatchEvent(new CustomEvent('load', { detail: { kind: client.kind, name: client.name } }))
+  private readonly onError: NonNullable<MountOptions['onError']> = (error) => this.dispatchEvent(new CustomEvent('error', { detail: error }))
+  private readonly onComment = (e: unknown) => this.dispatchEvent(new CustomEvent('comment', { detail: e }))
   /** the viewer's state and commands, the same object for the element's whole life */
   readonly controller = createViewerController()
 
@@ -137,7 +138,7 @@ export class OfficeViewerElement extends HTMLElement {
           ? false
           : {
               user: this.getAttribute('user') ? { name: this.getAttribute('user')! } : undefined,
-              onEvent: (e) => this.dispatchEvent(new CustomEvent('comment', { detail: e })),
+              onEvent: this.onComment,
             },
       onLoad: this.onLoad,
       onError: this.onError,

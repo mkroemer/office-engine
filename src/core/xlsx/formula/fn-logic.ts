@@ -1,7 +1,7 @@
 /** Logical and information functions. */
 import { A, INF, L, pick, S, visit, type Ev, type FnDef } from './fn'
 import type { Ast } from './parser'
-import { ERR, ERROR_CODES, FormulaError, type Value } from './types'
+import { ERR, ERROR_CODES, ERROR_TYPE_EXTRA, FormulaError, type Value } from './types'
 import { ArrayV, bool, compare, int, num, toBool, toNum, valueEq, type Val } from './values'
 
 /** Evaluate an argument of a pass-through function (missing => 0). */
@@ -146,7 +146,7 @@ export const LOGIC: Record<string, FnDef> = {
   ISEVEN: S(1, 1, ([x]) => Math.trunc(num(x)) % 2 === 0),
   ISODD: S(1, 1, ([x]) => Math.abs(Math.trunc(num(x))) % 2 === 1),
   NA: A(0, 0, () => ERR.NA),
-  'ERROR.TYPE': S(1, 1, ([x]) => (x instanceof FormulaError ? ERROR_CODES.indexOf(x.code) + 1 : ERR.NA)),
+  'ERROR.TYPE': S(1, 1, ([x]) => (x instanceof FormulaError ? (ERROR_TYPE_EXTRA[x.code] ?? ERROR_CODES.indexOf(x.code) + 1) : ERR.NA)),
   N: S(1, 1, ([x]) => {
     if (x instanceof FormulaError) return x
     return typeof x === 'number' ? x : typeof x === 'boolean' ? (x ? 1 : 0) : 0

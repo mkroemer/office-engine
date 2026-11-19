@@ -22,6 +22,23 @@ const BORDER: Record<string, [number, string]> = dict({
   mediumDashDot: [2, 'dashed'], dashDotDot: [1, 'dotted'], mediumDashDotDot: [2, 'dotted'], slantDashDot: [2, 'dashed'],
 })
 
+/** share of the foreground a pattern fill shows (the rest is the background): lines and grids as their ink coverage */
+const PATTERN_INK: Record<string, number> = dict({
+  gray125: 0.125, gray0625: 0.0625, lightGray: 0.25, mediumGray: 0.5, darkGray: 0.75,
+  lightDown: 0.25, lightUp: 0.25, lightHorizontal: 0.25, lightVertical: 0.25, lightGrid: 0.3, lightTrellis: 0.3,
+  darkDown: 0.5, darkUp: 0.5, darkHorizontal: 0.5, darkVertical: 0.5, darkGrid: 0.6, darkTrellis: 0.6,
+})
+
+/** `fg` over `bg` by `ink` (0…1), as a hex color; `fg` itself when a color is not plain hex */
+function mixHex(fg: string, bg: string, ink: number): string {
+  const f = /^#([0-9a-f]{6})$/i.exec(fg)
+  const b = /^#([0-9a-f]{6})$/i.exec(bg)
+  if (!f || !b) return fg
+  let out = '#'
+  for (let i = 0; i < 6; i += 2) out += Math.round(parseInt(f[1].slice(i, i + 2), 16) * ink + parseInt(b[1].slice(i, i + 2), 16) * (1 - ink)).toString(16).padStart(2, '0')
+  return out
+}
+
 export interface XfInfo {
   numFmt: string
   /** font size in pt */
@@ -30,6 +47,8 @@ export interface XfInfo {
   /** explicit horizontal alignment */
   hAlign?: string
   wrap: boolean
+  /** the cell is locked (the default): what a protected sheet refuses to change */
+  locked: boolean
 }
 
 export interface SheetStyles {
@@ -58,7 +77,8 @@ export function parseSheetStyles(root: XEl | undefined, theme: Theme): SheetStyl
       const t = pf.a.patternType
       if (!t || t === 'none') return undefined
       if (t === 'solid') return col(kid(pf, 'fgColor')) ?? col(kid(pf, 'bgColor'))
-      return col(kid(pf, 'fgColor')) ?? '#d9d9d9'
+      // a pattern (dots, lines) is not drawn: the cell shows what the eye would see of it, its colors mixed
+      return mixHex(col(kid(pf, 'fgColor')) ?? '#000000', col(kid(pf, 'bgColor')) ?? '#ffffff', PATTERN_INK[t] ?? 0.5)
     }
     const gf = kid(f, 'gradientFill')
     if (gf) {
@@ -70,6 +90,16 @@ export function parseSheetStyles(root: XEl | undefined, theme: Theme): SheetStyl
   })
   const borders: CellCss[] = kids(kid(root, 'borders'), 'border').map((b) => {
     const css: CellCss = {}
+    // a diagonal is a line across the cell: a gradient with a hard stripe (the 50 % line of "to bottom right" joins the top right and the bottom left corners)
+    const dg = kid(b, 'diagonal')
+    if (dg?.a.style && dg.a.style !== 'none') {
+      const [w] = BORDER[dg.a.style] ?? [1]
+      const color = col(kid(dg, 'color')) ?? '#000'
+      const line = (to: string) => `linear-gradient(${to}, transparent calc(50% - ${w / 2}px), ${color} calc(50% - ${w / 2}px), ${color} calc(50% + ${w / 2}px), transparent calc(50% + ${w / 2}px))`
+      const on = (v: string | undefined) => v === '1' || v === 'true'
+      const lines = [on(b.a.diagonalUp) ? line('to bottom right') : '', on(b.a.diagonalDown) ? line('to top right') : ''].filter(Boolean)
+      if (lines.length) css.backgroundImage = lines.join(', ')
+    }
     const side = (el: XEl | undefined, key: string) => {
       const st = el?.a.style
       if (!st || st === 'none') return
@@ -120,13 +150,16 @@ export function parseSheetStyles(root: XEl | undefined, theme: Theme): SheetStyl
       css.alignItems = v === 'top' ? 'flex-start' : v === 'center' ? 'center' : 'flex-end'
       wrap = al.a.wrapText === '1' || al.a.wrapText === 'true'
       if (wrap) css.whiteSpace = 'pre-wrap'
+      // shrink to fit applies to text that does not wrap: the grid scales it down to the cell
+      else if (al.a.shrinkToFit === '1' || al.a.shrinkToFit === 'true') css.shrinkToFit = 1
       const ind = num(al.a.indent)
       if (ind) css[hAlign === 'right' ? 'paddingRight' : 'paddingLeft'] = `${ind * 9 + 2}px`
       const rot = num(al.a.textRotation)
       if (rot) css.textRotate = rot === 255 ? 255 : rot > 90 ? 90 - rot : rot
     }
-    return { numFmt: numFmts.get(id) ?? BUILTIN_FORMATS[id] ?? 'General', fontPt: font?.sz ?? f0.sz ?? 11, css, hAlign, wrap }
+    const lock = kid(xf, 'protection')?.a.locked
+    return { numFmt: numFmts.get(id) ?? BUILTIN_FORMATS[id] ?? 'General', fontPt: font?.sz ?? f0.sz ?? 11, css, hAlign, wrap, locked: lock !== '0' && lock !== 'false' }
   })
-  if (!xfs.length) xfs.push({ numFmt: 'General', fontPt: f0.sz ?? 11, css: {}, wrap: false })
+  if (!xfs.length) xfs.push({ numFmt: 'General', fontPt: f0.sz ?? 11, css: {}, wrap: false, locked: true })
   return { xfs, baseFont }
 }

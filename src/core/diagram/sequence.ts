@@ -14,6 +14,13 @@ export interface Participant {
   label: string
   kind: PKind
   fill?: string
+  /** index in `Sequence.boxes` of the group box it is declared in */
+  box?: number
+}
+
+export interface SeqBox {
+  label: string
+  fill?: string
 }
 
 export type MsgHead = 'filled' | 'open' | 'cross' | 'half' | 'none'
@@ -37,16 +44,29 @@ export interface Sequence {
   autonumber?: boolean
   /** participants drawn again at the bottom (default true) */
   footer?: boolean
+  /** Mermaid `box … end` groups of participants */
+  boxes?: SeqBox[]
 }
 
 export class SequenceBuilder {
   readonly s: Sequence = { participants: [], events: [] }
   private ids = new Map<string, Participant>()
+  private open?: number
+
+  /** participants first declared until `endBox` belong to the box */
+  beginBox(label: string, fill?: string) {
+    ;(this.s.boxes ??= []).push({ label, fill })
+    this.open = this.s.boxes.length - 1
+  }
+
+  endBox() {
+    this.open = undefined
+  }
 
   participant(id: string, patch: Partial<Participant> = {}): Participant {
     let p = this.ids.get(id)
     if (!p) {
-      p = { id, label: id, kind: 'participant' }
+      p = { id, label: id, kind: 'participant', box: this.open }
       this.ids.set(id, p)
       this.s.participants.push(p)
     }
@@ -269,7 +289,9 @@ export function renderSequence(s: Sequence): Rendered {
 
   // ---- vertical
   const titleH = s.title ? 34 : 0
-  const top = MARGIN + titleH
+  // room above the participants for the titles of group boxes
+  const boxH = s.boxes?.length ? 26 : 0
+  const top = MARGIN + titleH + boxH
   const headH = Math.max(...boxes.map((b) => b.h))
   let y = top + headH + 18
   const svgBack = new Svg()
@@ -476,6 +498,16 @@ export function renderSequence(s: Sequence): Rendered {
   // lifelines, activations, participants
   const out = new Svg()
   const lifeTop = top + headH
+  // group boxes: around the heads and lifelines of their participants, behind everything
+  s.boxes?.forEach((bx, bi) => {
+    const ks = ps.map((p, k) => (p.box === bi ? k : -1)).filter((k) => k >= 0)
+    if (!ks.length) return
+    const x0 = Math.max(2, cx[ks[0]] - boxes[ks[0]].w / 2 - 10)
+    const x1 = Math.max(cx[ks[ks.length - 1]] + boxes[ks[ks.length - 1]].w / 2 + 10, x0 + (bx.label ? textWidth(bx.label, 12, true) + 16 : 0))
+    width = Math.max(width, x1 + 2)
+    out.rect(x0, top - boxH + 2, x1 - x0, height - MARGIN / 2 - (top - boxH + 2), { fill: bx.fill ?? 'rgba(200, 210, 230, 0.35)', stroke: THEME.muted, sw: 1 }, 2)
+    if (bx.label) out.text((x0 + x1) / 2, top - boxH + 14, bx.label, { anchor: 'middle', size: 12, bold: true })
+  })
   for (let k = 0; k < n; k++) out.line(cx[k], lifeTop, cx[k], ended.get(k) ?? (footer ? y : y - 6), { stroke: '#9aa3b2', sw: 1, dash: '5 4' })
   out.raw(svgBack.body())
   for (const b of bars) {
