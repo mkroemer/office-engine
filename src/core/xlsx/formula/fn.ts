@@ -1,7 +1,8 @@
 /** Function-definition plumbing: evaluator interface, arity, array lifting, argument visitors. */
 import type { Ast } from './parser'
 import { ERR, FormulaError, type Value } from './types'
-import { ArrayV, RangeV, UnionV, toNum, type Val } from './values'
+import type { CellProvider } from './types'
+import { ArrayV, LambdaV, RangeV, UnionV, toNum, type Val } from './values'
 
 /** What a function implementation may ask of the evaluator. */
 export interface Ev {
@@ -21,14 +22,27 @@ export interface Ev {
   operand(v: Val, top: boolean): Value | Value[][]
   hasSheet(name: string): boolean
   now(): Date
+  /** what the cells come from: the optional parts of it (sheet names, formulas, tables…) are asked by the functions that need them */
+  readonly provider: CellProvider
+  /** calls a function value (a LAMBDA, a function named as an argument) with values; an error when it is not one */
+  invoke(f: Val, args: (Val | undefined)[]): Val
+  /** LET(name, value, …, result) */
+  letIn(args: Ast[], top: boolean): Val
+  /** LAMBDA(parameter, …, body) */
+  lambda(args: Ast[]): Val
+  /** ISOMITTED(parameter) */
+  omitted(arg: Ast): Val
 }
 
 export type EagerFn = (args: Val[], ev: Ev, top: boolean) => Val
 export type LazyFn = (args: Ast[], ev: Ev, top: boolean) => Val
 
 export type FnDef =
-  /** args evaluated first; `scalarArgs` => args inherit the caller's top-level (implicit intersection) context */
-  | { kind: 'eager'; min: number; max: number; scalarArgs: boolean; fn: EagerFn }
+  /**
+   * args evaluated first; `scalarArgs` => args inherit the caller's top-level (implicit intersection) context.
+   * `single`: the arguments that are single values, an array there giving an array of results (see `lift`).
+   */
+  | { kind: 'eager'; min: number; max: number; scalarArgs: boolean; fn: EagerFn; single?: (i: number, n: number) => boolean }
   /** receives unevaluated args (IF, IFERROR, CHOOSE, ...) */
   | { kind: 'lazy'; min: number; max: number; fn: LazyFn }
 
@@ -71,7 +85,7 @@ export function S(min: number, max: number, f: (a: Value[], ev: Ev) => Value): F
           if (top) return ev.scalar(a)
         } else if (a instanceof ArrayV) {
           if (a.h === 1 && a.w === 1) return a.data[0][0]
-        } else if (a instanceof UnionV) return ERR.VALUE
+        } else if (a instanceof UnionV || a instanceof LambdaV) return ERR.VALUE
         else return a
         const d = ev.toArray(a)
         lifted = true
@@ -96,8 +110,11 @@ export function S(min: number, max: number, f: (a: Value[], ev: Ev) => Value): F
 
 /** Function taking ranges/arrays as-is (args evaluated in array context). */
 export function A(min: number, max: number, fn: EagerFn): FnDef {
-  return { kind: 'eager', min, max, scalarArgs: false, fn }
+  const single = (fn as Lifted).single
+  return single ? { kind: 'eager', min, max, scalarArgs: false, fn, single } : { kind: 'eager', min, max, scalarArgs: false, fn }
 }
+
+type Lifted = EagerFn & { single?: (i: number, n: number) => boolean }
 
 /**
  * A function over ranges that also takes single values (the criterion of COUNTIF, the rank of LARGE, the value
@@ -106,7 +123,7 @@ export function A(min: number, max: number, fn: EagerFn): FnDef {
  * A range there is taken whole too, unless the formula's own cell picks one of it (the top level).
  */
 export function lift(single: (i: number, n: number) => boolean, fn: EagerFn): EagerFn {
-  return (args, ev, top) => {
+  const lifted: Lifted = (args, ev, top) => {
     let h = 1
     let w = 1
     let any = false
@@ -131,6 +148,8 @@ export function lift(single: (i: number, n: number) => boolean, fn: EagerFn): Ea
     }
     return new ArrayV(out)
   }
+  lifted.single = single
+  return lifted
 }
 
 /** Lazy function (receives ASTs). */
@@ -143,6 +162,7 @@ export function visit(a: Val, ev: Ev, inRange: (v: Value) => void, direct: (v: V
   if (a instanceof RangeV) ev.forEach(a, inRange)
   else if (a instanceof UnionV) for (const r of a.areas) ev.forEach(r, inRange)
   else if (a instanceof ArrayV) for (const row of a.data) for (const v of row) inRange(v)
+  else if (a instanceof LambdaV) direct(ERR.VALUE)
   else direct(a)
 }
 

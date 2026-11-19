@@ -1067,3 +1067,32 @@ describe('xlsx whole columns and rows (QA 19/11/2026, P2-042)', () => {
     expect(v.errors).toEqual([])
   })
 })
+
+describe('xlsx dynamic arrays', () => {
+  test('a formula that gives several values fills the cells under it; a cell in the way makes it #SPILL!; saved', async () => {
+    const v = await open()
+    await v.typeCell('J10', '=SEQUENCE(3)')
+    await shownIs(v, 'J10', '1')
+    await shownIs(v, 'J11', '2')
+    await shownIs(v, 'J12', '3')
+    await v.typeCell('K10', '=SUM(J10#)')
+    await shownIs(v, 'K10', '6')
+    expect(await v.formula('K10')).toBe('=SUM(J10#)')
+    // typed over a value it filled: nothing is filled until Undo gives the cell back
+    await v.typeCell('J11', 'x')
+    await shownIs(v, 'J10', '#SPILL!')
+    await shownIs(v, 'J12', '')
+    await v.clickCell('N20')
+    await v.page.keyboard.press('Control+z')
+    await shownIs(v, 'J10', '1')
+    await shownIs(v, 'J11', '2')
+    await shownIs(v, 'K10', '6')
+    // a formula of single values with names of its own
+    await v.typeCell('L10', '=LET(x,J10,y,J11,x+y)')
+    await shownIs(v, 'L10', '3')
+    const s = await saved(v)
+    expect(s.cell('J12')).toBe('3')
+    expect(s.cell('K10')).toBe('6')
+    expect(v.errors).toEqual([])
+  })
+})

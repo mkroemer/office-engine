@@ -376,7 +376,7 @@ describe('xlsx: formulas that were not computed', () => {
     const src = await book({
       sheets: [
         { name: 'A', rows: rows([[{ f: 'B!A1+1', v: 0 }, 5]]) },
-        { name: 'B', rows: rows([[{ f: 'A!B1*2', v: 0 }, { f: 'PMT(1,2,3)', v: 42 }]]) },
+        { name: 'B', rows: rows([[{ f: 'A!B1*2', v: 0 }, { f: 'STOCKHISTORY("X",1)', v: 42 }, { f: 'PMT(1,2,3)', v: 42 }]]) },
       ],
     })
     const parts = await (await import('./xlsx-builder')).unzip(src)
@@ -390,8 +390,9 @@ describe('xlsx: formulas that were not computed', () => {
     expect(await o.shown(0, 0, 0)).toBe('11')
     await o.load(1)
     expect(await o.shown(1, 0, 0)).toBe('10')
-    // a function the engine does not have: the value of the file stays
+    // a function the engine does not have: the value of the file stays; one it has is computed
     expect(await o.shown(1, 0, 1)).toBe('42')
+    expect(await o.shown(1, 0, 2)).toBe('-4')
     // nothing was edited: computing is not a change to save
     expect(await o.engine.call('dirty', [])).toBe(false)
   })
@@ -428,7 +429,8 @@ describe('xlsx: formulas that were not computed', () => {
 
   test('N1-027 / P2-008 / P1-014: what the engine cannot compute keeps the value of the file', async () => {
     const src = await book({
-      sheets: [{ name: 'S', rows: rows([[1000, { f: 'PMT(0.05/12,60,A1)', v: -18.87 }, { f: 'IFERROR(PMT(0.05/12,60,A1),0)', v: -18.87 }, { f: 'Rate*A1', v: 50 }, { f: 'B1*2', v: -37.74 }, { f: 'Table1[Total]', v: 7 }]]) }],
+      // (a function that asks a service, a name and a table the workbook does not have: none can be computed)
+      sheets: [{ name: 'S', rows: rows([[1000, { f: 'STOCKHISTORY("X",A1)', v: -18.87 }, { f: 'IFERROR(STOCKHISTORY("X",A1),0)', v: -18.87 }, { f: 'Missing*A1', v: 50 }, { f: 'B1*2', v: -37.74 }, { f: 'Table1[Total]', v: 7 }]]) }],
       names: '<definedName name="Rate">0.05</definedName>',
     })
     const o = await openBook(src)
