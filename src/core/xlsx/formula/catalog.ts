@@ -3,7 +3,11 @@
  * Kept separate from the implementations so the UI bundle stays small.
  * Format: `NAME: 'arg1, [arg2], ...|Description'`.
  */
-const RAW: Record<string, string> = {
+import { CAT_DIST } from './catalog-dist'
+import { CAT_ENGINEERING } from './catalog-engineering'
+import { CAT_FINANCIAL } from './catalog-financial'
+
+const BASE: Record<string, string> = {
   ABS: 'number|Absolute value of a number.',
   AND: 'logical1, [logical2], ...|TRUE if all arguments are TRUE.',
   AVERAGE: 'number1, [number2], ...|Arithmetic mean of the arguments.',
@@ -139,6 +143,8 @@ const RAW: Record<string, string> = {
   XOR: 'logical1, [logical2], ...|TRUE if an odd number of arguments are TRUE.',
   YEAR: 'serial_number|Year of a date.',
 }
+
+const RAW: Record<string, string> = { ...BASE, ...CAT_DIST, ...CAT_FINANCIAL, ...CAT_ENGINEERING }
 
 export interface FnInfo {
   name: string
