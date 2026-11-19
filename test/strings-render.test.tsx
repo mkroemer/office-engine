@@ -8,6 +8,8 @@ import { de } from '../src/locales/de'
 import { drawingEl } from '../src/react/xlsx/drawings'
 
 const noop = () => {}
+/** a drawing's box: its size draws a chart that has a model; the placeholders here have none */
+const BOX = { width: 160, height: 90 }
 const find = <FindBar query="Office" index={1} count={3} editable replace onQuery={noop} onNav={noop} onClose={noop} onReplace={noop} />
 
 describe('rendered UI strings', () => {
@@ -38,23 +40,23 @@ describe('rendered UI strings', () => {
 
   test('drawing placeholders translate labels while keeping the document title', () => {
     const chart = { kind: 'chart' as const, chart: 'column', title: 'Sales 2026' }
-    expect(renderToStaticMarkup(drawingEl('c', chart, {}, resolveStrings('en')))).toContain('<strong>Column chart</strong>')
+    expect(renderToStaticMarkup(drawingEl('c', chart, BOX,resolveStrings('en')))).toContain('<strong>Column chart</strong>')
     const german = resolveStrings(undefined, de)
-    const html = renderToStaticMarkup(drawingEl('c', chart, {}, german))
+    const html = renderToStaticMarkup(drawingEl('c', chart, BOX,german))
     expect(html).toContain('title="Säulendiagramm: Sales 2026"')
     expect(html).toContain('<strong>Säulendiagramm</strong>')
-    expect(renderToStaticMarkup(drawingEl('p', { kind: 'picture', title: '' }, {}, german))).toContain('<strong>Bild</strong>')
+    expect(renderToStaticMarkup(drawingEl('p', { kind: 'picture', title: '' }, BOX,german))).toContain('<strong>Bild</strong>')
     for (const kind of ['', 'unknown', 'constructor', '__proto__']) {
-      expect(renderToStaticMarkup(drawingEl('c', { ...chart, chart: kind }, {}, german))).toContain('<strong>Diagramm</strong>')
+      expect(renderToStaticMarkup(drawingEl('c', { ...chart, chart: kind }, BOX,german))).toContain('<strong>Diagramm</strong>')
     }
   })
 
   test('drawing labels accept partial overrides and pictures retain their original alt text', () => {
     const strings = resolveStrings(undefined, { ...de, xlsx: { ...de.xlsx, drawings: { ...de.xlsx.drawings, picture: 'Grafik', charts: { ...de.xlsx.drawings.charts, column: 'Umsatzdiagramm' } } } })
-    expect(renderToStaticMarkup(drawingEl('c', { kind: 'chart', chart: 'column', title: '' }, {}, strings))).toContain('<strong>Umsatzdiagramm</strong>')
-    expect(renderToStaticMarkup(drawingEl('p', { kind: 'picture', title: '' }, {}, strings))).toContain('<strong>Grafik</strong>')
-    expect(renderToStaticMarkup(drawingEl('c', { kind: 'chart', chart: 'line', title: '' }, {}, strings))).toContain('<strong>Liniendiagramm</strong>')
-    const picture = renderToStaticMarkup(drawingEl('p', { kind: 'picture', title: 'Company logo', url: 'blob:picture' }, {}, strings))
+    expect(renderToStaticMarkup(drawingEl('c', { kind: 'chart', chart: 'column', title: '' }, BOX,strings))).toContain('<strong>Umsatzdiagramm</strong>')
+    expect(renderToStaticMarkup(drawingEl('p', { kind: 'picture', title: '' }, BOX,strings))).toContain('<strong>Grafik</strong>')
+    expect(renderToStaticMarkup(drawingEl('c', { kind: 'chart', chart: 'line', title: '' }, BOX,strings))).toContain('<strong>Liniendiagramm</strong>')
+    const picture = renderToStaticMarkup(drawingEl('p', { kind: 'picture', title: 'Company logo', url: 'blob:picture' }, BOX,strings))
     expect(picture).toContain('alt="Company logo"')
     expect(picture).not.toContain('de-xl-drawing')
   })

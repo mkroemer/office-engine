@@ -119,6 +119,8 @@ class XlsxStore {
   set history(history: { undo: number; redo: number }) {
     if (!getLocalHistory(this.client)) this.standaloneHistory = history
   }
+  /** edit results applied (here or a collaborator's): charts read their cells again */
+  edits = 0
   private listeners = new Set<() => void>()
   private editListeners = new Set<() => void>()
   private off: () => void
@@ -236,6 +238,7 @@ class XlsxStore {
   /** applies an edit result: new styles, layout, sheet list + refetch of touched rows */
   applied(res: XlsxEditResult | null, meta: WorkbookMeta) {
     if (!res) return
+    this.edits++
     for (const st of res.styles ?? []) {
       meta.styles[st.index] = st.css
       meta.formats[st.index] = st.format
@@ -755,7 +758,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
   const [resizing, setResizing] = useState<{ axis: 'col' | 'row'; i: number; start: number; size: number } | null>(null)
 
   const { rowAxis, colAxis } = s
-  const drawings = useSheetDrawings(client, sheet)
+  const drawings = useSheetDrawings(client, sheet, store.edits)
   // the sheet reaches as far as its drawings, past its last filled cell
   const drawn = drawingExtent(drawings, colAxis, rowAxis)
   const HW = Math.max(40, 12 + 7 * String(Math.max(s.rows, 1000)).length)
