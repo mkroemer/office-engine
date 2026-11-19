@@ -4,9 +4,12 @@ import { A, nums, opt, S, type FnDef } from './fn'
 import { ERR, type Value } from './types'
 import { num, str } from './values'
 
+/** 31/12/9999: past it Excel has no date (a code like 20240115 is not one) */
+const MAX_SERIAL = 2958466
+
 function serial(v: Value): number {
   const n = num(v)
-  if (n < 0) throw ERR.NUM
+  if (n < 0 || n >= MAX_SERIAL) throw ERR.NUM
   return n
 }
 const day = (v: Value) => Math.floor(serial(v))
@@ -57,8 +60,9 @@ function datedif(s: number, e: number, unit: string): number {
       return daysInMonth(py, pm) - a.d + b.d
     }
     case 'YD': {
-      let anniv = ymdToSerial(b.y, a.m, Math.min(a.d, daysInMonth(b.y, a.m)))
-      if (anniv > e) anniv = ymdToSerial(b.y - 1, a.m, Math.min(a.d, daysInMonth(b.y - 1, a.m)))
+      // the anniversary of 29 Feb in a year without one is 1 March (DATE overflows the day), not 28 Feb
+      let anniv = ymdToSerial(b.y, a.m, a.d)
+      if (anniv > e) anniv = ymdToSerial(b.y - 1, a.m, a.d)
       return e - anniv
     }
   }

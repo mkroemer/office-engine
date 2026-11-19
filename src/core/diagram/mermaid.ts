@@ -10,33 +10,72 @@ import { color, DiagramError, labelText, unMarkdown } from './svg'
 import { dict } from '../dict'
 
 /** Lines without comments and directives; the front matter title. */
-function prepare(src: string): { lines: string[]; title?: string } {
+function prepare(src: string): { lines: string[]; nums: number[]; title?: string } {
   let text = src.replace(/^﻿/, '').replace(/\r\n?/g, '\n')
   let title: string | undefined
+  const nl = (m: string) => m.replace(/[^\n]/g, '')
   const fm = /^\s*---\n([\s\S]*?)\n---[ \t]*(\n|$)/.exec(text)
   if (fm) {
     title = /^title:\s*(.+)$/m.exec(fm[1])?.[1].trim().replace(/^(["'])(.*)\1$/, '$2')
-    text = text.slice(fm[0].length)
+    text = nl(fm[0]) + text.slice(fm[0].length)
   }
-  text = text.replace(/%%\{[\s\S]*?\}%%/g, '')
-  const lines = text.split('\n').filter((l) => !/^\s*%%/.test(l))
-  return { lines, title }
+  text = text.replace(/%%\{[\s\S]*?\}%%/g, nl)
+  // `nums`: the 1-based line of the source each kept line came from (for error messages)
+  const lines: string[] = []
+  const nums: number[] = []
+  text.split('\n').forEach((l, k) => {
+    if (/^\s*%%/.test(l)) return
+    lines.push(l)
+    nums.push(k + 1)
+  })
+  return { lines, nums, title }
+}
+
+/** a statement the reader cannot make sense of */
+const bad = (kind: string, line: number, what: string, why = 'cannot read') => new DiagramError(`Mermaid ${kind}, line ${line}: ${why} “${what.replace(/\s+/g, ' ').trim().slice(0, 60)}”`)
+
+/** joins the lines of a quoted string or a `@{ … }` block that goes on over several lines (the line numbers of the joined ones are kept) */
+function joinOpen(lines: string[], nums: number[], kind: string): { lines: string[]; nums: number[] } {
+  const out: string[] = []
+  const on: number[] = []
+  for (let k = 0; k < lines.length; k++) {
+    let l = lines[k]
+    const start = nums[k]
+    const open = (t: string) => {
+      let q = false
+      let brace = 0
+      for (let i = 0; i < t.length; i++) {
+        if (t[i] === '"') q = !q
+        else if (!q && t[i] === '@' && t[i + 1] === '{') brace++
+        else if (!q && t[i] === '}' && brace) brace--
+      }
+      return q || brace > 0
+    }
+    while (open(l)) {
+      if (++k >= lines.length) throw bad(kind, start, l, 'unterminated string or block in')
+      l += '\n' + lines[k]
+    }
+    out.push(l)
+    on.push(start)
+  }
+  return { lines: out, nums: on }
 }
 
 export function parseMermaid(src: string): Model {
-  const { lines, title } = prepare(src)
+  const { lines, nums, title } = prepare(src)
   const k = lines.findIndex((l) => l.trim())
   if (k < 0) throw new DiagramError('The diagram is empty')
   const head = lines[k].trim()
   const kw = /^[\w-]+/.exec(head)?.[0] ?? head
   const body = lines.slice(k + 1)
+  const bodyNums = nums.slice(k + 1)
   switch (kw) {
     case 'graph':
     case 'flowchart':
     case 'flowchart-elk':
-      return { t: 'graph', graph: flowchart(head, body, title) }
+      return { t: 'graph', graph: flowchart(head, body, bodyNums, title) }
     case 'sequenceDiagram':
-      return { t: 'sequence', seq: sequence(body, title) }
+      return { t: 'sequence', seq: sequence(body, bodyNums, title) }
     case 'classDiagram':
     case 'classDiagram-v2':
       return { t: 'graph', graph: classDiagram(body, title) }
@@ -218,10 +257,13 @@ function readNode(s: string, i: number, ctx: FlowCtx): [string, number] | null {
 const HEAD: Record<string, Head> = dict({ '>': 'arrow', o: 'circle', x: 'cross' })
 
 /** reads an edge at `i` */
-function readEdge(s: string, i: number): [Omit<GEdge, 'from' | 'to'>, number] | null {
+function readEdge(s: string, i: number): [Omit<GEdge, 'from' | 'to'> & { id?: string }, number] | null {
+  // an edge id: `A e1@--> B`
+  const idm = /^\s*([\p{L}\p{N}_-]+)@(?=[-=.~<ox])/u.exec(s.slice(i))
+  if (idm) i += idm[0].length
   const rest = s.slice(i)
-  // text form: -- text -->, == text ==>, -. text .->
-  let m = /^\s*([<ox]?)(--|==|-\.)\s+(.+?)\s*(-{2,}|={2,}|\.+-)([>ox]?)(?=[\s\p{L}\p{N}_$"]|$)/u.exec(rest)
+  // text form: -- text -->, == text ==>, -. text .-> (a quoted text may hold -- or |)
+  let m = /^\s*([<ox]?)(--|==|-\.)\s+("[^"]*")\s*(-{2,}|={2,}|\.+-)([>ox]?)(?=[\s\p{L}\p{N}_$"]|$)/u.exec(rest) ?? /^\s*([<ox]?)(--|==|-\.)\s+(.+?)\s*(-{2,}|={2,}|\.+-)([>ox]?)(?=[\s\p{L}\p{N}_$"]|$)/u.exec(rest)
   let text: string | undefined
   let tail = ''
   let run = ''
@@ -239,9 +281,9 @@ function readEdge(s: string, i: number): [Omit<GEdge, 'from' | 'to'>, number] | 
     dotted = run.includes('.')
   }
   let len = m[0].length
-  const pipe = /^\s*\|([^|]*)\|/.exec(rest.slice(len))
+  const pipe = /^\s*\|(?:\s*("[^"]*")\s*|([^|]*))\|/.exec(rest.slice(len))
   if (pipe) {
-    text = pipe[1]
+    text = pipe[1] ?? pipe[2]
     len += pipe[0].length
   }
   // `x` / `o` starting the next node name: only a head when followed by a space or the end
@@ -254,6 +296,7 @@ function readEdge(s: string, i: number): [Omit<GEdge, 'from' | 'to'>, number] | 
   const extra = dotted ? (run.match(/\./g)?.length ?? 1) - 1 : run.length - (head ? 2 : 3)
   return [
     {
+      id: idm?.[1],
       label: text !== undefined && text.trim() ? mText(text) : undefined,
       head: HEAD[head] ?? 'none',
       tail: tail === '<' ? 'arrow' : tail === 'o' ? 'circle' : tail === 'x' ? 'cross' : 'none',
@@ -264,27 +307,41 @@ function readEdge(s: string, i: number): [Omit<GEdge, 'from' | 'to'>, number] | 
   ]
 }
 
-function flowchart(head: string, body: string[], title?: string): Graph {
+function flowchart(head: string, body0: string[], nums0: number[], title?: string): Graph {
+  const { lines: body, nums } = joinOpen(body0, nums0, 'flowchart')
   const d = /^\w+\s+(\w+)/.exec(head)?.[1]?.toUpperCase()
   const b = new GraphBuilder(DIRS[d ?? 'TB'] ?? 'TB', 'rect')
   const ctx: FlowCtx = { b, clusters: [], classes: new Map(), defs: new Map() }
   const linkStyles: [string, NodeStyle][] = []
-  const statements = body.flatMap((l) => splitTop(l, ';')).map((l) => l.trim()).filter(Boolean)
+  const edgeIds = new Set<string>()
+  const statements = body.flatMap((l, k) => splitTop(l, ';').map((t) => ({ st: t.trim(), line: nums[k] }))).filter((x) => x.st)
   // a header written on one line: "graph LR; A --> B"
-  const inline = splitTop(head, ';').slice(1).map((l) => l.trim()).filter(Boolean)
-  for (const st of [...inline, ...statements]) {
+  const inline = splitTop(head, ';').slice(1).map((t) => ({ st: t.trim(), line: (nums0[0] ?? 2) - 1 })).filter((x) => x.st)
+  let inDescr = false
+  for (const { st, line } of [...inline, ...statements]) {
     let m: RegExpExecArray | null
-    if ((m = /^subgraph\s+(.*)$/.exec(st))) {
+    // `accDescr { … }` block: free text
+    if (inDescr) {
+      if (st.endsWith('}')) inDescr = false
+      continue
+    }
+    if (/^accDescr\s*\{/.test(st)) {
+      inDescr = !st.endsWith('}')
+      continue
+    }
+    // `e1@{ animate: true }`: properties of an edge id, not drawn
+    if ((m = /^([\p{L}\p{N}_-]+)@\{/u.exec(st)) && edgeIds.has(m[1])) continue
+    if ((m = /^subgraph\s+([\s\S]*)$/.exec(st))) {
       const rest = m[1].trim()
       let id = rest
       let label = rest
-      const br = /^([^\s[]+)\s*\[(.*)\]$/.exec(rest)
+      const br = /^([^\s[]+)\s*\[([\s\S]*)\]$/.exec(rest)
       if (br) {
         id = br[1]
         label = br[2]
       }
-      label = mText(label)
-      id = id.replace(/^"(.*)"$/, '$1')
+      label = mText(label.replace(/^'([\s\S]*)'$/, '$1'))
+      id = id.replace(/^(["'])([\s\S]*)\1$/, '$2')
       const parent = ctx.clusters[ctx.clusters.length - 1]
       b.cluster(id, label, parent)
       ctx.clusters.push(id)
@@ -317,7 +374,7 @@ function flowchart(head: string, body: string[], title?: string): Graph {
       linkStyles.push([m[1].trim(), cssStyle(m[2])])
       continue
     }
-    if (/^(click|accTitle|accDescr|callback)\b/.test(st)) continue
+    if (/^(click|accTitle|accDescr|callback|link)\b/.test(st)) continue
     // chain: nodes (& nodes) (edge nodes)*
     let i = 0
     let prev: string[] = []
@@ -333,11 +390,17 @@ function flowchart(head: string, body: string[], title?: string): Graph {
         if (!amp) break
         i += amp[0].length
       }
-      if (!group.length) break
+      // not a node where one must be: a statement that is not understood, or an edge without a target
+      if (!group.length) throw bad('flowchart', line, st)
       if (pending) for (const a of prev) for (const z of group) b.edge({ ...pending, from: a, to: z })
       prev = group
       const e = readEdge(st, i)
-      if (!e) break
+      if (!e) {
+        const left = st.slice(i).trim()
+        if (left && !left.startsWith('%%')) throw bad('flowchart', line, left)
+        break
+      }
+      if (e[0].id) edgeIds.add(e[0].id)
       pending = e[0]
       i = e[1]
     }
@@ -380,17 +443,29 @@ const SEQ_ARROWS: [string, boolean, MsgHead, boolean][] = [
   ['->', false, 'none', false],
 ]
 
+const CSS_COLORS = new Set('aqua black blue brown coral cyan fuchsia gold gray grey green indigo ivory khaki lavender lime magenta maroon navy olive orange orchid pink plum purple red salmon silver tan teal tomato turquoise violet wheat white yellow transparent lightblue lightgreen lightgrey lightgray lightyellow lightpink darkblue darkgreen darkred darkgray darkgrey skyblue steelblue crimson beige azure'.split(' '))
+
 const P_KIND: Record<string, PKind> = dict({ participant: 'participant', actor: 'actor', boundary: 'boundary', control: 'control', entity: 'entity', database: 'database', collections: 'collections', queue: 'queue' })
 
-function sequence(body: string[], title?: string) {
+function sequence(body: string[], nums: number[], title?: string) {
   const b = new SequenceBuilder()
   b.s.title = title
   const blocks: ('box' | 'frag')[] = []
-  const arrowRe = new RegExp(`^(.+?)\\s*(${SEQ_ARROWS.map(([a]) => a.replace(/[()|]/g, '\\$&')).join('|')})\\s*([+-]?)\\s*([^:]+?)\\s*(?::(.*))?$`)
-  for (const raw of body) {
+  const arrowRe = new RegExp(`^(.+?)\\s*(${SEQ_ARROWS.map(([a]) => a.replace(/[()|]/g, '\\$&')).join('|')})\\s*([+-]?)\\s*([^:>][^:]*?)\\s*(?::(.*))?$`)
+  let inDescr = false
+  for (const [at, raw] of body.entries()) {
     const l = raw.trim()
     if (!l) continue
     let m: RegExpExecArray | null
+    if (inDescr) {
+      if (l.endsWith('}')) inDescr = false
+      continue
+    }
+    if (/^accDescr\s*\{/.test(l)) {
+      inDescr = !l.endsWith('}')
+      continue
+    }
+    if (/^(accTitle|accDescr|links?|properties|details)\b/.test(l)) continue
     if ((m = /^(?:create\s+)?(participant|actor)\s+(.+?)(?:@\{(.*)\})?(?:\s+as\s+(.+))?$/.exec(l))) {
       const id = m[2].trim()
       const typ = m[3] ? /"type"\s*:\s*"(\w+)"/.exec(m[3])?.[1] : undefined
@@ -418,8 +493,12 @@ function sequence(body: string[], title?: string) {
       b.push({ t: 'note', pos, who: m[2].split(',').map((x) => x.trim()), text: mText(m[3]) })
       continue
     }
-    if ((m = /^box\b/.exec(l))) {
+    if ((m = /^box\b\s*(.*)$/.exec(l))) {
       blocks.push('box')
+      // `box Aqua Title`, `box rgb(1,2,3) Title`, `box transparent Title`, `box Title`
+      const c = /^(rgba?\([^)]*\)|#[0-9a-fA-F]{3,8}|[A-Za-z]+)(?:\s+(.*)|$)/.exec(m[1].trim())
+      const fill = c && (/^(?:rgb|#)/i.test(c[1]) || CSS_COLORS.has(c[1].toLowerCase())) ? color(c[1]) : undefined
+      b.beginBox(mText(fill !== undefined && c ? c[2] ?? '' : m[1]), fill)
       continue
     }
     if ((m = /^(loop|alt|opt|par|par_over|critical|break|rect)\b\s*(.*)$/.exec(l))) {
@@ -434,6 +513,7 @@ function sequence(body: string[], title?: string) {
     }
     if (l === 'end') {
       if (blocks.pop() === 'frag') b.push({ t: 'end' })
+      else b.endBox()
       continue
     }
     if ((m = arrowRe.exec(l))) {
@@ -451,6 +531,7 @@ function sequence(body: string[], title?: string) {
       })
       continue
     }
+    throw bad('sequence diagram', nums[at], l)
   }
   return b.s
 }

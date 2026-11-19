@@ -65,7 +65,8 @@ class Packager {
         if (!story || ((k === 0 || k === 2) && !m.facingPages)) continue
         const key = `${story[0]}:${story[1]}`
         let rid = hf.get(key)
-        const header = k % 4 < 2
+        // the stories: even / odd header, even / odd footer, first-page header, first-page footer
+        const header = k < 2 || k === 4
         if (!rid) {
           const name = header ? `header${++nHdr}.xml` : `footer${++nFtr}.xml`
           const part = new Part('word/' + name)

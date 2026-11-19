@@ -3,8 +3,9 @@
  * only the dependents (transitively) of the changed cells are re-evaluated.
  */
 import { EvalSignal, evaluate, evaluateArray, FormulaError, isVolatile, parseFormula, references, UnsupportedFormula, type Ast, type CellProvider, type Value } from './formula'
+import { isoToSerial } from './formula/dates'
 import { expandShared } from './structure'
-import { MAX_COL, MAX_ROWS, T_BOOL, T_EMPTY, T_ERR, T_NUM, T_SST, T_STR, type SheetData, type XlsxWorkbook } from './workbook'
+import { colAt, ownRow, MAX_COL, MAX_ROWS, T_BOOL, T_DATE, T_EMPTY, T_ERR, T_NUM, T_SST, T_STR, type SheetData, type XlsxWorkbook } from './workbook'
 
 type Id = string // `${sheet}:${key}`
 const idOf = (sheet: number, key: number) => `${sheet}:${key}`
@@ -69,6 +70,11 @@ const MAX_DEPTH = 48
 /** cells of an array formula followed one by one (dependents, order of computing): a larger array is taken as its first cell alone */
 const MAX_FILL = 250_000
 
+/** blocks wider than this are not kept (each of their columns is checked for what was stored since) */
+const KEPT_COLS = 16
+/** cells kept in all, at most (8 bytes each and more) */
+const KEPT_CELLS = 4_000_000
+
 /** the formula `id` is too deep in the stack to compute now */
 class Deep extends EvalSignal {
   constructor(readonly id: Id) {
@@ -92,6 +98,13 @@ export class Calc {
   /** the cells an array formula fills (other than its own) → the formula's cell: reading one waits for the formula */
   private filledBy = new Map<Id, Id>()
   private names = new Map<string, number>()
+  /** blocks of cells kept while a pass computes (`block`), those asked for once, and the cells they hold in all */
+  private kept = new Map<string, { rows: Value[][]; at: number }>()
+  private asked = new Set<string>()
+  private keptCells = 0
+  /** a clock of the values stored in this pass, and when one was last stored in a column (sheet * MAX_COL + column) */
+  private clock = 0
+  private stored = new Map<number, number>()
   private indexed = false
   /** whether the cells computed now are noted as changed (`SheetData.revalued`): not those computed when a file is read */
   private track = true
@@ -237,6 +250,29 @@ export class Calc {
     this.idle = 0
   }
 
+  /** the value of a cell entry (its type and what it holds) as the formula engine sees it */
+  private entryValue(t: number, v: unknown): Value {
+    switch (t) {
+      case T_NUM:
+        return v as number
+      case T_SST:
+        return this.wb.sst[v as number] ?? ''
+      case T_STR:
+        return String(v)
+      case T_BOOL:
+        return !!v
+      case T_ERR:
+        return new FormulaError(String(v) as ConstructorParameters<typeof FormulaError>[0])
+      case T_EMPTY:
+        return null
+      case T_DATE:
+        // an ISO date is the number of its day (and time), as for a date typed in
+        return isoToSerial(String(v), this.wb.date1904) ?? String(v)
+      default:
+        return String(v)
+    }
+  }
+
   /** current value of a cell as the formula engine sees it */
   private value(sheet: number, r: number, c: number): Value {
     const d = this.wb.sheetsData.get(sheet)
@@ -244,28 +280,97 @@ export class Calc {
     if (d?.pages && !d.pages.has(r)) throw new Error('Row not in memory')
     const row = d?.rows[r]
     if (!row) return null
-    for (let k = 0; k < row.length; k += 4) {
-      if (row[k] !== c) continue
-      const t = row[k + 1] as number
-      const v = row[k + 2]
-      switch (t) {
-        case T_NUM:
-          return v as number
-        case T_SST:
-          return this.wb.sst[v as number] ?? ''
-        case T_STR:
-          return String(v)
-        case T_BOOL:
-          return !!v
-        case T_ERR:
-          return new FormulaError(String(v) as ConstructorParameters<typeof FormulaError>[0])
-        case T_EMPTY:
-          return null
-        default:
-          return String(v)
+    const k = colAt(row, c)
+    return k < row.length && row[k] === c ? this.entryValue(row[k + 1] as number, row[k + 2]) : null
+  }
+
+  /**
+   * The cells of a block, as `provider.value` gives them one by one, without what that costs per cell (an id made
+   * for each, the row searched from its start): a sum down a column of 10 000 rows, in each of 10 000 rows, is fifty
+   * million of them. Only the cells holding a formula go the long way (they may be still to compute, or part of a
+   * circular reference). Returns whether a cell was one being computed (read as #REF!, for now only).
+   */
+  private read(s: number, r0: number, c0: number, r1: number, c1: number, pending: Set<Id>, visiting: Set<Id>, cb: (v: Value, i: number, j: number) => void): boolean {
+    const d = this.wb.sheetsData.get(s)
+    const filled = this.filledBy.size > 0
+    let circular = false
+    for (let r = r0; r <= r1; r++) {
+      if (d?.pages && !d.pages.has(r)) throw new Error('Row not in memory')
+      let row = d?.rows[r]
+      let k = row ? colAt(row, c0) : 0
+      const base = r * MAX_COL
+      for (let c = c0; c <= c1; c++) {
+        let v: Value = null
+        if (d && (d.formulas.has(base + c) || (filled && this.filledBy.has(idOf(s, base + c))))) {
+          let id = idOf(s, base + c)
+          if (filled) id = this.filledBy.get(id) ?? id
+          if (visiting.has(id)) {
+            v = new FormulaError('#REF!')
+            circular = true
+          } else {
+            if (pending.has(id)) this.compute(id, pending, visiting)
+            v = this.value(s, r, c)
+          }
+          // computing may have given the row cells
+          row = d.rows[r]
+          k = row ? colAt(row, c + 1) : 0
+        } else if (row && k < row.length && row[k] === c) {
+          v = this.entryValue(row[k + 1] as number, row[k + 2])
+          k += 4
+        }
+        cb(v, r - r0, c - c0)
       }
     }
-    return null
+    return circular
+  }
+
+  /** see `CellProvider.block`: kept from the second time a block is asked for, while nothing is stored in its columns */
+  private block(s: number, r0: number, c0: number, r1: number, c1: number, pending: Set<Id>, visiting: Set<Id>): Value[][] | undefined {
+    if (c1 - c0 >= KEPT_COLS) return undefined
+    const key = `${s}:${r0}:${c0}:${r1}:${c1}`
+    const cells = (r1 - r0 + 1) * (c1 - c0 + 1)
+    const hit = this.kept.get(key)
+    if (hit) {
+      let fresh = true
+      for (let c = c0; c <= c1 && fresh; c++) fresh = (this.stored.get(s * MAX_COL + c) ?? 0) <= hit.at
+      if (fresh) return hit.rows
+      this.kept.delete(key)
+      this.keptCells -= cells
+    }
+    // (a block asked for once is not kept: a running total has one of its own per row)
+    if (!this.asked.has(key)) {
+      this.asked.add(key)
+      return undefined
+    }
+    if (this.keptCells + cells > KEPT_CELLS) return undefined
+    const rows: Value[][] = []
+    const last = c1 - c0
+    let row: Value[] = []
+    const circular = this.read(s, r0, c0, r1, c1, pending, visiting, (v, _i, j) => {
+      row.push(v)
+      if (j === last) {
+        rows.push(row)
+        row = []
+      }
+    })
+    // (what a circular reference reads is #REF! while it is computed, not after)
+    if (!circular) {
+      this.kept.set(key, { rows, at: this.clock })
+      this.keptCells += cells
+    }
+    return rows
+  }
+
+  /** a value was stored in column `c` of `sheet`: the blocks kept over it are stale */
+  private touched(sheet: number, c: number) {
+    this.stored.set(sheet * MAX_COL + c, ++this.clock)
+  }
+
+  private forget() {
+    this.kept.clear()
+    this.asked.clear()
+    this.stored.clear()
+    this.keptCells = 0
   }
 
   private provider(pending: Set<Id>, visiting: Set<Id>): CellProvider {
@@ -280,6 +385,16 @@ export class Calc {
         if (visiting.has(id)) return new FormulaError('#REF!')
         if (pending.has(id)) this.compute(id, pending, visiting)
         return this.value(s, r, c)
+      },
+      read: (sheetName, r0, c0, r1, c1, cb) => {
+        const s = this.sheetIndex(sheetName, this.cur)
+        if (s >= 0) return void this.read(s, r0, c0, r1, c1, pending, visiting, cb)
+        const err = new FormulaError('#REF!')
+        for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) cb(err, r - r0, c - c0)
+      },
+      block: (sheetName, r0, c0, r1, c1) => {
+        const s = this.sheetIndex(sheetName, this.cur)
+        return s < 0 ? undefined : this.block(s, r0, c0, r1, c1, pending, visiting)
       },
       bounds: (sheetName) => {
         const d = this.wb.sheetsData.get(this.sheetIndex(sheetName, this.cur))
@@ -336,8 +451,10 @@ export class Calc {
       v = new FormulaError('#NAME?')
     }
     if (store(d, key, v) && this.track) d.revalued.add(key)
+    this.touched(sheet, key % MAX_COL)
     // an array formula gives each cell it fills its value
     if (rg && filled) {
+      for (let c = rg.c0; c <= rg.c1; c++) this.touched(sheet, c)
       for (let r = rg.r0; r <= rg.r1; r++) {
         for (let c = rg.c0; c <= rg.c1; c++) {
           const k = r * MAX_COL + c
@@ -406,7 +523,7 @@ export class Calc {
   }
 
   /** the formula cells to compute after `changed` cells change: the given ones, then every dependent (transitively) */
-  private affected(changed: { sheet: number; key: number }[], formulas: { sheet: number; key: number }[]): Id[] {
+  private affected(changed: { sheet: number; key: number }[], formulas: { sheet: number; key: number }[], volatile = false): Id[] {
     const pending = new Set<Id>()
     const queue: Id[] = []
     const push = (id: Id) => {
@@ -466,7 +583,7 @@ export class Calc {
     for (const ch of changed) visit(idOf(ch.sheet, ch.key))
     for (const f of formulas) visit(idOf(f.sheet, f.key))
     // whatever changed, the volatile ones may give something else now, and what reads them with them
-    if (changed.length || formulas.length) {
+    if (changed.length || formulas.length || volatile) {
       for (const id of this.volatile) {
         push(id)
         visit(id)
@@ -479,13 +596,15 @@ export class Calc {
    * Evaluates the given formula cells and everything that depends on the changed cells. `track`: the cells whose
    * value changes are noted for the next save (not when the values are those a file left out).
    */
-  recalc(changed: { sheet: number; key: number }[], formulas: { sheet: number; key: number }[] = [], track = true): Set<number> {
+  recalc(changed: { sheet: number; key: number }[], formulas: { sheet: number; key: number }[] = [], track = true, volatile = false): Set<number> {
     this.index()
-    const queue = this.affected(changed, formulas)
+    const queue = this.affected(changed, formulas, volatile)
     const pending = new Set<Id>(queue)
     const sheets = new Set<number>()
     const visiting = new Set<Id>()
     this.track = track
+    // (what was kept of the last pass is of the cells as they were then)
+    this.forget()
     try {
       for (const id of queue) {
         if (!pending.has(id)) continue
@@ -493,15 +612,19 @@ export class Calc {
       }
     } finally {
       this.track = true
+      this.forget()
     }
     for (const id of queue) sheets.add(Number(id.slice(0, id.indexOf(':'))))
     return sheets
   }
 
-  /** formulas whose value is missing or not to be trusted (files written without cached values) */
-  computeMissing(cells: { sheet: number; key: number }[]) {
-    if (!cells.length) return
-    this.recalc([], cells, false)
+  /**
+   * Formulas whose value is missing or not to be trusted (files written without cached values); `clock`: and those
+   * whose value is of the moment (TODAY, NOW, RAND…), with what reads them. Returns the sheets computed in.
+   */
+  computeMissing(cells: { sheet: number; key: number }[], clock = false): Set<number> {
+    if (!cells.length && !clock) return new Set()
+    return this.recalc([], cells, false, clock)
   }
 }
 
@@ -513,7 +636,8 @@ function cached(d: SheetData, key: number): boolean {
   for (let k = 0; k < row.length; k += 4) {
     if (row[k] !== c) continue
     const t = row[k + 1]
-    return t !== T_EMPTY && !(t === T_STR && String(row[k + 2]).startsWith('='))
+    // (a formula just typed holds its own text, "=" before it, until it is computed: a text result may start with "=" too)
+    return t !== T_EMPTY && !(t === T_STR && row[k + 2] === '=' + d.formulas.get(key))
   }
   return false
 }
@@ -525,7 +649,7 @@ function store(d: SheetData, key: number, v: Value): boolean {
   // a formula cell was edited: its page is in memory for good
   if (d.pages && !d.pages.has(r)) throw new Error('Row not in memory')
   d.pages?.pin(r)
-  let row = d.rows[r]
+  let row = ownRow(d, r)
   if (!row) d.rows[r] = row = []
   let t: number
   let val: unknown

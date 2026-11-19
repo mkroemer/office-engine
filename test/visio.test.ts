@@ -842,8 +842,8 @@ describe('visio: limits', () => {
           shape({ id: 2, style: STYLE.NORMAL, box: [5, 3, 1, 1], sections: geom(0, [['MoveTo', { X: 0, Y: 0 }], ['LineTo', { X: '1e400', Y: 1 }], ['ArcTo', { X: 1, Y: 1, A: '1e308' }], ['NURBSTo', { X: 1, Y: 0, E: `NURBS(1, 99999, 1, 1${', 0.5,0.5,0,1'.repeat(20000)})` }], ['LineTo', { X: 0, Y: 0 }]]), text: 'still here\n' }),
       ),
     )
-    // the 200th level is not reached; a cell that is not a number counts as missing (the pin at 0, no turn)
-    expect(texts(slides[0])).toEqual(['nowhere', 'still here'])
+    // groups nest as deep as the XML does (P3-039); a cell that is not a number counts as missing (the pin at 0, no turn)
+    expect(texts(slides[0])).toEqual(['bottom', 'nowhere', 'still here'])
     box(under(slides[0], 'nowhere'), -0.5, 8.5 - 3.5, 1, 1)
     expect(under(slides[0], 'still here').path).toMatch(/^M[\d. ]+L/)
     expect(under(slides[0], 'still here').path).not.toMatch(/NaN|Infinity/)

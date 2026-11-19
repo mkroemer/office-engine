@@ -21,6 +21,12 @@ export interface OpenParams {
   residentCells?: number
   /** CSV / TSV: rows read from the file at a time past `residentCells` (default 1024) */
   pageRows?: number
+  /**
+   * Text files (CSV, TSV, text, Markdown, HTML…): the encoding the bytes are read in (a `TextDecoder` label such as
+   * `windows-1258`), instead of the byte order mark, the declared charset or a guess (UTF-8, else Windows-1258 for
+   * Vietnamese text, else Windows-1252)
+   */
+  encoding?: string
 }
 
 export interface OpenResult {
@@ -80,7 +86,7 @@ export interface Methods {
   'xlsx.drawings'(sheet: number): SheetDrawing[]
   /** cells whose shown value (or formula) contains the text */
   'xlsx.find'(sheet: number, query: string, opts?: FindOptions): FindMatch[]
-  /** the sheet as delimited text (the values as shown): `sep` a comma (with a byte order mark) or a tab */
+  /** the sheet as delimited text (the values as shown, a General number with its digits; texts a spreadsheet would run as formulas with a `'` in front), after a byte order mark: `sep` a comma, a semicolon or a tab */
   'xlsx.text'(sheet: number, sep: string): Blob
   /** replaces text in matching cells (or only `at`); null when nothing changed */
   'xlsx.replace'(sheet: number, query: string, by: string, opts?: FindOptions, at?: { r: number; c: number }): XlsxEditResult | null
@@ -96,16 +102,17 @@ export interface Methods {
    * a new sheet after `after` holding the rows of a delimited text file (CSV / TSV), streamed in when the sheet is
    * loaded; `sep` is detected from the first line when missing, `name` defaults to the file's
    */
-  'xlsx.import'(after: number, src: Blob | ArrayBuffer | string, params?: { name?: string; sep?: string; residentCells?: number; pageRows?: number }): XlsxEditResult
+  'xlsx.import'(after: number, src: Blob | ArrayBuffer | string, params?: { name?: string; sep?: string; residentCells?: number; pageRows?: number; encoding?: string }): XlsxEditResult
   'xlsx.undo'(): XlsxEditResult | null
   'xlsx.redo'(): XlsxEditResult | null
   'pptx.slide'(index: number): SlideModel
-  'pptx.setText'(index: number, sid: number, paras: PParaSpec[]): SlideModel
+  /** `cell`: [row, column] of a table cell (`sid` is then the table's graphic frame) */
+  'pptx.setText'(index: number, sid: number, paras: PParaSpec[], cell?: [number, number]): SlideModel
   'pptx.shapes'(index: number, ops: ShapeOp[]): SlideModel
   'pptx.slides'(op: SlideOp): PresentationMeta
   'pptx.image'(index: number, bytes: ArrayBuffer, ext: string): string
-  /** undo (or redo) the last shape edit */
-  'pptx.undo'(redo?: boolean): { index: number; model: SlideModel } | null
+  /** undo (or redo) the last edit; `meta` when it changed the slide list */
+  'pptx.undo'(redo?: boolean): { index: number; model: SlideModel; meta?: PresentationMeta } | null
   /** collaboration (src/collab): a shared XLSX operation, outside the undo history; `rec` reverts it */
   'collab.xlsx.apply'(op: XOp): { res: XlsxEditResult | null; rec: number | null }
   'collab.xlsx.revert'(rec: number): XlsxEditResult | null
@@ -124,6 +131,8 @@ export interface Events {
   'collab:xlsx': XlsxEditResult
   /** collaboration: a slide (or the slide list) changed remotely */
   'collab:pptx': PptxCollabResult
+  /** the document opened, but not whole: what is missing from it (more columns in a CSV than a sheet holds…) */
+  warning: { text: string }
   /** a comment was set or deleted (by this client or a collaborator) */
   comment: { id: string; c: DocComment | null }
 }

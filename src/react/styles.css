@@ -1040,6 +1040,11 @@
 .de-fref-pt { border-style: dashed; }
 .de-cell-hl { z-index: 4; pointer-events: none; color: var(--de-sheet-ink); overflow: hidden; overflow-wrap: break-word; }
 .de-cell-edit { overflow-wrap: break-word; }
+/* the field that has the keyboard while no cell is edited (see XlsxView): there to receive typed / composed / inserted text */
+.de-cell-sink { position: absolute; z-index: 0; padding: 0; margin: 0; border: 0; outline: none; resize: none; overflow: hidden; opacity: 0; pointer-events: none; background: transparent; caret-color: transparent; }
+/* the corner of the selection: dragged to copy it down / right */
+.de-fill-handle { position: absolute; z-index: 4; box-sizing: border-box; width: 8px; height: 8px; border: 1px solid var(--de-page); background: var(--de-accent); cursor: crosshair; }
+.de-fill-preview { position: absolute; z-index: 3; box-sizing: border-box; border: 1px dashed var(--de-sheet-ink); pointer-events: none; }
 .de-cell-edit-fx { background: transparent; color: transparent; caret-color: var(--de-sheet-ink); box-shadow: none; }
 .de-cell-edit-fx::selection { color: transparent; background: var(--de-accent-soft); background: color-mix(in srgb, var(--de-accent) 25%, transparent); }
 .de-fassist-at { position: absolute; z-index: 30; }
@@ -1274,6 +1279,11 @@
 .de-collab-error .de-collab-dot { background: var(--de-status-error); }
 @keyframes de-collab-pulse { to { opacity: 0.35; } }
 @media (max-width: 640px) { .de-collab-label { display: none; } }
+/* the bar can hold more buttons than a phone is wide: they wrap onto a second row, the title yields */
+@media (max-width: 640px) {
+  .de-bar { flex-wrap: wrap; row-gap: 6px; }
+  .de-title { flex: 1 1 60px; }
+}
 .de-peers { display: inline-flex; align-items: center; }
 .de-peer {
   display: inline-grid; place-items: center; width: 26px; height: 26px; margin-left: -6px; border-radius: 50%;

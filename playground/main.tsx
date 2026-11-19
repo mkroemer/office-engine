@@ -97,6 +97,8 @@ function App() {
   const [sharing, setSharing] = useState<string | null>(null)
   const [url, setUrl] = useState('')
   const [drag, setDrag] = useState(false)
+  // the document has changes not saved: another file replaces it only when the user agrees (File → Open asks too)
+  const [dirty, setDirty] = useState(false)
   const [loadMs, setLoadMs] = useState<number | null>(null)
   const [t0, setT0] = useState(() => performance.now())
   const [theme, setTheme] = useState<Theme>(initialTheme)
@@ -112,7 +114,13 @@ function App() {
     }
   }, [theme, dark])
 
+  /** replaces the document with another file, after asking when there are unsaved changes */
+  const openFile = (s: DocSource) => {
+    if (dirty && !window.confirm('Opening another file replaces the current document. Your changes are not saved. Continue?')) return
+    open(s)
+  }
   const open = (s: DocSource, inRoom: string | null = null, at = 0) => {
+    setDirty(false)
     setT0(performance.now())
     setLoadMs(null)
     setSrc(s)
@@ -166,20 +174,23 @@ function App() {
         e.preventDefault()
         setDrag(false)
         const f = e.dataTransfer.files[0]
-        if (f) open(f)
+        if (f) openFile(f)
       }}
     >
       <div style={bar}>
         <strong>office-engine</strong>
         <a href={DOCS_URL} style={{ marginRight: 8, color: c.accent, textDecoration: 'none' }}>Docs</a>
         {SAMPLES.map((s) => (
-          <button key={s.url} style={btn} onClick={() => open(s.url)}>{s.label}</button>
+          <button key={s.url} style={btn} onClick={() => openFile(s.url)}>{s.label}</button>
         ))}
         <label style={{ ...btn, display: 'inline-block' }}>
           Open file…
-          <input type="file" accept={`${OPEN_ACCEPT},.docm,.xlsm,.pptm`} hidden onChange={(e) => e.target.files?.[0] && open(e.target.files[0])} />
+          <input type="file" accept={`${OPEN_ACCEPT},.docm,.xlsm,.pptm`} hidden onChange={(e) => {
+            if (e.target.files?.[0]) openFile(e.target.files[0])
+            e.target.value = ''
+          }} />
         </label>
-        <form onSubmit={(e) => { e.preventDefault(); if (url) open(url) }} style={{ display: 'flex', gap: 6, flex: '1 1 260px' }}>
+        <form onSubmit={(e) => { e.preventDefault(); if (url) openFile(url) }} style={{ display: 'flex', gap: 6, flex: '1 1 260px' }}>
           <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…/file.xlsx (Range requests)" style={{ ...btn, flex: 1, cursor: 'text' }} />
           <button style={btn}>Open URL</button>
         </form>
@@ -216,7 +227,7 @@ function App() {
         {sharing && <span style={{ color: /failed/.test(sharing) ? c.danger : c.muted }}>{sharing}</span>}
       </div>
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-        <DocViewer src={src} onLoad={onLoad} editable collab={collab} theme={theme} />
+        <DocViewer src={src} onLoad={onLoad} onDirtyChange={setDirty} editable collab={collab} theme={theme} />
         {drag && (
           <div style={{ position: 'absolute', inset: 12, border: `2px dashed ${c.accent}`, borderRadius: 12, background: 'rgba(26,115,232,.06)', display: 'grid', placeItems: 'center', fontSize: 16, color: c.accent, pointerEvents: 'none' }}>
             Drop an Office, Pages, Keynote, Numbers, Visio, CSV, text, Markdown, HTML, Mermaid, PlantUML or Graphviz file

@@ -35,7 +35,7 @@ From a CDN, no build step:
 
 ## What is drawn
 
-sequence (activations, `return`, notes, alt / loop / group…, dividers, delays), class / object, use case, component / deployment (packages, nodes, clouds…), state, activity (new syntax: if / elseif / switch / while / repeat / fork / partitions), mind map, WBS, `@startdot` (Graphviz).
+sequence (activations, `return`, notes, alt / loop / group…, dividers, delays), class / object, use case, component / deployment (packages, nodes, clouds… and the one-line elements: agent, artifact, card, file, folder, frame, stack, storage…), state (with `State : text` descriptions), activity (new syntax: if / elseif / switch / while / repeat / fork / partitions, swimlanes `|Lane|`, notes), mind map, WBS, `@startdot` (Graphviz). Names and aliases as in the official examples (`actor Guest as g`, `actor "Guest User" as g`, `actor g as "Guest User"`). Preprocessing: `!define` (with arguments), `!$var = …` / `?=`, `!undef`, `!if` / `!ifdef` / `!ifndef` / `!else` / `!endif`; `!include`, `!function` and the like are ignored.
 
 Laid out by a built-in layered layout, so drawings look close to, not exactly like, the original tool's. Not drawn yet: Gantt, JSON / YAML, salt, timing, network, ditaa, old-style activity `if`.
 

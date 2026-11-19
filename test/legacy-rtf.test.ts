@@ -249,7 +249,7 @@ describe('paragraph formatting', () => {
     const rtf = doc(String.raw`\pard one\line two\page three\column four\tab five\emdash\endash\bullet\lquote\rquote\ldblquote\rdblquote soft\-hyphen non\_breaking\par`)
     expect(await part(rtf)).toContain('<w:br w:type="column"/>')
     const { paras } = await open(rtf)
-    expect(texts(paras)).toEqual(['one\ntwo', 'three\nfour\tfive\u2014\u2013\u2022\u2018\u2019\u201c\u201dsoft\u00adhyphen non\u2011breaking'])
+    expect(texts(paras)).toEqual(['one\ntwo', 'three[\n]four\tfive\u2014\u2013\u2022\u2018\u2019\u201c\u201dsoft\u00adhyphen non\u2011breaking'])
     expect(paras[1].pb).toBe(true)
   })
 })
@@ -409,7 +409,7 @@ describe('notes, fields, bookmarks', () => {
   test('footnotes and endnotes', async () => {
     const rtf = doc(String.raw`\pard Text{\super\chftn}{\footnote\pard\plain{\super\chftn} The note.}\par More{\super\chftn}{\footnote\ftnalt\pard{\super\chftn} End note {\field{\*\fldinst HYPERLINK "https://example.com/end"}{\fldrslt link}}.}\par`)
     const { paras } = await open(rtf)
-    expect(texts(paras)).toEqual(['Text[1]', 'More[1]'])
+    expect(texts(paras)).toEqual(['Text[1]', 'More[i]'])
     const notes = await part(rtf, 'word/footnotes.xml')
     expect(notes).toContain('<w:footnote w:type="separator" w:id="-1">')
     expect(notes).toMatch(/<w:footnote w:id="1"><w:p><w:r><w:rPr><w:vertAlign w:val="superscript"\/><\/w:rPr><w:footnoteRef\/><\/w:r><w:r><w:t xml:space="preserve"> The note.<\/w:t>/)

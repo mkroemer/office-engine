@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { BorderKind, FmtPatch } from '../../core/xlsx/types'
 import { MOD } from '../common/ContextMenu'
 import { EditorBar } from '../common/Slots'
-import { Btn, ColorBtn, Dropdown, fontName, fontOptions, Icon, Menu, Pop, Select, Sep, SizeBox, type IconName } from '../edit/Toolbar'
+import { Btn, ColorBtn, Dropdown, fontName, fontOptions, Icon, Menu, Pop, PromptBox, Select, Sep, SizeBox, useDismiss, type DropOption, type IconName } from '../edit/Toolbar'
 import { useStrings, type Strings } from '../strings'
 
 type FormatName = keyof Strings['xlsx']['formats']
@@ -80,6 +80,41 @@ function decimals(fmt: string, d: number): string {
   return base.slice(0, m.index) + '0' + (n ? '.' + '0'.repeat(n) : '') + base.slice(m.index + m[0].length)
 }
 
+const CUSTOM = '\u0000custom'
+
+/** the number formats, the one of the cell first when it is none of them, and a field for a format code typed by hand */
+function NumberFormat({ format, onPick }: { format: string; onPick: (code: string) => void }) {
+  const [typing, setTyping] = useState(false)
+  const ref = useRef<HTMLSpanElement>(null)
+  useDismiss(ref, typing, () => setTyping(false))
+  const t = useStrings()
+  const known = FORMATS.find((x) => x.value === format)
+  const options: DropOption<string>[] = [
+    ...(known ? [] : [{ value: format, label: t.xlsx.formats.custom, hint: format }]),
+    ...FORMATS.map(({ k, ...x }) => ({ ...x, label: t.xlsx.formats[k] })),
+    { value: CUSTOM, label: t.xlsx.customFormat, sep: true },
+  ]
+  return (
+    <span ref={ref} className="de-tb-color">
+      <Select title={t.xlsx.numberFormat(t.xlsx.formats[known?.k ?? 'custom'])} width={96} menuWidth={270} value={format} options={options} onChange={(v) => (v === CUSTOM ? setTyping(true) : onPick(v))} />
+      {typing && (
+        <div className="de-tb-pop" role="dialog" aria-label={t.xlsx.customFormatTitle} onKeyDown={(e) => e.key === 'Escape' && setTyping(false)}>
+          <PromptBox
+            placeholder={t.xlsx.formatCode}
+            initial={format === 'General' ? '' : format}
+            ok={t.common.apply}
+            onOk={(v) => {
+              setTyping(false)
+              // (a format code holds 255 characters at most)
+              onPick(v.trim().slice(0, 255) || 'General')
+            }}
+          />
+        </div>
+      )}
+    </span>
+  )
+}
+
 export function XlsxToolbar(props: {
   css: Record<string, string | number>
   /** workbook default font (cells without an explicit font) */
@@ -114,9 +149,6 @@ export function XlsxToolbar(props: {
   const font = fontName((css.fontFamily ?? props.base.fontFamily) as string | undefined)
   const t = useStrings()
   const kb = (label: string, keys: string) => t.edit.keyed(label, keys)
-  const known = FORMATS.find((x) => x.value === props.format)
-  const options = FORMATS.map(({ k, ...x }) => ({ ...x, label: t.xlsx.formats[k] }))
-  const formats = known ? options : [{ value: props.format, label: t.xlsx.formats.custom, hint: props.format }, ...options]
   const borderTitle = (k: BorderKind) => (k === 'none' ? t.xlsx.clearBorders : t.format.borders[k])
   return (
     <EditorBar>
@@ -128,7 +160,7 @@ export function XlsxToolbar(props: {
       <Btn icon="percent" title={t.xlsx.percent} onClick={() => f({ numFmt: '0%' })} />
       <Btn icon="decLess" title={t.xlsx.decLess} onClick={() => f({ numFmt: decimals(props.format, -1) })} />
       <Btn icon="decMore" title={t.xlsx.decMore} onClick={() => f({ numFmt: decimals(props.format, 1) })} />
-      <Select title={t.xlsx.numberFormat(t.xlsx.formats[known?.k ?? 'custom'])} width={96} menuWidth={270} value={props.format} options={formats} onChange={(v) => f({ numFmt: v })} />
+      <NumberFormat format={props.format} onPick={(v) => f({ numFmt: v })} />
       <Sep />
       <Select title={t.edit.font} width={112} menuWidth={200} value={font} placeholder={t.edit.font} options={fontOptions(font)} onChange={(v) => f({ font: v })} />
       <Sep />
