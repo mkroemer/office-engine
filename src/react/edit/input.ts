@@ -371,6 +371,8 @@ export class RichInput {
   private expected: Sel | null = null
   /** where the DOM selection last was in a paragraph: a view update that removes this node leaves the caret on the page element */
   private seen: Node | null = null
+  /** a selection change was not followed yet when the input was detached: the next attach reads the selection */
+  private missedSel = false
 
   constructor(private host: RichHost) {}
 
@@ -388,6 +390,11 @@ export class RichInput {
     root.addEventListener('copy', this.onCopy)
     root.addEventListener('cut', this.onCopy)
     document.addEventListener('selectionchange', this.onSelChange)
+    // a selection change whose frame a detach cancelled (a re-render re-attaching in between) is followed now
+    if (this.missedSel) {
+      this.missedSel = false
+      this.onSelChange()
+    }
   }
 
   detach() {
@@ -401,6 +408,7 @@ export class RichInput {
     r.removeEventListener('copy', this.onCopy)
     r.removeEventListener('cut', this.onCopy)
     document.removeEventListener('selectionchange', this.onSelChange)
+    if (this.raf) this.missedSel = true
     cancelAnimationFrame(this.raf)
     this.raf = 0 // or the next selection change waits forever for a frame that was cancelled
     this.root = null
