@@ -76,6 +76,58 @@ describe('dynamic array formulas', () => {
     expect(await shown(o, ['B1', 'B2', 'B3'])).toEqual(['10', '16', ''])
   })
 
+  test('a formula of the file filled down, typed over and put back, stays what it was', async () => {
+    const o = await openBook(await book({ sheets: [{ name: 'S', rows: rows([[5, { f: 'A1:A3*2', v: 10 }], [6], [7]]) }] }))
+    // filled down: each copy takes the value of its own row, as the formula it is a copy of
+    await o.engine.call('xlsx.sheetOp', [0, { op: 'fill', range: { r0: 0, c0: 1, r1: 2, c1: 1 }, dir: 'down' }])
+    expect(await shown(o, ['B1', 'B2', 'B3'])).toEqual(['10', '12', '14'])
+    expect(await o.formula(0, 1, 1)).toBe('=A2:A4*2')
+    // typed over and undone: not a dynamic array formula after
+    await o.set(0, 'B1', 'x')
+    await o.engine.call('xlsx.undo', [])
+    expect(await shown(o, ['B1', 'B2', 'B3'])).toEqual(['10', '12', '14'])
+    // entered again as it is: nothing changes
+    await o.set(0, 'B1', '=A1:A3*2')
+    expect(await shown(o, ['B1', 'B2'])).toEqual(['10', '12'])
+    // another formula typed: a dynamic array formula, and the cells under it are in its way
+    await o.set(0, 'B1', '=A1:A3*3')
+    expect(await shown(o, ['B1', 'B2'])).toEqual(['#SPILL!', '12'])
+    await o.engine.call('xlsx.undo', [])
+    expect(await shown(o, ['B1', 'B2', 'B3'])).toEqual(['10', '12', '14'])
+    await o.engine.call('xlsx.redo', [])
+    expect(await shown(o, ['B1', 'B2'])).toEqual(['#SPILL!', '12'])
+  })
+
+  test('copied with the cells it fills, it fills the cells where it is pasted', async () => {
+    const o = await openBook(await book({ sheets: [{ name: 'S', rows: rows([[5], [6], [7]]) }] }))
+    await o.set(0, 'C1', '=A1:A3*2')
+    const clip: any = await o.engine.call('xlsx.copy', [0, { r0: 0, c0: 2, r1: 2, c1: 2 }])
+    expect(clip.text).toBe('10\n12\n14')
+    await o.engine.call('xlsx.sheetOp', [0, { op: 'paste', range: { r0: 0, c0: 4, r1: 2, c1: 4 }, cells: clip.cells, from: { sheet: clip.sheet, r0: 0, c0: 2 } }])
+    expect(await o.formula(0, 0, 4)).toBe('=C1:C3*2')
+    expect(await shown(o, ['E1', 'E2', 'E3'])).toEqual(['20', '24', '28'])
+    expect(await o.formula(0, 1, 4)).toBeUndefined()
+    // one of the values alone is a value
+    const one: any = await o.engine.call('xlsx.copy', [0, { r0: 1, c0: 2, r1: 1, c1: 2 }])
+    await o.engine.call('xlsx.sheetOp', [0, { op: 'paste', range: { r0: 5, c0: 0, r1: 5, c1: 0 }, cells: one.cells, from: { sheet: one.sheet, r0: 1, c0: 2 } }])
+    expect(await shown(o, ['A6'])).toEqual(['12'])
+    // filled to the right: a dynamic array formula too
+    await o.engine.call('xlsx.sheetOp', [0, { op: 'fill', range: { r0: 0, c0: 6, r1: 0, c1: 6 }, dir: 'right' }])
+    await o.set(0, 'G1', '=SEQUENCE(2)')
+    await o.engine.call('xlsx.sheetOp', [0, { op: 'fill', range: { r0: 0, c0: 6, r1: 0, c1: 7 }, dir: 'right' }])
+    expect(await shown(o, ['G1', 'G2', 'H1', 'H2'])).toEqual(['1', '2', '1', '2'])
+  })
+
+  test('#SPILL! of a file read: cleared when the cell in the way is', async () => {
+    const o = await openBook(await book({ sheets: [{ name: 'S', rows: rows([[1]]) }] }))
+    await o.set(0, 'B2', 'x')
+    await o.set(0, 'B1', '=SEQUENCE(3)')
+    const re = await openBook((await o.save()).blob)
+    expect(await shown(re, ['B1', 'B2'])).toEqual(['#SPILL!', 'x'])
+    await re.set(0, 'B2', '')
+    expect(await shown(re, ['B1', 'B2', 'B3'])).toEqual(['1', '2', '3'])
+  })
+
   test('saved as an array formula marked dynamic, and read back as one', async () => {
     const o = await openBook(await book({ sheets: [{ name: 'S', rows: rows([[5], [1], [7]]) }] }))
     await o.set(0, 'C1', '=FILTER(A1:A3,A1:A3>4)')

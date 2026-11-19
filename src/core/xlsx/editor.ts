@@ -35,6 +35,13 @@ interface CellChange {
   prevF?: string
   next: Entry | null
   nextF?: string
+  /**
+   * Whether the formula before / after is a dynamic array formula. `nextD` left out: the formula says (one typed is
+   * dynamic when it may give several values); a formula copied is what its source is. Both are known once the
+   * change was applied: undoing and redoing put back what was.
+   */
+  prevD?: boolean
+  nextD?: boolean
 }
 interface LayoutState {
   merges?: Merge[]
@@ -645,11 +652,15 @@ export class XlsxEditor {
     if (which === 'next' && d.dynamic.size) {
       for (const ch of cells) if (ch.prev && !ch.prevF && ch.prev[0] !== T_EMPTY && this.wb.calc.spilledAt(sheet, ch.key)) ch.prev = ch.prev[2] ? [T_EMPTY, '', ch.prev[2]] : null
     }
+    if (which === 'next') for (const ch of cells) if (ch.prevD === undefined && ch.prevF !== undefined) ch.prevD = d.dynamic.has(ch.key)
     this.applyRaw(d, cells, which)
     for (const ch of cells) {
       const f0 = which === 'prev' ? ch.nextF : ch.prevF
       const f1 = which === 'prev' ? ch.prevF : ch.nextF
-      if (f0 !== f1) this.wb.calc.formulaChanged(sheet, ch.key)
+      if (f0 !== f1) {
+        this.wb.calc.formulaChanged(sheet, ch.key, which === 'prev' ? ch.prevD : ch.nextD)
+        if (which === 'next' && ch.nextD === undefined && f1 !== undefined) ch.nextD = d.dynamic.has(ch.key)
+      }
       if (f1) formulaKeys.push({ sheet, key: ch.key })
     }
     // only value changes matter for dependents (formatting doesn't)
@@ -1033,7 +1044,7 @@ export class XlsxEditor {
       const to = which === 'prev' ? c.prev : c.next
       // (a format given to the cell since stays)
       const next: Entry | null = to && cur && left && cur[2] !== left[2] ? [to[0], to[1], cur[2]] : !to && cur && left && cur[2] !== left[2] ? [T_EMPTY, '', cur[2]] : to
-      cells.push({ key: c.key, prev: cur, prevF: curF, next, nextF: which === 'prev' ? c.prevF : c.nextF })
+      cells.push({ key: c.key, prev: cur, prevF: curF, next, nextF: which === 'prev' ? c.prevF : c.nextF, nextD: which === 'prev' ? c.prevD : c.nextD })
     }
     const counter: Change = {
       sheet: ch.sheet,
@@ -1339,10 +1350,16 @@ export class XlsxEditor {
         const line: ClipCell[] = []
         const text: string[] = []
         for (let c = R.c0; c < R.c0 + w; c++) {
-          const e = getEntry(d, r, c)
-          const f = d.formulas.get(r * MAX_COL + c)
+          let e = getEntry(d, r, c)
+          const key = r * MAX_COL + c
+          const f = d.formulas.get(key)
+          // a value a dynamic array formula spilled here, copied with its formula: the formula fills the cell again where it is pasted
+          if (e && f === undefined && d.dynamic.size) {
+            const owner = this.wb.calc.spillOwner(sheet, key)
+            if (owner !== undefined && owner % MAX_COL >= R.c0 && owner % MAX_COL < R.c0 + w && Math.floor(owner / MAX_COL) >= R.r0 && Math.floor(owner / MAX_COL) < R.r0 + h) e = e[2] ? [T_EMPTY, '', e[2]] : null
+          }
           // (a shared string by its text: its number means something in this workbook only)
-          line.push(e || f !== undefined ? [e ? (e[0] === T_SST ? T_STR : e[0]) : T_EMPTY, e ? (e[0] === T_SST ? (this.wb.sst[e[1] as number] ?? '') : e[1]) : '', e?.[2] ?? 0, ...(f !== undefined ? [f] : [])] as ClipCell : null)
+          line.push(e || f !== undefined ? [e ? (e[0] === T_SST ? T_STR : e[0]) : T_EMPTY, e ? (e[0] === T_SST ? (this.wb.sst[e[1] as number] ?? '') : e[1]) : '', e?.[2] ?? 0, ...(f !== undefined ? (d.dynamic.has(key) ? [f, true] : [f]) : [])] as ClipCell : null)
           if (e || f !== undefined) filled++
           text.push(tsvCell(shown.get(r)?.get(c) ?? ''))
         }
@@ -1388,7 +1405,8 @@ export class XlsxEditor {
         // (a format this workbook does not have: one of another document, or a broken operation)
         const st = cell && Number.isInteger(cell[2]) && cell[2] >= 0 && cell[2] < styles ? cell[2] : 0
         const next: Entry | null = !cell ? null : nextF !== undefined ? [T_STR, '=' + nextF, st] : clipEntry(cell, st)
-        changes.push({ key, prev, prevF, next, nextF })
+        // (a formula copied is a dynamic array formula when the one it was copied from is)
+        changes.push(nextF !== undefined ? { key, prev, prevF, next, nextF, nextD: cell?.[4] === true } : { key, prev, prevF, next, nextF })
       }
     }
     // what read the cells cut reads them here (the formulas pasted have theirs already)
@@ -1447,7 +1465,9 @@ export class XlsxEditor {
         const src = getEntry(d, sr, sc)
         const sf = d.formulas.get(sr * MAX_COL + sc)
         const nf = sf ? translateFormula(sf, r - sr, c - sc) : undefined
-        changes.push({ key, prev: getEntry(d, r, c), prevF: d.formulas.get(key), next: src ? [src[0], nf ? '=' + nf : src[1], src[2]] : null, nextF: nf })
+        const ch: CellChange = { key, prev: getEntry(d, r, c), prevF: d.formulas.get(key), next: src ? [src[0], nf ? '=' + nf : src[1], src[2]] : null, nextF: nf }
+        if (nf) ch.nextD = d.dynamic.has(sr * MAX_COL + sc)
+        changes.push(ch)
       }
     }
     this.apply(d, changes, 'next')
@@ -1546,8 +1566,10 @@ export class XlsxEditor {
     const dynamic = new Set<number>()
     for (const [key] of drop) {
       d.formulas.delete(key)
-      if (d.dynamic.delete(key)) dynamic.add(key)
-      d.arrays.delete(key)
+      if (d.dynamic.delete(key)) {
+        dynamic.add(key)
+        d.arrays.delete(key)
+      }
     }
     for (let i = 0; i < put.length; i++) if (dynamic.has(drop[i]?.[0])) d.dynamic.add(put[i][0])
     for (const [key, f] of put) {
@@ -1661,6 +1683,8 @@ export class XlsxEditor {
         // the sheet as it is now: its XML with the edits made here written in (what a save would write)
         const sd = this.wb.sheetsData.get(op.index)
         if (sd?.loading && !sd.done) await sd.loading
+        // (its dynamic array formulas name a record of the workbook's metadata: there before they are written)
+        if (sd?.dynamic.size) await this.linkDynamic(true)
         const source = sd && needsWrite(sd) ? await new Response(this.rewrite(src.path, sd)).text() : (this.newSheets.get(src.path) ?? (await pkg.text(src.path)))
         const taken = new Set(listed.map((e) => (getAttr(e, 'name') ?? '').toLowerCase()))
         let name = ''
@@ -1817,9 +1841,9 @@ export class XlsxEditor {
    * which their cells name (`cm`): the part gets that record (and is made, when the workbook has none) before the
    * sheets are written.
    */
-  private async linkDynamic(): Promise<void> {
+  private async linkDynamic(now = false): Promise<void> {
     const wb = this.wb
-    if (wb.dynamicRecord || ![...wb.sheetsData.values()].some((d) => d.dynamic.size && needsWrite(d))) return
+    if (wb.dynamicRecord || (!now && ![...wb.sheetsData.values()].some((d) => d.dynamic.size && needsWrite(d)))) return
     if (wb.dynamicCm.size) {
       wb.dynamicRecord = Math.min(...wb.dynamicCm)
       return

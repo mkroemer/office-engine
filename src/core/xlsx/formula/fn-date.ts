@@ -1,9 +1,9 @@
 /** Date & time functions (serial numbers; 1900 system with Lotus bug or 1904). */
 import { dateToSerial, daysInMonth, getDate1904, parseDateText, serialSeconds, serialToYmd, ymdToSerial } from './dates'
 import { days360, yearfrac } from './daycount'
-import { A, nums, opt, S, type FnDef } from './fn'
-import { ERR, type Value } from './types'
-import { bool, num, str } from './values'
+import { A, opt, S, type Ev, type FnDef } from './fn'
+import { ERR, FormulaError, type Value } from './types'
+import { bool, num, RangeV, str, UnionV, type Val } from './values'
 
 /** 31/12/9999: past it Excel has no date (a code like 20240115 is not one) */
 const MAX_SERIAL = 2958466
@@ -121,12 +121,12 @@ export const DATE: Record<string, FnDef> = {
   DATEDIF: S(3, 3, ([s, e, u]) => datedif(day(s), day(e), str(u))),
   DAYS: S(2, 2, ([e, s]) => Math.floor(num(e)) - Math.floor(num(s))),
   NETWORKDAYS: A(2, 3, (a, ev) => {
-    const hol = new Set(a.length > 2 ? nums([a[2]], ev).map(Math.floor) : [])
+    const hol = new Set(a.length > 2 ? holidays(a[2], ev) : [])
     return networkdays(day(ev.scalar(a[0])), day(ev.scalar(a[1])), hol)
   }),
   'NETWORKDAYS.INTL': A(2, 4, (a, ev) => {
     const off = weekend(a.length > 2 ? ev.scalar(a[2]) : 1)
-    const hol = new Set(a.length > 3 ? nums([a[3]], ev).map(Math.floor) : [])
+    const hol = new Set(a.length > 3 ? holidays(a[3], ev) : [])
     const s = day(ev.scalar(a[0]))
     const e = day(ev.scalar(a[1]))
     const [lo, hi] = s <= e ? [s, e] : [e, s]
@@ -137,9 +137,9 @@ export const DATE: Record<string, FnDef> = {
     for (const h of hol) if (h >= lo && h <= hi && !off[serialToYmd(h).dow]) n--
     return s <= e ? n : -n
   }),
-  WORKDAY: A(2, 3, (a, ev) => workday(day(ev.scalar(a[0])), Math.trunc(num(ev.scalar(a[1]))), weekend(1), a.length > 2 ? nums([a[2]], ev) : [])),
+  WORKDAY: A(2, 3, (a, ev) => workday(day(ev.scalar(a[0])), Math.trunc(num(ev.scalar(a[1]))), weekend(1), a.length > 2 ? holidays(a[2], ev) : [])),
   'WORKDAY.INTL': A(2, 4, (a, ev) =>
-    workday(day(ev.scalar(a[0])), Math.trunc(num(ev.scalar(a[1]))), weekend(a.length > 2 ? ev.scalar(a[2]) : 1), a.length > 3 ? nums([a[3]], ev) : []),
+    workday(day(ev.scalar(a[0])), Math.trunc(num(ev.scalar(a[1]))), weekend(a.length > 2 ? ev.scalar(a[2]) : 1), a.length > 3 ? holidays(a[3], ev) : []),
   ),
   DATEVALUE: S(1, 1, ([x]) => {
     if (typeof x !== 'string') throw ERR.VALUE
@@ -179,6 +179,27 @@ export const DATE: Record<string, FnDef> = {
     if (t < 0) throw ERR.NUM
     return 25569 - (getDate1904() ? 1462 : 0) + t / (86400 * Math.pow(1000, unit - 1))
   }),
+}
+
+/**
+ * The days of a list of holidays: numbers, and dates written as text ({"2006/1/2","2006/1/16"}). In a range, a cell
+ * that holds neither is passed over; a text given as such that is not a date is #VALUE!.
+ */
+function holidays(v: Val, ev: Ev): number[] {
+  const out: number[] = []
+  const take = (x: Value, strict: boolean) => {
+    if (x instanceof FormulaError) throw x
+    if (typeof x === 'number') out.push(Math.floor(x))
+    else if (typeof x === 'string') {
+      const n = parseDateText(x.trim())
+      if (n !== null) out.push(Math.floor(n))
+      else if (strict && x !== '') throw ERR.VALUE
+    } else if (typeof x === 'boolean' && strict) throw ERR.VALUE
+  }
+  if (v instanceof RangeV) ev.forEach(v, (x) => take(x, false))
+  else if (v instanceof UnionV) for (const rg of v.areas) ev.forEach(rg, (x) => take(x, false))
+  else for (const row of ev.toArray(v)) for (const x of row) take(x, true)
+  return out
 }
 
 /**

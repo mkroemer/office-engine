@@ -135,6 +135,11 @@ export class Calc {
    * when one of them changes the formula is computed again.
    */
   private blockedAt = new Map<number, Map<number, Merge>>()
+  /**
+   * The formulas showing #SPILL! are not known by the cells they wait for (the index was built anew, a file was
+   * just read): they are computed again at the next change, which finds those cells again.
+   */
+  private respill = true
   /** cells a spill filled or emptied: what reads them is computed (again) after the formulas of the pass */
   private spilt: { sheet: number; key: number }[] = []
   /** the defined names, parsed (null: text that is not a formula) */
@@ -153,6 +158,7 @@ export class Calc {
     this.filledBy.clear()
     this.names.clear()
     this.blockedAt.clear()
+    this.respill = true
     this.idle = 0
   }
 
@@ -322,10 +328,14 @@ export class Calc {
     }
   }
 
-  /** a formula was added / changed / removed at (sheet, key) */
-  formulaChanged(sheet: number, key: number) {
+  /**
+   * A formula was added / changed / removed at (sheet, key). `dynamic`: whether it is a dynamic array formula, when
+   * that is known (a formula copied is what the one it was copied from is; one put back is what it was); left out,
+   * the formula says (one typed: dynamic when it may give several values).
+   */
+  formulaChanged(sheet: number, key: number, dynamic?: boolean) {
     const d = this.wb.sheetsData.get(sheet)
-    if (d) this.redefine(sheet, d, key)
+    if (d) this.redefine(sheet, d, key, dynamic)
     if (!this.indexed) return
     const id = idOf(sheet, key)
     this.asts.delete(id)
@@ -344,13 +354,14 @@ export class Calc {
    * The formula of a cell is another one (or gone): whether it is a dynamic array formula now. One that was and is
    * no more gives back the cells it filled.
    */
-  private redefine(sheet: number, d: SheetData, key: number) {
+  private redefine(sheet: number, d: SheetData, key: number, dynamic?: boolean) {
     const f = d.formulas.get(key)
     const was = d.dynamic.has(key)
     let now = false
     // (an array formula entered over a range keeps its cells, whatever its text becomes)
     if (f !== undefined && (was || !d.arrays.has(key))) {
-      try {
+      if (dynamic !== undefined) now = dynamic
+      else try {
         now = spills(parseFormula(f), (name, on) => this.defined(name, on !== undefined ? this.sheetIndex(on, sheet) : sheet))
       } catch {
         now = false
@@ -382,17 +393,34 @@ export class Calc {
     d.edited.add(key)
   }
 
-  /** whether a cell holds a value a dynamic array formula spilled there (not the formula's own cell) */
-  spilledAt(sheet: number, key: number): boolean {
+  /** the cell of the dynamic array formula that spilled the value a cell holds (not for the formula's own cell); undefined when none did */
+  spillOwner(sheet: number, key: number): number | undefined {
     const d = this.wb.sheetsData.get(sheet)
-    if (!d || !d.dynamic.size || d.formulas.has(key)) return false
+    if (!d || !d.dynamic.size || d.formulas.has(key)) return undefined
+    if (this.indexed) {
+      const owner = this.filledBy.get(idOf(sheet, key))
+      if (owner === undefined) return undefined
+      const at = owner.indexOf(':')
+      const k = Number(owner.slice(at + 1))
+      return Number(owner.slice(0, at)) === sheet && d.dynamic.has(k) ? k : undefined
+    }
     const r = Math.floor(key / MAX_COL)
     const c = key % MAX_COL
     for (const k of d.dynamic) {
       const rg = d.arrays.get(k)
-      if (rg && r >= rg.r0 && r <= rg.r1 && c >= rg.c0 && c <= rg.c1) return true
+      if (rg && r >= rg.r0 && r <= rg.r1 && c >= rg.c0 && c <= rg.c1) return k
     }
-    return false
+    return undefined
+  }
+
+  /** whether a cell holds a value a dynamic array formula spilled there (not the formula's own cell) */
+  spilledAt(sheet: number, key: number): boolean {
+    return this.spillOwner(sheet, key) !== undefined
+  }
+
+  /** whether the formula of a cell is a dynamic array formula */
+  isDynamic(sheet: number, key: number): boolean {
+    return !!this.wb.sheetsData.get(sheet)?.dynamic.has(key)
   }
 
   /**
@@ -937,6 +965,17 @@ export class Calc {
     // the cells a formula gave back when it stopped being a dynamic array changed too
     const emptied = this.spilt.splice(0)
     const again = this.disturbed([...changed, ...formulas])
+    if (this.respill) {
+      this.respill = false
+      for (const [sheet, d] of this.wb.sheetsData) {
+        for (const key of d.dynamic) {
+          if (d.arrays.has(key) || this.blockedAt.get(sheet)?.has(key)) continue
+          const row = d.rows[Math.floor(key / MAX_COL)]
+          const i = row ? colAt(row, key % MAX_COL) : 0
+          if (row && row[i] === key % MAX_COL && row[i + 1] === T_ERR && row[i + 2] === '#SPILL!') again.push({ sheet, key })
+        }
+      }
+    }
     const queue = this.affected([...changed, ...emptied, ...this.spilt.splice(0)], again.length ? [...formulas, ...again] : formulas, volatile)
     const pending = new Set<Id>(queue)
     const sheets = new Set<number>()

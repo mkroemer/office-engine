@@ -158,7 +158,7 @@ export interface XlsxEditResult {
 }
 
 /** a copied cell: kind of value (as the workbook holds it: number, text, boolean, error…), value, format, formula (no "=") */
-export type ClipCell = [type: number, value: number | string, style: number, formula?: string] | null
+export type ClipCell = [type: number, value: number | string, style: number, formula?: string, dynamic?: boolean] | null
 
 /** cells copied from a sheet (`xlsx.copy`): what the `paste` sheet operation writes, and what goes to the clipboard */
 export interface XlsxClip {
