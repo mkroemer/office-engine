@@ -73,9 +73,11 @@ export function themeStyle(theme: Theme | undefined, dark: boolean): CSSProperti
 
 /**
  * The class name and style of a viewer root for `theme`: what `DocViewer` puts on its root element, for hosts that
- * mount the views (`DocxView`, `XlsxView`, `PptxView`) in a root of their own.
+ * mount the views (`DocxView`, `XlsxView`, `PptxView`) in a root of their own. `host` is for a container of controls
+ * (ZoomBar, FormatBar…) rather than a view: sized by its content, and its popups (menus, the size list) show beyond it.
  */
-export function useThemeRoot(theme?: Theme, style?: CSSProperties): { className: string; style: CSSProperties; dark: boolean } {
+export function useThemeRoot(theme?: Theme, style?: CSSProperties, opts?: { host?: boolean }): { className: string; style: CSSProperties; dark: boolean } {
   const dark = useDarkTheme(themeMode(theme))
-  return { className: dark ? 'de-root de-dark' : 'de-root', style: { ...themeStyle(theme, dark), ...style }, dark }
+  const className = 'de-root' + (dark ? ' de-dark' : '') + (opts?.host ? ' de-host' : '')
+  return { className, style: { ...themeStyle(theme, dark), ...style }, dark }
 }

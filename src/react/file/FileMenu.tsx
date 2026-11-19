@@ -5,24 +5,20 @@ import type { FileOps } from '../common/Slots'
 import { download, Dropdown, pickFiles, type DropOption, type IconName } from '../edit/Toolbar'
 import { OPEN_ACCEPT } from './importFile'
 import { exportHtml, printDocument } from './print'
+import { useStrings } from '../strings'
 
-export const KIND_LABEL: Record<DocKind, string> = {
-  docx: 'Word document',
-  xlsx: 'Excel workbook',
-  pptx: 'PowerPoint presentation',
-}
 const EXT: Record<DocKind, string> = { docx: '.docx', xlsx: '.xlsx', pptx: '.pptx' }
 
-const TEXT_FORMATS: Record<DocKind, { id: string; label: string; ext: string; mime: string }[]> = {
+const TEXT_FORMATS: Record<DocKind, { id: 'txt' | 'md' | 'csv' | 'tsv'; ext: string; mime: string }[]> = {
   docx: [
-    { id: 'txt', label: 'Plain text', ext: '.txt', mime: 'text/plain' },
-    { id: 'md', label: 'Markdown', ext: '.md', mime: 'text/markdown' },
+    { id: 'txt', ext: '.txt', mime: 'text/plain' },
+    { id: 'md', ext: '.md', mime: 'text/markdown' },
   ],
   xlsx: [
-    { id: 'csv', label: 'CSV (current sheet)', ext: '.csv', mime: 'text/csv' },
-    { id: 'tsv', label: 'TSV (current sheet)', ext: '.tsv', mime: 'text/tab-separated-values' },
+    { id: 'csv', ext: '.csv', mime: 'text/csv' },
+    { id: 'tsv', ext: '.tsv', mime: 'text/tab-separated-values' },
   ],
-  pptx: [{ id: 'txt', label: 'Plain text', ext: '.txt', mime: 'text/plain' }],
+  pptx: [{ id: 'txt', ext: '.txt', mime: 'text/plain' }],
 }
 
 /** Host-provided File menu entry (Share, Version history…). */
@@ -74,6 +70,7 @@ const QUICK = /^(new:|open$|import$|rename$|details$|close$|extra:)/
 
 /** File menu entries and their actions (also used by the Ctrl+O / Ctrl+P shortcuts). */
 export function useFileActions(o: FileActionsOptions): FileActions {
+  const t = useStrings()
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
   const opts = useRef(o)
@@ -89,65 +86,75 @@ export function useFileActions(o: FileActionsOptions): FileActions {
   section(
     o.canOpen
       ? [
-          { value: 'new:docx', label: 'Document', icon: 'doc', head: 'New' },
-          { value: 'new:xlsx', label: 'Spreadsheet', icon: 'table' },
-          { value: 'new:pptx', label: 'Presentation', icon: 'slides' },
-          { value: 'open', label: 'Open…', icon: 'open', hint: `${MOD}O`, sep: true },
+          { value: 'new:docx', label: t.file.newDocx, icon: 'doc', head: t.file.new },
+          { value: 'new:xlsx', label: t.file.newXlsx, icon: 'table' },
+          { value: 'new:pptx', label: t.file.newPptx, icon: 'slides' },
+          { value: 'open', label: t.file.open, icon: 'open', hint: `${MOD}O`, sep: true },
         ]
       : [],
   )
-  if (o.canImport && kind === 'xlsx') options.push({ value: 'import', label: 'Import CSV into new sheet…', icon: 'table', sep: !o.canOpen && options.length > 0 })
+  if (o.canImport && kind === 'xlsx') options.push({ value: 'import', label: t.file.importCsv, icon: 'table', sep: !o.canOpen && options.length > 0 })
   const fileItems: DropOption<string>[] = []
-  if (kind && o.canSave) fileItems.push({ value: 'save', label: 'Save', icon: 'save', hint: `${MOD}S` })
-  if (kind && o.rename) fileItems.push({ value: 'rename', label: 'Rename…', icon: 'edit' })
+  if (kind && o.canSave) fileItems.push({ value: 'save', label: t.file.save, icon: 'save', hint: `${MOD}S` })
+  if (kind && o.rename) fileItems.push({ value: 'rename', label: t.file.rename, icon: 'edit' })
   section(fileItems)
   if (o.canDownload && kind) {
     section([
-      { value: 'original', label: KIND_LABEL[kind], icon: 'save', hint: o.ext || EXT[kind], head: 'Download as' },
-      { value: 'pdf', label: 'PDF document', icon: 'pdf', hint: '.pdf' },
+      { value: 'original', label: t.kind[kind], icon: 'save', hint: o.ext || EXT[kind], head: t.file.downloadAs },
+      { value: 'pdf', label: t.file.pdf, icon: 'pdf', hint: '.pdf' },
       ...(o.picture
         ? [{ value: 'picture', label: o.picture.label, icon: 'image', hint: o.picture.ext } as const]
-        : [{ value: 'html', label: 'Web page', icon: 'html', hint: '.html' } as const, ...TEXT_FORMATS[kind].map((f) => ({ value: 'text:' + f.id, label: f.label, icon: 'doc', hint: f.ext }) as const)]),
+        : [{ value: 'html', label: t.file.html, icon: 'html', hint: '.html' } as const, ...TEXT_FORMATS[kind].map((f) => ({ value: 'text:' + f.id, label: t.file[f.id], icon: 'doc', hint: f.ext }) as const)]),
     ])
   }
   const tail: DropOption<string>[] = []
-  if (kind && o.details) tail.push({ value: 'details', label: 'Document details', icon: 'info' })
-  if (kind && o.canDownload) tail.push({ value: 'print', label: 'Print', icon: 'print', hint: `${MOD}P` })
+  if (kind && o.details) tail.push({ value: 'details', label: t.file.details, icon: 'info' })
+  if (kind && o.canDownload) tail.push({ value: 'print', label: t.file.print, icon: 'print', hint: `${MOD}P` })
   section(tail)
   section(o.extra.map((x, i) => ({ value: `extra:${i}`, label: x.label, icon: x.icon, hint: x.hint, disabled: x.disabled })))
-  if (o.close) section([{ value: 'close', label: 'Close', icon: 'close' }])
+  if (o.close) section([{ value: 'close', label: t.file.close, icon: 'close' }])
 
   const exec = async (action: string) => {
     const c = opts.current
-    if (action.startsWith('new:')) return c.create(action.slice(4) as DocKind)
-    if (action.startsWith('extra:')) return c.extra[Number(action.slice(6))]?.onClick()
+    if (action.startsWith('new:')) {
+      const kind = action.slice(4)
+      if (c.canOpen && (kind === 'docx' || kind === 'xlsx' || kind === 'pptx')) c.create(kind)
+      return
+    }
+    if (action.startsWith('extra:')) {
+      const item = c.extra[Number(action.slice(6))]
+      if (item && !item.disabled) item.onClick()
+      return
+    }
     switch (action) {
       case 'open': {
+        if (!c.canOpen) return
         const [file] = await pickFiles(OPEN_ACCEPT, false)
-        if (file) c.open(file)
+        if (file && opts.current.canOpen) opts.current.open(file)
         return
       }
       case 'rename':
-        return c.rename?.()
+        return c.kind ? c.rename?.() : undefined
       case 'details':
-        return c.details?.()
+        return c.kind ? c.details?.() : undefined
       case 'close':
         return c.close?.()
       case 'save':
-        return c.save()
+        return c.kind && c.canSave ? c.save() : undefined
     }
     const ops = c.ops.current
     if (action === 'import') {
+      if (!c.canImport || c.kind !== 'xlsx') return
       const [file] = await pickFiles('.csv,.tsv,.tab,.txt', false)
-      if (!file) return
-      if (!ops?.importText) throw new Error('The document is still loading — try again in a moment')
+      if (!file || !opts.current.canImport) return
+      if (!ops?.importText) throw new Error(t.common.stillLoading)
       await ops.importText(file, file.name.replace(/\.[^.]+$/, '').slice(0, 31) || 'Imported')
       return
     }
     if (!c.kind || !c.canDownload) return
     if (action === 'original') return c.downloadOriginal()
     if (action === 'picture') return c.picture?.download()
-    if (!ops) throw new Error('The document is still loading — try again in a moment')
+    if (!ops) throw new Error(t.common.stillLoading)
     await ops.flush?.()
     if (action.startsWith('text:')) {
       const f = TEXT_FORMATS[c.kind].find((x) => 'text:' + x.id === action)
@@ -156,11 +163,11 @@ export function useFileActions(o: FileActionsOptions): FileActions {
       return
     }
     if (action === 'pdf' || action === 'print' || action === 'html') {
-      c.notify(action === 'pdf' ? 'Preparing PDF… choose “Save as PDF” in the print dialog' : 'Preparing…')
+      c.notify(action === 'pdf' ? t.file.preparingPdf : t.file.preparing)
       const p = await ops.printable()
       if (p.notice) c.notify(p.notice)
-      if (action === 'html') download(await exportHtml(p, c.base), c.base + '.html')
-      else await printDocument(p, c.base)
+      if (action === 'html') download(await exportHtml(p, c.base, t), c.base + '.html')
+      else await printDocument(p, c.base, t)
     }
   }
 
@@ -185,6 +192,7 @@ export function useFileActions(o: FileActionsOptions): FileActions {
 }
 
 export function FileMenu({ actions }: { actions: FileActions }) {
+  const t = useStrings()
   if (!actions.options.length) return null
-  return <Dropdown title="File" label="File" className="de-file" options={actions.options} onChange={actions.run} menuWidth={280} disabled={actions.busy} />
+  return <Dropdown title={t.file.menu} label={t.file.menu} className="de-file" options={actions.options} onChange={actions.run} menuWidth={280} disabled={actions.busy} />
 }

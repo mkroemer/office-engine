@@ -668,8 +668,8 @@ export class DocxCollab implements Adapter<DocxOp> {
   /** remembers the selection (by paragraph id + text) before the model changes */
   private capture() {
     if (this.snap || !this.host) return
-    const focused = !!this.ed.input.readSel()
-    const sel = this.ed.input.sel()
+    const focused = this.ed.input.focused && !!this.ed.input.readSel()
+    const sel = focused ? this.ed.input.sel() : this.ed.input.lastSel
     const a = sel && this.toD(sel.a)
     const f = sel && this.toD(sel.f)
     if (!a || !f) return
@@ -711,6 +711,7 @@ export class DocxCollab implements Adapter<DocxOp> {
     // keep the caret where the user was; never steal focus from other controls
     this.ed.pendingSel = s.focused ? sel : null
     if (!s.focused) this.ed.input.lastSel = sel
+    this.ed.onSelection(sel)
   }
 
   // ---------------------------------------------------------------- presence

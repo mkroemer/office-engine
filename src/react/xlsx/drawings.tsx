@@ -3,6 +3,7 @@ import type { DocumentClient } from '../../core/worker/client'
 import type { SheetDrawing } from '../../core/xlsx/drawings'
 import { MAX_COL, MAX_ROWS } from '../../core/xlsx/limits'
 import { Icon } from '../edit/Toolbar'
+import type { Strings } from '../strings'
 import type { Axis } from './axis'
 
 /** a sheet's drawing with its picture's object URL, where the browser can draw it */
@@ -65,15 +66,12 @@ export function drawingExtent(list: SheetDrawing[], cols: Axis, rows: Axis): { r
   return { rows: r, cols: c }
 }
 
-const CHART_NAMES: Record<string, string> = {
-  column: 'Column chart', bar: 'Bar chart', line: 'Line chart', pie: 'Pie chart', doughnut: 'Doughnut chart', area: 'Area chart',
-  scatter: 'Scatter chart', bubble: 'Bubble chart', radar: 'Radar chart', stock: 'Stock chart', surface: 'Surface chart',
-}
-
 /** A drawing as shown: the picture itself, or a box of its size saying what is there (a chart, a picture the browser cannot draw) */
-export function drawingEl(key: string, d: ShownDrawing, style: CSSProperties): ReactNode {
+export function drawingEl(key: string, d: ShownDrawing, style: CSSProperties, strings: Strings): ReactNode {
   if (d.url) return <img key={key} className="de-xl-pic" src={d.url} alt={d.title} style={style} draggable={false} />
-  const what = d.kind === 'chart' ? CHART_NAMES[d.chart ?? ''] ?? 'Chart' : 'Picture'
+  const t = strings.xlsx.drawings
+  const chart = d.chart ?? ''
+  const what = d.kind === 'chart' ? (Object.hasOwn(t.charts, chart) ? t.charts[chart as keyof typeof t.charts] : t.chart) : t.picture
   return (
     <div key={key} className="de-xl-drawing" style={style} title={[what, d.title].filter(Boolean).join(': ')}>
       <Icon name={d.kind === 'chart' ? 'chart' : 'image'} size={24} />

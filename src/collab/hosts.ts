@@ -89,3 +89,20 @@ export function onLocal(client: object, fn: (data: unknown) => void): () => void
   c.localFns.add(fn)
   return () => c.localFns.delete(fn)
 }
+
+// Local XLSX undo/redo belongs to the session, rather than the worker's standalone history.
+export interface LocalHistory { undo: number; redo: number }
+const histories = new WeakMap<object, LocalHistory>()
+const historyListeners = new WeakMap<object, Set<() => void>>()
+export const getLocalHistory = (client: object): LocalHistory | undefined => histories.get(client)
+export function setLocalHistory(client: object, history?: LocalHistory) {
+  if (history) histories.set(client, history)
+  else histories.delete(client)
+  for (const fn of historyListeners.get(client) ?? []) fn()
+}
+export function subscribeLocalHistory(client: object, fn: () => void): () => void {
+  let listeners = historyListeners.get(client)
+  if (!listeners) historyListeners.set(client, (listeners = new Set()))
+  listeners.add(fn)
+  return () => { listeners.delete(fn) }
+}

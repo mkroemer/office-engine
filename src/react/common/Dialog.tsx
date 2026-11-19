@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useStrings } from '../strings'
+import { DefaultDialog, DefaultToast, useHostUI, type DialogAction } from '../ui'
 
 export interface PromptSpec {
   title: string
@@ -16,10 +18,10 @@ export interface PromptSpec {
 
 /** Small modal prompt (no window.prompt: works in sandboxed / embedded pages). */
 export function PromptDialog({ spec, onClose }: { spec: PromptSpec; onClose: () => void }) {
+  const t = useStrings()
+  const Dialog = useHostUI().Dialog ?? DefaultDialog
   const [v, setV] = useState(spec.initial ?? '')
-  const ref = useRef<HTMLInputElement & HTMLTextAreaElement>(null)
-  useEffect(() => {
-    const el = ref.current
+  const ref = useCallback((el: HTMLInputElement | HTMLTextAreaElement | null) => {
     el?.focus()
     el?.select()
   }, [])
@@ -27,107 +29,64 @@ export function PromptDialog({ spec, onClose }: { spec: PromptSpec; onClose: () 
     onClose()
     spec.onOk(v)
   }
+  const actions: DialogAction[] = [
+    ...(spec.extra
+      ? [
+          {
+            label: spec.extra.label,
+            extra: true,
+            onClick: () => {
+              onClose()
+              spec.extra!.run()
+            },
+          },
+        ]
+      : []),
+    { label: t.common.cancel, onClick: onClose },
+    { label: spec.ok ?? t.common.ok, primary: true, submit: true, onClick: done },
+  ]
   return (
-    <div
-      className="de-dialog-back"
-      onMouseDown={(e) => e.target === e.currentTarget && onClose()}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') {
-          e.stopPropagation()
-          onClose()
-        }
-      }}
-    >
-      <form
-        className="de-dialog"
-        role="dialog"
-        aria-label={spec.title}
-        onSubmit={(e) => {
-          e.preventDefault()
-          done()
-        }}
-      >
-        <div className="de-dialog-title">{spec.title}</div>
-        {spec.label && <label className="de-dialog-label">{spec.label}</label>}
-        {spec.area ? (
-          <textarea ref={ref} rows={3} value={v} placeholder={spec.placeholder} onChange={(e) => setV(e.target.value)} />
-        ) : (
-          <input ref={ref} value={v} placeholder={spec.placeholder} onChange={(e) => setV(e.target.value)} />
-        )}
-        {spec.note && <div className="de-dialog-note">{spec.note}</div>}
-        <div className="de-dialog-btns">
-          {spec.extra && (
-            <button
-              type="button"
-              className="de-btn de-dialog-extra"
-              onClick={() => {
-                onClose()
-                spec.extra!.run()
-              }}
-            >
-              {spec.extra.label}
-            </button>
-          )}
-          <button type="button" className="de-btn" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" className="de-btn de-btn-primary">
-            {spec.ok ?? 'OK'}
-          </button>
-        </div>
-      </form>
-    </div>
+    <Dialog title={spec.title} onClose={onClose} onSubmit={done} actions={actions}>
+      {spec.label && <label className="de-dialog-label">{spec.label}</label>}
+      {spec.area ? (
+        <textarea ref={ref} rows={3} value={v} placeholder={spec.placeholder} onChange={(e) => setV(e.target.value)} />
+      ) : (
+        <input ref={ref} value={v} placeholder={spec.placeholder} onChange={(e) => setV(e.target.value)} />
+      )}
+      {spec.note && <div className="de-dialog-note">{spec.note}</div>}
+    </Dialog>
   )
 }
 
 /** Yes / no question (no window.confirm: works in sandboxed / embedded pages). */
 export function ConfirmDialog(props: { title: string; message: ReactNode; ok: string; onOk: () => void; onClose: () => void }) {
-  const okRef = useRef<HTMLButtonElement>(null)
-  useEffect(() => okRef.current?.focus(), [])
+  const t = useStrings()
+  const Dialog = useHostUI().Dialog ?? DefaultDialog
+  const actions: DialogAction[] = [
+    { label: t.common.cancel, onClick: props.onClose },
+    {
+      label: props.ok,
+      primary: true,
+      autoFocus: true,
+      onClick: () => {
+        props.onClose()
+        props.onOk()
+      },
+    },
+  ]
   return (
-    <div
-      className="de-dialog-back"
-      onMouseDown={(e) => e.target === e.currentTarget && props.onClose()}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') {
-          e.stopPropagation()
-          props.onClose()
-        }
-      }}
-    >
-      <div className="de-dialog" role="alertdialog" aria-label={props.title}>
-        <div className="de-dialog-title">{props.title}</div>
-        <div className="de-dialog-note">{props.message}</div>
-        <div className="de-dialog-btns">
-          <button type="button" className="de-btn" onClick={props.onClose}>
-            Cancel
-          </button>
-          <button
-            ref={okRef}
-            type="button"
-            className="de-btn de-btn-primary"
-            onClick={() => {
-              props.onClose()
-              props.onOk()
-            }}
-          >
-            {props.ok}
-          </button>
-        </div>
-      </div>
-    </div>
+    <Dialog title={props.title} kind="alert" onClose={props.onClose} actions={actions}>
+      <div className="de-dialog-note">{props.message}</div>
+    </Dialog>
   )
 }
 
 /** Short-lived message at the bottom of the viewer. */
 export function Toast({ text, onDone }: { text: string; onDone: () => void }) {
+  const Shown = useHostUI().Toast ?? DefaultToast
   useEffect(() => {
     const id = setTimeout(onDone, 3500)
     return () => clearTimeout(id)
   }, [text, onDone])
-  return (
-    <div className="de-toast" role="status">
-      {text}
-    </div>
-  )
+  return <Shown text={text} />
 }

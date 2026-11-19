@@ -106,6 +106,8 @@ export interface Methods {
   'xlsx.undo'(): XlsxEditResult | null
   'xlsx.redo'(): XlsxEditResult | null
   'pptx.slide'(index: number): SlideModel
+  /** every slide's title placeholder text ('' where there is none), read without laying out the slides */
+  'pptx.titles'(): string[]
   /** `cell`: [row, column] of a table cell (`sid` is then the table's graphic frame) */
   'pptx.setText'(index: number, sid: number, paras: PParaSpec[], cell?: [number, number]): SlideModel
   'pptx.shapes'(index: number, ops: ShapeOp[]): SlideModel

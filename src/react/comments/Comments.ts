@@ -7,6 +7,7 @@ import { createContext, useContext, useSyncExternalStore } from 'react'
 import { initialsOf, nowIso, newCommentId, threadsOf, type CommentAnchor, type CommentThread, type CommentUser, type DocComment } from '../../core/comments'
 import type { DocKind } from '../../core/opc'
 import type { DocumentClient } from '../../core/worker/client'
+import { en, type Strings } from '../strings/en'
 
 export interface CommentOptions {
   /** who writes the comments made here (default: the collaboration user, else "Me") */
@@ -66,7 +67,7 @@ export interface CommentHost {
   /** shows thread `id`'s place */
   reveal(id: string): void
   /** what to do to comment, when `pending()` finds nothing */
-  hint: string
+  hint: () => string
 }
 
 export interface CommentsState {
@@ -87,6 +88,15 @@ export class CommentsCtl {
   host: CommentHost | null = null
   opts: CommentOptions = {}
   me: CommentUser = { name: 'Me' }
+  /** texts of the notices */
+  private texts: Strings = en
+  get t(): Strings { return this.texts }
+  set t(value: Strings) {
+    if (value === this.texts) return
+    this.texts = value
+    // Quotes may contain translated locations; keep the host (and its navigation sequence) intact.
+    this.placedCache = null
+  }
   canComment = false
   loaded = false
   private subs = new Set<() => void>()
@@ -187,7 +197,7 @@ export class CommentsCtl {
     if (!this.canComment || !this.host) return false
     const draft = at ?? this.host.pending()
     if (!draft) {
-      this.set({ open: true, draft: null, notice: this.host.hint })
+      this.set({ open: true, draft: null, notice: this.host.hint() })
       return false
     }
     if (draft.existing) {
@@ -222,7 +232,7 @@ export class CommentsCtl {
       await this.client.call('comments.set', id, c)
       return true
     } catch (e) {
-      this.set({ notice: `Couldn't save the comment: ${(e as Error).message}` })
+      this.set({ notice: this.t.comments.saveFailed((e as Error).message) })
       return false
     }
   }
@@ -263,7 +273,7 @@ export class CommentsCtl {
     const mine = () => (this.state.draft === draft ? { draft: null } : {})
     if (host.attach && !(await host.attach(id, draft))) {
       await this.write(id, null)
-      this.set({ ...mine(), notice: 'The commented text is no longer there' })
+      this.set({ ...mine(), notice: this.t.comments.textGone })
       return false
     }
     this.set(this.state.draft === draft ? { draft: null, active: id } : {})

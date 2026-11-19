@@ -6,6 +6,9 @@ import { useFileOps, useViewer, useSelectAll } from '../common/Slots'
 import { slidesToText } from '../file/text'
 import { Status } from '../common/Status'
 import { ZoomControl, type Zoom } from '../common/ZoomControl'
+import { useViewCommands, useControllerObserved } from '../controller'
+import { applyPptx, pptxFormat } from '../edit/format'
+import type { Sel } from '../edit/rich'
 import { getSel } from '../edit/input'
 import { plen } from '../edit/rich'
 import { PptxEditor } from './PptxEditor'
@@ -18,26 +21,30 @@ import { publishLocal, registerHost } from '../../collab/hosts'
 import { initialsOf, type CommentThread } from '../../core/comments'
 import { useCommentsCtl, useCommentsState, type PendingComment, type PlacedThread } from '../comments/Comments'
 import { COMMENT_KEYS } from '../comments/CommentsPanel'
+import { formatCount, formatNumber, useStrings } from '../strings'
 
 interface SlideCache {
   models: Map<number, SlideModel>
   pending: Map<number, Promise<SlideModel>>
   listeners: Map<number, Set<(m: SlideModel) => void>>
+  /** told of every replaced slide, whichever its index */
+  edits: Set<(index: number, m: SlideModel) => void>
 }
 
 const caches = new WeakMap<DocumentClient, SlideCache>()
 
 function cacheFor(client: DocumentClient): SlideCache {
   let c = caches.get(client)
-  if (!c) caches.set(client, (c = { models: new Map(), pending: new Map(), listeners: new Map() }))
+  if (!c) caches.set(client, (c = { models: new Map(), pending: new Map(), listeners: new Map(), edits: new Set() }))
   return c
 }
 
-/** replaces a cached slide (after an edit) and notifies mounted views */
+/** replaces a cached slide (after an edit, here or a collaborator's) and notifies mounted views */
 function putSlide(client: DocumentClient, index: number, m: SlideModel) {
   const c = cacheFor(client)
   c.models.set(index, m)
   for (const fn of c.listeners.get(index) ?? []) fn(m)
+  for (const fn of c.edits) fn(index, m)
 }
 
 /** forget every cached slide (after slides were added / removed / reordered) */
@@ -170,6 +177,7 @@ const THUMB_W = 188
 
 export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = true }: PptxViewProps) {
   const viewer = useViewer()
+  const str = useStrings()
   const meta = client.info.pptx as PresentationMeta
   const editor = useMemo(() => new PptxEditor(client), [client])
   useFileOps({
@@ -197,8 +205,8 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
     stats: () => {
       const m = client.info.pptx as PresentationMeta
       return [
-        ['Slides', m.count.toLocaleString()],
-        ['Slide size', `${+(m.w / 96).toFixed(2)} × ${+(m.h / 96).toFixed(2)} in`],
+        [str.pptx.slides, formatCount(str, m.count)],
+        [str.pptx.slideSize, str.format.inches(formatNumber(str, +(m.w / 96).toFixed(2)), formatNumber(str, +(m.h / 96).toFixed(2)))],
       ]
     },
   })
@@ -208,7 +216,7 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
   const thumbRef = useRef<HTMLDivElement>(null)
   const thumbScroll = useScroll(thumbRef)
   const [zoom, setZoom] = useState<Zoom>(initialZoom)
-  const showThumbs = thumbnails && rootSize.w >= 720 && meta.count > 1
+  const showThumbs = thumbnails && !viewer.headless && rootSize.w >= 720 && meta.count > 1
   const [, bump] = useForceUpdate()
   const caretAt = useRef<{ x: number; y: number } | null>(null)
   const textRoot = useRef<HTMLDivElement | null>(null)
@@ -348,7 +356,9 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
     const sel = editor.pendingSel
     if (sel) {
       editor.pendingSel = null
-      editor.input.restore(sel)
+      const noRefocus = editor.pendingNoRefocus
+      editor.pendingNoRefocus = false
+      editor.input.restore(sel, noRefocus ? 'preserve' : true)
     }
   })
 
@@ -577,30 +587,30 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
   }
 
   const shapeMenu = (): MenuItem[] => [
-    ...(cm?.canComment ? [{ label: 'Comment', icon: 'commentAdd', hint: COMMENT_KEYS, run: () => cm.start() } as MenuItem] : []),
-    { label: 'Duplicate', icon: 'copy', hint: `${MOD}D`, run: shapeCmd.duplicate, sep: !!cm?.canComment },
-    { label: 'Delete', icon: 'trash', hint: 'Del', run: shapeCmd.remove },
-    { label: 'Bring to front', icon: 'front', hint: `${MOD}⇧↑`, sep: true, run: () => shapeCmd.arrange('front') },
-    { label: 'Bring forward', hint: `${MOD}↑`, run: () => shapeCmd.arrange('forward') },
-    { label: 'Send backward', hint: `${MOD}↓`, run: () => shapeCmd.arrange('backward') },
-    { label: 'Send to back', icon: 'back', hint: `${MOD}⇧↓`, run: () => shapeCmd.arrange('back') },
-    { label: 'Rotate 90° clockwise', icon: 'rotate', sep: true, run: () => shapeCmd.rotate('cw') },
-    { label: 'Rotate 90° counter-clockwise', icon: 'rotateCcw', run: () => shapeCmd.rotate('ccw') },
-    { label: 'Flip horizontally', icon: 'flipH', run: () => shapeCmd.rotate('flipH') },
-    { label: 'Flip vertically', icon: 'flipV', run: () => shapeCmd.rotate('flipV') },
-    { label: 'Center on slide', icon: 'alignObj', sep: true, run: () => shapeCmd.align('both') },
+    ...(cm?.canComment ? [{ label: str.edit.comment, icon: 'commentAdd', hint: COMMENT_KEYS, run: () => cm.start() } as MenuItem] : []),
+    { label: str.pptx.duplicate, icon: 'copy', hint: `${MOD}D`, run: shapeCmd.duplicate, sep: !!cm?.canComment },
+    { label: str.common.delete, icon: 'trash', hint: str.edit.delKey, run: shapeCmd.remove },
+    { label: str.pptx.front, icon: 'front', hint: `${MOD}⇧↑`, sep: true, run: () => shapeCmd.arrange('front') },
+    { label: str.pptx.forward, hint: `${MOD}↑`, run: () => shapeCmd.arrange('forward') },
+    { label: str.pptx.backward, hint: `${MOD}↓`, run: () => shapeCmd.arrange('backward') },
+    { label: str.pptx.back, icon: 'back', hint: `${MOD}⇧↓`, run: () => shapeCmd.arrange('back') },
+    { label: str.pptx.cw, icon: 'rotate', sep: true, run: () => shapeCmd.rotate('cw') },
+    { label: str.pptx.ccw, icon: 'rotateCcw', run: () => shapeCmd.rotate('ccw') },
+    { label: str.pptx.flipH, icon: 'flipH', run: () => shapeCmd.rotate('flipH') },
+    { label: str.pptx.flipV, icon: 'flipV', run: () => shapeCmd.rotate('flipV') },
+    { label: str.pptx.centerOnSlide, icon: 'alignObj', sep: true, run: () => shapeCmd.align('both') },
   ]
   const slideMenu = (i: number, at?: { x: number; y: number }): MenuItem[] => [
-    ...(cm?.canComment ? [{ label: 'Comment', icon: 'commentAdd', hint: COMMENT_KEYS, run: () => cm.start((at && commentAt(i, at.x, at.y)) || undefined) } as MenuItem] : []),
-    { label: 'New slide', icon: 'slideAdd', hint: `${MOD}M`, run: () => slideCmd('add', i), sep: !!cm?.canComment },
-    { label: 'Duplicate slide', icon: 'copy', run: () => slideCmd('duplicate', i) },
-    { label: 'Delete slide', icon: 'trash', run: () => slideCmd('delete', i), disabled: meta.count <= 1 },
-    { label: modelOf(i)?.hidden ? 'Show slide' : 'Hide slide', icon: 'hide', run: () => slideCmd('hide', i) },
-    { label: 'Move slide up', icon: 'up', sep: true, run: () => slideCmd('up', i), disabled: i === 0 },
-    { label: 'Move slide down', icon: 'down', run: () => slideCmd('down', i), disabled: i >= meta.count - 1 },
-    { label: 'Insert text box', icon: 'textbox', sep: true, run: () => void insert('text', i) },
-    { label: 'Insert image…', icon: 'image', run: () => void insert('image', i) },
-    { label: 'Present from this slide', icon: 'play', sep: true, run: () => setPresenting(i) },
+    ...(cm?.canComment ? [{ label: str.edit.comment, icon: 'commentAdd', hint: COMMENT_KEYS, run: () => cm.start((at && commentAt(i, at.x, at.y)) || undefined) } as MenuItem] : []),
+    { label: str.pptx.newSlide, icon: 'slideAdd', hint: `${MOD}M`, run: () => slideCmd('add', i), sep: !!cm?.canComment },
+    { label: str.pptx.duplicateSlide, icon: 'copy', run: () => slideCmd('duplicate', i) },
+    { label: str.pptx.deleteSlide, icon: 'trash', run: () => slideCmd('delete', i), disabled: meta.count <= 1 },
+    { label: modelOf(i)?.hidden ? str.pptx.showSlide : str.pptx.hideSlide, icon: 'hide', run: () => slideCmd('hide', i) },
+    { label: str.pptx.moveUp, icon: 'up', sep: true, run: () => slideCmd('up', i), disabled: i === 0 },
+    { label: str.pptx.moveDown, icon: 'down', run: () => slideCmd('down', i), disabled: i >= meta.count - 1 },
+    { label: str.pptx.insertTextBox, icon: 'textbox', sep: true, run: () => void insert('text', i) },
+    { label: str.edit.imageMenu, icon: 'image', run: () => void insert('image', i) },
+    { label: str.pptx.presentFrom, icon: 'play', sep: true, run: () => setPresenting(i) },
   ]
 
   const onShapeKey = (e: React.KeyboardEvent) => {
@@ -626,13 +636,85 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
     if (el) el.scrollTop = PAD + Math.max(0, Math.min(meta.count - 1, i)) * pitch - Math.max(0, (size.h - slideH) / 2)
   }
 
+  // ---- controller: zoom, slide, the slides as the outline, undo, slideshow ----
+  const { ctl, headless } = viewer
+  // slide titles for the outline, read only while a host reads the controller: from the slides' XML in one call
+  // once the first slides are shown, then from each slide model an edit puts in the cache
+  const observed = useControllerObserved(ctl)
+  const [titles, setTitles] = useState<string[]>([])
+  useEffect(() => {
+    if (!observed) return
+    let live = true
+    const timer = setTimeout(() => {
+      client
+        .call('pptx.titles')
+        .then((t) => live && setTitles(t))
+        .catch(() => {})
+    }, 800)
+    return () => {
+      live = false
+      clearTimeout(timer)
+    }
+  }, [observed, client, meta.count, slidesVer])
+  useEffect(() => {
+    if (!observed) return
+    const edits = cacheFor(client).edits
+    const on = (i: number, m: SlideModel) => setTitles((t) => (t[i] === (m.title ?? '') ? t : Object.assign([...t], { [i]: m.title ?? '' })))
+    edits.add(on)
+    return () => {
+      edits.delete(on)
+    }
+  }, [observed, client])
+  useEffect(() => {
+    ctl?.update({ zoom: { value: zoom, effective: scale } })
+  }, [ctl, zoom, scale])
+  useEffect(() => {
+    ctl?.update({
+      page: { current: current + 1, count: meta.count },
+      outline: { kind: 'slides', items: Array.from({ length: meta.count }, (_, i) => ({ id: String(i), title: titles[i] || `${str.pptx.slide} ${i + 1}`, level: 0, current: i === current })) },
+    })
+  }, [ctl, current, meta.count, titles, str])
+  // as the toolbar's buttons: undo while there is a shape edit or text is being edited; redo whenever editing (no redo depth is kept)
+  useEffect(() => {
+    ctl?.update({ canUndo: viewer.editable && (undoDepth > 0 || editor.active), canRedo: viewer.editable })
+  })
+  const publishedSelection = useRef<Sel | null>(null)
+  const publishFormat = useViewCommands(ctl, {
+    setZoom,
+    goto: (id) => go(Number(id)),
+    gotoPage: (n) => go(n - 1),
+    undo: () => viewer.editable && (editor.active ? editor.undo() : void undoShapes(false)),
+    redo: () => viewer.editable && (editor.active ? editor.redo() : void undoShapes(true)),
+    present: () => setPresenting(current),
+    format: (c) => {
+      const sel = publishedSelection.current
+      if (viewer.editable && editor.active && sel) editor.input.withFormatSelection(sel, () => applyPptx(editor, c))
+    },
+  })
+  // formatting reaches text being edited; a shape that is only selected has none
+  useEffect(() => {
+    if (!ctl) return
+    if (!viewer.editable) return publishFormat(null)
+    const off = editor.subscribeState((s) => {
+      const sel = s && editor.input.formatSelection()
+      publishedSelection.current = sel
+      const current = sel && editor.state(sel)
+      publishFormat(current ? pptxFormat(current) : null)
+    })
+    return () => {
+      off()
+      publishedSelection.current = null
+      publishFormat(null)
+    }
+  }, [ctl, editor, viewer.editable, publishFormat])
+
   // ---- comments: a thread points at a point of a slide ----
   const cm = useCommentsCtl()
   const cmState = useCommentsState(cm)
   const commentAt = (i: number, x: number, y: number): PendingComment | null => {
     const s = meta.slides[i]
     if (!s) return null
-    return { quote: `Slide ${i + 1}`, at: { slide: s.path, x: Math.max(0, Math.min(meta.w - 1, x)), y: Math.max(0, Math.min(meta.h - 1, y)) } }
+    return { quote: (cm?.t ?? str).pptx.slideNumber(i + 1, (cm?.t ?? str).locale), at: { slide: s.path, x: Math.max(0, Math.min(meta.w - 1, x)), y: Math.max(0, Math.min(meta.h - 1, y)) } }
   }
   const cmLive = useRef({ selected, current, go })
   cmLive.current = { selected, current, go }
@@ -645,7 +727,7 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
     }
     cm.setHost({
       kind: 'pptx',
-      hint: 'Select a shape, or right-click the slide where the comment goes.',
+      hint: () => cm.t.pptx.commentHint,
       pending: () => {
         const { selected, current } = cmLive.current
         // the selected shape's top right corner, else the slide's top left
@@ -656,7 +738,7 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
         const out: (PlacedThread & { k: number[] })[] = []
         for (const t of threads) {
           const x = slideOf(t)
-          if (x) out.push({ ...t, quote: `Slide ${x.i + 1}`, k: [x.i, x.a.y, x.a.x] })
+          if (x) out.push({ ...t, quote: cm.t.pptx.slideNumber(x.i + 1, cm.t.locale), k: [x.i, x.a.y, x.a.x] })
         }
         return out.sort((a, b) => a.k[0] - b.k[0] || a.k[1] - b.k[1] || a.k[2] - b.k[2])
       },
@@ -759,8 +841,8 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
             type="button"
             className={'de-cm-pin' + (cmState.active === p.id ? ' on' : '')}
             style={{ left: p.x * scale, top: p.y * scale }}
-            title="Comment"
-            aria-label="Show comment"
+            title={str.edit.comment}
+            aria-label={str.edit.showComment}
             data-thread={p.id}
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => {
@@ -821,14 +903,14 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
             {slots}
           </div>
         </div>
-        <ZoomControl zoom={zoom} effective={scale} onChange={setZoom} />
-        {!viewer.editable && (
-          <button type="button" className="de-mode de-present-btn" title="Present (F5)" onClick={() => setPresenting(current)}>
+        {!headless && <ZoomControl zoom={zoom} effective={scale} onChange={setZoom} />}
+        {!viewer.editable && !headless && (
+          <button type="button" className="de-mode de-present-btn" title={str.pptx.presentTitle} onClick={() => setPresenting(current)}>
             <Icon name="present" size={14} />
-            Present
+            {str.pptx.present}
           </button>
         )}
-        <Status text={`Slide ${current + 1} of ${meta.count}`} onStatus={onStatus} />
+        <Status text={str.pptx.status(current + 1, meta.count, str.locale)} onStatus={onStatus} />
         {viewer.editable && (
           <PptxToolbar
             editor={editor}

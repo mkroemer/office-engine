@@ -51,4 +51,34 @@ describe('embedding without React', () => {
     await v.page.evaluate(() => (window as any).__mounted.destroy())
     expect(await host.innerHTML()).toBe('')
   })
+
+  test('locale and strings update live through mount() and the web component', async () => {
+    const v = await viewer({}, { page: 'embed.html' })
+    const wc = v.page.locator('#wc')
+    const host = v.page.locator('#mounted')
+    await wc.locator('.de-page-inner').first().waitFor()
+    await host.locator('.de-grid').waitFor()
+    await v.page.evaluate(() => {
+      const el = document.getElementById('wc') as HTMLElement & { strings?: { file?: { menu?: string } } }
+      el.setAttribute('file-menu', 'true')
+      const de = window.__german
+      el.strings = { ...de, file: { ...de.file, menu: 'Ablage' } }
+      ;(window as any).__mounted.update({ toolbar: true, strings: { ...de, file: { ...de.file, menu: 'Dateien' } } })
+    })
+    await wc.getByRole('button', { name: 'Ablage', exact: true }).waitFor()
+    await host.getByRole('button', { name: 'Dateien', exact: true }).waitFor()
+    await wc.getByRole('button', { name: 'Ablage', exact: true }).click()
+    expect(await wc.locator('.de-dd-pop').innerText()).toContain('Öffnen…')
+    await v.page.keyboard.press('Escape')
+    await v.page.evaluate(() => {
+      const el = document.getElementById('wc') as HTMLElement & { strings?: object }
+      el.strings = undefined
+      el.setAttribute('locale', 'fr-FR')
+      ;(window as any).__mounted.update({ locale: 'en', strings: undefined })
+    })
+    await wc.getByRole('button', { name: 'File', exact: true }).waitFor()
+    await host.getByRole('button', { name: 'File', exact: true }).waitFor()
+    expect((await v.page.evaluate(() => (window as any).__wcEvents)).length).toBe(1)
+    expect(v.errors).toEqual([])
+  })
 })

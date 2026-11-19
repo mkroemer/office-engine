@@ -357,6 +357,11 @@ export class RichInput {
     this.last = sel
     this.expected = null
   }
+  /** A live formatting target remains valid while a focused host control owns DOM focus. */
+  private formatTarget: Sel | null = null
+  private attachedRoot: HTMLElement | null = null
+  private commandSelection: Sel | null = null
+  formatting = false
   /** select all: the model selection covers every paragraph, the DOM one only what is rendered */
   private override: { model: Sel; dom: Sel } | null = null
   /**
@@ -372,6 +377,8 @@ export class RichInput {
   attach(root: HTMLElement) {
     if (this.root === root) return
     this.detach()
+    if (this.attachedRoot !== root) this.clearSelection()
+    this.attachedRoot = root
     this.root = root
     root.addEventListener('beforeinput', this.onBeforeInput)
     root.addEventListener('compositionstart', this.onCompStart)
@@ -397,9 +404,22 @@ export class RichInput {
     cancelAnimationFrame(this.raf)
     this.raf = 0 // or the next selection change waits forever for a frame that was cancelled
     this.root = null
-    this.override = null
     this.expected = null
     this.seen = null
+  }
+
+  clearSelection() {
+    this.override = null
+    this.formatTarget = null
+    this.lastSel = null
+    this.expected = null
+    this.seen = null
+  }
+
+  get focused() {
+    const root = this.root
+    const active = (root?.getRootNode() as Document | ShadowRoot | undefined)?.activeElement
+    return !!root && (active === root || !!active && root.contains(active))
   }
 
   get isComposing() {
@@ -429,7 +449,7 @@ export class RichInput {
 
   /** the selection a key press acts on */
   private live(): Sel | null {
-    return this.override?.model ?? this.expected ?? this.sel()
+    return this.commandSelection ?? this.override?.model ?? this.expected ?? this.sel()
   }
 
   /**
@@ -448,7 +468,40 @@ export class RichInput {
 
   /** current selection, falling back to the last known one (e.g. after focusing a toolbar control) */
   sel(): Sel | null {
-    return this.override?.model ?? this.readSel() ?? this.lastSel
+    return this.commandSelection ?? this.override?.model ?? this.readSel() ?? this.lastSel
+  }
+
+  /** Keep a logical target for any focused host element, including keyboard-operated buttons and menus. */
+  private activeHost(): Element | null {
+    const root = this.root
+    if (!root) return null
+    let active = root.ownerDocument.activeElement
+    while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement
+    if (!active || root.contains(active)) return null
+    // A focusable page wrapper is background, including ancestors outside a web component's shadow root.
+    let scope: Node = root
+    for (;;) {
+      if (active.contains(scope)) return null
+      const tree = scope.getRootNode()
+      if (!(tree instanceof ShadowRoot)) return active
+      scope = tree.host
+    }
+  }
+
+  /** Use the exact published logical target for one command, without affecting later undo/navigation. */
+  withFormatSelection(sel: Sel, apply: () => void) {
+    this.commandSelection = sel
+    this.formatting = true
+    this.lastSel = sel
+    try { apply() } finally {
+      this.commandSelection = null
+      this.formatting = false
+    }
+  }
+
+  formatSelection(): Sel | null {
+    const sel = this.activeHost() ? (this.formatTarget && this.lastSel) : (this.override?.model ?? this.readSel())
+    return sel && this.host.para(sel.a.pa) && this.host.para(sel.f.pa) ? sel : null
   }
 
   /**
@@ -474,9 +527,14 @@ export class RichInput {
   }
 
   /** Applies a model selection to the DOM; false when its paragraph isn't rendered. */
-  restore(sel: Sel | null, focus = true): boolean {
+  restore(sel: Sel | null, focus: boolean | 'preserve' = this.formatting ? 'preserve' : true): boolean {
     const root = this.root
     if (!root || !sel) return false
+    const active = (root.getRootNode() as Document | ShadowRoot).activeElement
+    if (focus === 'preserve' && active !== root && !root.contains(active)) {
+      this.lastSel = sel
+      return true
+    }
     this.override = null
     const a = domFromPos(root, sel.a)
     const f = domFromPos(root, sel.f)
@@ -486,8 +544,7 @@ export class RichInput {
       this.expected = sel
       return false
     }
-    const active = (root.getRootNode() as Document | ShadowRoot).activeElement
-    if (focus && active !== root && !root.contains(active)) root.focus({ preventScroll: true })
+    if (focus === true && active !== root && !root.contains(active)) root.focus({ preventScroll: true })
     const s = getSel(root)
     try {
       s?.setBaseAndExtent(a[0], a[1], f[0], f[1])
@@ -496,6 +553,7 @@ export class RichInput {
     }
     this.lastSel = sel
     this.expected = null
+    this.formatTarget = sel
     return true
   }
 
@@ -659,16 +717,21 @@ export class RichInput {
     if (this.raf) return
     this.raf = requestAnimationFrame(() => {
       this.raf = 0
-      const s = this.readSel()
+      const dom = this.readSel()
+      const control = this.activeHost()
       const ov = this.override
+      const active = (this.root?.getRootNode() as Document | ShadowRoot | undefined)?.activeElement
       // select all stays until the selection moves somewhere else (losing it to a re-render keeps it, like lastSel)
-      if (ov && s && !sameSel(s, ov.dom)) this.override = null
-      else if (ov) {
+      if (ov && ((control && !!this.formatTarget) || (dom ? sameSel(dom, ov.dom) : this.root === active))) {
+        this.formatTarget = ov.model
         this.host.onSelection?.(ov.model)
         return
       }
+      this.override = null
+      const s = control ? this.formatSelection() : dom
       if (s && this.expected && sameSel(s, this.expected)) this.expected = null
       if (s && !this.expected) this.lastSel = s
+      this.formatTarget = this.expected ?? s
       this.host.onSelection?.(this.expected ?? s)
     })
   }
