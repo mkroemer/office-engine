@@ -99,6 +99,12 @@ function fractionPart(n: ONode): string {
   return `${whole}${'?'.repeat(num)}/${den}`
 }
 
+/** the elements of a data style that show the value */
+const VALUE_PART = new Set([
+  'number:number', 'number:scientific-number', 'number:fraction', 'number:text-content', 'number:boolean',
+  'number:day', 'number:month', 'number:year', 'number:day-of-week', 'number:hours', 'number:minutes', 'number:seconds', 'number:am-pm',
+])
+
 /** the code of one data style (its own elements, not its maps) */
 function section(el: ONode): string {
   const kind = el.name.slice('number:'.length)
@@ -107,6 +113,8 @@ function section(el: ONode): string {
   let elapsed = kind === 'time-style' && el.attrs['number:truncate-on-overflow'] === 'false'
   let code = ''
   let color = ''
+  // a style of texts only (an empty one too: LibreOffice's `;;;`) shows no number: its section is empty, not General
+  const textOnly = children(el).some((k) => k.name === 'number:text') && !children(el).some((k) => VALUE_PART.has(k.name))
   for (const k of children(el)) {
     const long = k.attrs['number:style'] === 'long'
     switch (k.name) {
@@ -181,7 +189,7 @@ function section(el: ONode): string {
     }
   }
   if (kind === 'percentage-style' && !code.includes('%')) code += '%'
-  return color + (code || 'General')
+  return color + (code || (textOnly ? '' : 'General'))
 }
 
 /** "value()>=0" → [">=", 0] */
@@ -224,6 +232,8 @@ export function excelFormat(styles: OdfStyles, name: string | undefined): string
     if (pos >= 0 && neg >= 0) code = `${maps[pos].code};${maps[neg].code};${main}`
     else code = `[${ops[0]}]${maps[0].code};[${ops[1]}]${maps[1].code};${main}`
   }
+  // every section empty: nothing is shown, text included (`;;;`)
+  if (/^;*$/.test(code)) code = ';;;'
   // Excel takes codes of up to 255 characters
   return code === 'General' || code.length > 255 ? undefined : code
 }

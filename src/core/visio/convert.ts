@@ -38,7 +38,8 @@ const EMU_IN = 914400
 /** PowerPoint's largest and smallest slide side, in inches */
 const MAX_SLIDE = 56
 const MIN_SLIDE = 1
-const MAX_DEPTH = 48
+/** groups inside groups: well past what drawings nest (the XML reader stops at 1,024 elements, a group takes two) */
+const MAX_DEPTH = 500
 /**
  * What a drawing may ask for. A small file can draw without end: every instance of a master draws all of the
  * master's shapes again. Past these the file is refused, instead of the slides being built.

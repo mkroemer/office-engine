@@ -34,7 +34,7 @@ interface Person {
 /** what a comment was read from: a note keeps its own element (rich text) and author */
 interface XlsxOrig {
   sheet: string
-  note?: { xml: string; author: string }
+  note?: { xml: string; author: string; text: string }
 }
 
 export class XlsxComments extends CommentStore<XlsxOrig> {
@@ -143,7 +143,7 @@ export async function readXlsxComments(pkg: OpcPackage, wbPath: string, wbRels: 
         if (name && text.startsWith(name + ':')) text = text.slice(name.length + 1).replace(/^\r?\n/, '')
         store.map.set(id, { id, author: { name: name || 'Unknown' }, time: '', text, at: { sheet: s.path, r: row, c: col } })
         const xml = raw.get(ref.toUpperCase())
-        store.orig.set(id, xml ? { sheet: s.path, note: { xml, author: name } } : { sheet: s.path })
+        store.orig.set(id, xml ? { sheet: s.path, note: { xml, author: name, text } } : { sheet: s.path })
       }
     }
   }
@@ -356,12 +356,14 @@ export async function writeXlsxComments(pkg: OpcPackage, wbPath: string, store: 
     for (const [ref, { root, replies }] of cells) {
       const [r, c] = parseRef(ref)
       vml += vmlShape(++shape, r, c)
-      // a note nobody answered or changed stays a note
-      const note = !replies.length && store.pristine(root.id) ? store.orig.get(root.id)?.note : undefined
+      // a note nobody answered or changed stays a note, where it moved to as well (a moved one is "touched", its words are not)
+      const orig = store.orig.get(root.id)?.note
+      const same = !!orig && !root.parent && !root.done && !root.mentions?.length && root.text === orig.text && root.author.name === (orig.author || 'Unknown')
+      const note = !replies.length && orig && (store.pristine(root.id) || same) ? orig : undefined
       if (note) {
         let k = authors.indexOf(note.author)
         if (k < 0) k = authors.push(note.author) - 1
-        legacy += note.xml.replace(/\sauthorId="\d+"/, ` authorId="${k}"`)
+        legacy += note.xml.replace(/^(<[^>]*?\sref=")[^"]*"/, `$1${ref}"`).replace(/\sauthorId="\d+"/, ` authorId="${k}"`)
         continue
       }
       for (const c of [root, ...replies]) {

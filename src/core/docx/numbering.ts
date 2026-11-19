@@ -51,6 +51,113 @@ function letters(n: number): string {
   return ch.repeat(Math.floor((n - 1) / 26) + 1)
 }
 
+/** a sequence of letters / syllables that repeats as doubled marks (a, b … z, aa, bb …) */
+function alphabetic(n: number, alpha: string): string {
+  const chars = [...alpha]
+  const times = Math.floor((n - 1) / chars.length) + 1
+  if (n <= 0 || times > 100) return String(n)
+  return chars[(n - 1) % chars.length].repeat(times)
+}
+
+/** the digits of n written with another set of ten digits */
+const positional = (n: number, digits: string) => (n < 0 ? String(n) : String(n).replace(/\d/g, (d) => [...digits][Number(d)]))
+
+/** a number as East Asian counting (十一, 一百零五, 二万…); past what is written out the number stays decimal */
+function counting(n: number, d: string, u: string, big = '万'): string {
+  if (!(n > 0 && n < 1e8)) return String(n)
+  const digits = [...d]
+  const units = [...u]
+  const section = (v: number, top: boolean) => {
+    let s = ''
+    let zero = false
+    for (let i = 3; i >= 0; i--) {
+      const dg = Math.floor(v / 10 ** i) % 10
+      if (dg === 0) {
+        if (s) zero = true
+        continue
+      }
+      if (zero) (s += digits[0]), (zero = false)
+      s += (dg === 1 && i === 1 && s === '' && top ? '' : digits[dg]) + (i ? units[i - 1] : '')
+    }
+    return s
+  }
+  const hi = Math.floor(n / 10000)
+  const lo = n % 10000
+  if (!hi) return section(lo, true)
+  return section(hi, false) + big + (lo ? (lo < 1000 ? digits[0] : '') + section(lo, false) : '')
+}
+
+const ENCLOSED_CIRCLE = '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳'
+const ENCLOSED_PAREN = '⑴⑵⑶⑷⑸⑹⑺⑻⑼⑽⑾⑿⒀⒁⒂⒃⒄⒅⒆⒇'
+const ENCLOSED_STOP = '⒈⒉⒊⒋⒌⒍⒎⒏⒐⒑⒒⒓⒔⒕⒖⒗⒘⒙⒚⒛'
+const ALPHABETS: Record<string, string> = dict({
+  ideographTraditional: '甲乙丙丁戊己庚辛壬癸',
+  ideographZodiac: '子丑寅卯辰巳午未申酉戌亥',
+  aiueo: 'ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜｦﾝ',
+  aiueoFullWidth: 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン',
+  iroha: 'ｲﾛﾊﾆﾎﾍﾄﾁﾘﾇﾙｦﾜｶﾖﾀﾚｿﾂﾈﾅﾗﾑｳヰﾉｵｸﾔﾏｹﾌｺｴﾃｱｻｷﾕﾒﾐｼヱﾋﾓｾｽ',
+  irohaFullWidth: 'イロハニホヘトチリヌルヲワカヨタレソツネナラムウヰノオクヤマケフコエテアサキユメミシヱヒモセス',
+  ganada: '가나다라마바사아자차카타파하',
+  chosung: 'ㄱㄴㄷㄹㅁㅂㅅㅇㅈㅊㅋㅌㅍㅎ',
+  hebrew2: 'אבגדהוזחטיכלמנסעפצקרשת',
+  arabicAlpha: 'أبتثجحخدذرزسشصضطظعغفقكلمنهوي',
+  arabicAbjad: 'أبجدهوزحطيكلمنسعفصقرشتثخذضظغ',
+  thaiLetters: 'กขคงจฉชซฌญฎฏฐฑฒณดตถทธนบปผฝพฟภมยรลวศษสหฬอฮ',
+  russianLower: 'абвгдежзиклмнопрстуфхцчшщэюя',
+  russianUpper: 'АБВГДЕЖЗИКЛМНОПРСТУФХЦЧШЩЭЮЯ',
+  hindiVowels: 'अआइईउऊऋएऐओऔ',
+  hindiConsonants: 'कखगघङचछजझञटठडढणतथदधनपफबभमयरलवशषसह',
+})
+
+const ONES = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen']
+const TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety']
+const ORD: Record<string, string> = dict({ one: 'first', two: 'second', three: 'third', five: 'fifth', eight: 'eighth', nine: 'ninth', twelve: 'twelfth' })
+
+/** English words for 1…999999 (undefined past it), as separate words and hyphenated tens */
+function words(n: number): string[] | undefined {
+  if (!(n > 0 && n <= 999999)) return undefined
+  const below1000 = (v: number): string[] => {
+    const out: string[] = []
+    if (v >= 100) out.push(ONES[Math.floor(v / 100)], 'hundred')
+    const r = v % 100
+    if (r) out.push(r < 20 ? ONES[r] : TENS[Math.floor(r / 10)] + (r % 10 ? '-' + ONES[r % 10] : ''))
+    return out
+  }
+  const th = Math.floor(n / 1000)
+  return [...(th ? [...below1000(th), 'thousand'] : []), ...below1000(n % 1000)]
+}
+const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
+
+function ordinalWords(w: string[]): string {
+  const last = w[w.length - 1]
+  const dash = last.lastIndexOf('-')
+  const base = last.slice(dash + 1)
+  const o = ORD[base] ?? (base.endsWith('y') ? base.slice(0, -1) + 'ieth' : base + 'th')
+  return [...w.slice(0, -1), last.slice(0, dash + 1) + o].join(' ')
+}
+
+const VI_ONES = ['', 'một', 'hai', 'ba', 'bốn', 'năm', 'sáu', 'bảy', 'tám', 'chín']
+function vietnamese(n: number): string {
+  if (!(n > 0 && n < 100)) return String(n)
+  const t = Math.floor(n / 10)
+  const u = n % 10
+  const s = t === 0 ? VI_ONES[u] : (t === 1 ? 'mười' : VI_ONES[t] + ' mươi') + (u === 0 ? '' : ' ' + (u === 5 ? 'lăm' : u === 1 && t > 1 ? 'mốt' : VI_ONES[u]))
+  return capital(s)
+}
+
+/** Hebrew numerals (gematria): 15 and 16 are written טו / טז */
+function hebrew(n: number): string {
+  if (!(n > 0 && n < 1000)) return String(n)
+  let s = ''
+  let v = n
+  while (v >= 400) (s += 'ת'), (v -= 400)
+  s += ['', 'ק', 'ר', 'ש'][Math.floor(v / 100)]
+  v %= 100
+  if (v === 15) return s + 'טו'
+  if (v === 16) return s + 'טז'
+  return s + ['', 'י', 'כ', 'ל', 'מ', 'נ', 'ס', 'ע', 'פ', 'צ'][Math.floor(v / 10)] + ['', 'א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ז', 'ח', 'ט'][v % 10]
+}
+
 export function formatNumber(n: number, fmt: string): string {
   switch (fmt) {
     case 'decimalZero': return n < 10 ? '0' + n : String(n)
@@ -63,9 +170,38 @@ export function formatNumber(n: number, fmt: string): string {
       const v = n % 100
       return n + (s[(v - 20) % 10] || s[v] || s[0])
     }
+    case 'cardinalText': {
+      const w = words(n)
+      return w ? capital(w.join(' ')) : String(n)
+    }
+    case 'ordinalText': {
+      const w = words(n)
+      return w ? capital(ordinalWords(w)) : String(n)
+    }
+    case 'chineseCounting': case 'chineseCountingThousand': case 'japaneseCounting': case 'taiwaneseCounting': case 'taiwaneseCountingThousand':
+      return counting(n, '零一二三四五六七八九', '十百千')
+    case 'chineseLegalSimplified': return counting(n, '零壹贰叁肆伍陆柒捌玖', '拾佰仟')
+    case 'ideographLegalTraditional': case 'japaneseLegal': return counting(n, '零壹貳參肆伍陸柒捌玖', '拾佰仟')
+    case 'koreanCounting': return counting(n, '영일이삼사오육칠팔구', '십백천', '만')
+    case 'koreanLegal': return counting(n, '영일이삼사오육칠팔구', '십백천', '만')
+    case 'ideographDigital': case 'taiwaneseDigital': case 'japaneseDigitalTenThousand': return positional(n, '〇一二三四五六七八九')
+    case 'koreanDigital': case 'koreanDigital2': return positional(n, '영일이삼사오육칠팔구')
+    case 'thaiNumbers': return positional(n, '๐๑๒๓๔๕๖๗๘๙')
+    case 'hindiNumbers': return positional(n, '०१२३४५६७८९')
+    case 'decimalFullWidth': case 'decimalFullWidth2': return positional(n, '０１２３４５６７８９')
+    case 'decimalEnclosedCircle': case 'decimalEnclosedCircleChinese': return n >= 1 && n <= 20 ? ENCLOSED_CIRCLE[n - 1] : String(n)
+    case 'decimalEnclosedParen': return n >= 1 && n <= 20 ? ENCLOSED_PAREN[n - 1] : String(n)
+    case 'decimalEnclosedFullstop': return n >= 1 && n <= 20 ? ENCLOSED_STOP[n - 1] : String(n)
+    case 'hebrew1': return hebrew(n)
+    case 'hex': return n >= 0 ? n.toString(16).toUpperCase() : String(n)
+    case 'numberInDash': return `-${n}-`
+    case 'vietnameseCounting': return vietnamese(n)
     case 'none': return ''
     case 'bullet': return ''
-    default: return String(n)
+    default: {
+      const alpha = ALPHABETS[fmt]
+      return alpha ? alphabetic(n, alpha) : String(n)
+    }
   }
 }
 
@@ -73,6 +209,8 @@ export class Numbering {
   private abstracts = new Map<string, Record<number, Level>>()
   private nums = new Map<string, NumInstance>()
   private counters = new Map<string, number[]>()
+  /** abstract list → the one it takes its levels from (numStyleLink → styleLink) */
+  private linked = new Map<string, string>()
 
   constructor(root: XEl | undefined, theme: Theme) {
     if (!root) return
@@ -93,7 +231,19 @@ export class Numbering {
       }
       return out
     }
-    for (const a of kids(root, 'abstractNum')) this.abstracts.set(a.a.abstractNumId, readLevels(a))
+    const styleLinks = new Map<string, string>()
+    for (const a of kids(root, 'abstractNum')) {
+      this.abstracts.set(a.a.abstractNumId, readLevels(a))
+      const link = kid(a, 'styleLink')?.a.val
+      if (link && !styleLinks.has(link)) styleLinks.set(link, a.a.abstractNumId)
+    }
+    // a list that takes its levels from a list style: the abstract list that defines the style (its counters are shared)
+    for (const a of kids(root, 'abstractNum')) {
+      const target = styleLinks.get(kid(a, 'numStyleLink')?.a.val ?? '')
+      if (target === undefined || target === a.a.abstractNumId || Object.keys(this.abstracts.get(a.a.abstractNumId) ?? {}).length) continue
+      this.linked.set(a.a.abstractNumId, target)
+      this.abstracts.set(a.a.abstractNumId, this.abstracts.get(target) ?? {})
+    }
     for (const n of kids(root, 'num')) {
       const inst: NumInstance = { abstractId: kid(n, 'abstractNumId')?.a.val ?? '', starts: {}, levels: {} }
       for (const o of kids(n, 'lvlOverride')) {
@@ -140,7 +290,7 @@ export class Numbering {
     const level = this.level(numId, ilvl)
     if (!inst || !level) return undefined
     const hasOverride = Object.keys(inst.starts).length > 0
-    const key = hasOverride ? 'n' + numId : 'a' + inst.abstractId
+    const key = hasOverride ? 'n' + numId : 'a' + (this.linked.get(inst.abstractId) ?? inst.abstractId)
     let c = this.counters.get(key)
     if (!c) {
       c = []
@@ -158,7 +308,8 @@ export class Numbering {
       const l = Number(d) - 1
       const lv = this.level(numId, l)
       const v = c![l] ?? startOf(l)
-      return formatNumber(v, level.isLgl && l < ilvl ? 'decimal' : lv?.fmt ?? 'decimal')
+      // legal numbering: every number of the level, its own included, is Arabic
+      return formatNumber(v, level.isLgl && lv?.fmt !== 'none' ? 'decimal' : lv?.fmt ?? 'decimal')
     })
     return { text, level }
   }

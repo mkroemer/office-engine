@@ -1,4 +1,7 @@
+import { decodeXml } from './xml'
+import { notOffice, PASSWORD_MESSAGE } from './filetype'
 import type { ByteSource } from './source'
+import { crc32 } from './zipwrite'
 
 export interface ZipEntry {
   name: string
@@ -41,7 +44,9 @@ export const ZIP_LIMITS = {
 /** deflate can't pack more than about 1032 to 1: a part announced larger than that for its packed size is not believed */
 const MAX_RATIO = 1032
 
-const tooLarge = (name: string, limit: number) => new Error(`${name} is too large to open (over ${Math.round(limit / (1024 * 1024))} MB unpacked)`)
+class LimitError extends Error {}
+
+const tooLarge = (name: string, limit: number) => new LimitError(`${name} is too large to open (over ${Math.round(limit / (1024 * 1024))} MB unpacked)`)
 
 /** `stream`, failing once more than `limit` bytes came through */
 function capped(stream: ReadableStream<Uint8Array>, limit: number, name: string): ReadableStream<Uint8Array> {
@@ -55,6 +60,56 @@ function capped(stream: ReadableStream<Uint8Array>, limit: number, name: string)
       },
     }),
   )
+}
+
+/** a part is checked against its checksum while it is read, when it is no larger than this (the check costs time) */
+const CRC_MAX = 64 * 1024 * 1024
+
+/**
+ * `inflated` (the unpacked bytes of an entry) with a failure told in words a user can read: zlib's own errors
+ * ("inflate failed", "unexpected end of file", "Trailing junk…") say nothing, and a part that does not match its
+ * checksum is damaged. A failure of the byte source itself (`raw`) is passed on as it is.
+ */
+function guarded(inflated: ReadableStream<Uint8Array>, e: ZipEntry, source: { err?: unknown }): ReadableStream<Uint8Array> {
+  const reader = inflated.getReader()
+  // (a writer that leaves the checksum 0 gives nothing to check against)
+  const check = e.size <= CRC_MAX && e.crc !== 0
+  let crc = 0
+  return new ReadableStream<Uint8Array>({
+    async pull(ctrl) {
+      try {
+        const { done, value } = await reader.read()
+        if (done) {
+          if (check && crc !== e.crc) throw new Error('crc')
+          ctrl.close()
+          return
+        }
+        if (check) crc = crc32(value, crc)
+        ctrl.enqueue(value)
+      } catch (err) {
+        ctrl.error(source.err ?? (err instanceof LimitError ? err : new Error(`The file is damaged: the part “${e.name}” does not unpack correctly (an incomplete download or copy?)`)))
+      }
+    },
+    cancel: (reason) => reader.cancel(reason),
+  })
+}
+
+/** `raw`, remembering how it failed */
+function tracked(raw: ReadableStream<Uint8Array>, source: { err?: unknown }): ReadableStream<Uint8Array> {
+  const reader = raw.getReader()
+  return new ReadableStream<Uint8Array>({
+    async pull(ctrl) {
+      try {
+        const { done, value } = await reader.read()
+        if (done) ctrl.close()
+        else ctrl.enqueue(value)
+      } catch (err) {
+        source.err = err
+        ctrl.error(err)
+      }
+    },
+    cancel: (reason) => reader.cancel(reason),
+  })
 }
 
 /**
@@ -74,7 +129,7 @@ export class ZipArchive {
 
   private async readDirectory() {
     const { src } = this
-    if (src.size < 22) throw new Error('Not a ZIP/OOXML file (too small)')
+    if (src.size < 22) throw new Error(notOffice(await src.read(0, src.size), src.size))
     const tailLen = Math.min(src.size, 22 + 0xffff + 20)
     const tailStart = src.size - tailLen
     const tail = await src.read(tailStart, tailLen)
@@ -86,13 +141,7 @@ export class ZipArchive {
         break
       }
     }
-    if (eocd < 0) {
-      const head = await src.read(0, 8)
-      if (head[0] === 0xd0 && head[1] === 0xcf) {
-        throw new Error('Legacy binary Office format (.doc/.xls/.ppt) or encrypted file is not supported')
-      }
-      throw new Error('Not a ZIP/OOXML file (no end of central directory)')
-    }
+    if (eocd < 0) throw new Error(notOffice(await src.read(0, 4096), src.size))
     let count = dv.getUint16(eocd + 10, true)
     let cdSize = dv.getUint32(eocd + 12, true)
     let cdOffset = dv.getUint32(eocd + 16, true)
@@ -101,7 +150,7 @@ export class ZipArchive {
       const loc = eocd - 20
       if (loc >= 0 && dv.getUint32(loc, true) === SIG_Z64_LOC) {
         const z64Off = u64(dv, loc + 8)
-        if (z64Off + 56 > src.size) throw new Error('Corrupt ZIP (ZIP64 record outside the file)')
+        if (z64Off + 56 > src.size) throw new Error('The file is damaged: its ZIP64 record is outside the file')
         const rec = await src.read(z64Off, 56)
         const rdv = new DataView(rec.buffer, rec.byteOffset, rec.byteLength)
         if (rdv.getUint32(0, true) === SIG_Z64_EOCD) {
@@ -113,7 +162,7 @@ export class ZipArchive {
     }
 
     // the directory is read whole: it lies inside the file, and is not larger than a directory gets
-    if (cdOffset + cdSize > src.size) throw new Error('Corrupt ZIP (central directory outside the file)')
+    if (cdOffset + cdSize > src.size) throw new Error('The file is damaged: its list of parts is outside the file (an incomplete download or copy?)')
     if (cdSize > ZIP_LIMITS.directory || count > ZIP_LIMITS.entries) throw new Error(`Too many files in the package (over ${ZIP_LIMITS.entries})`)
     const cd = await src.read(cdOffset, cdSize)
     const cdv = new DataView(cd.buffer, cd.byteOffset, cd.byteLength)
@@ -153,7 +202,7 @@ export class ZipArchive {
         const key = normalize(name)
         // one part per name (names differing by case are the same part): with two, which one is shown and which one
         // another reader (a scanner, Office) sees would differ
-        if (this.entries.has(key)) throw new Error(`Corrupt ZIP (two files named ${name})`)
+        if (this.entries.has(key)) throw new Error(`The file is damaged: it holds two files named ${name}`)
         if (this.entries.size >= ZIP_LIMITS.entries) throw new Error(`Too many files in the package (over ${ZIP_LIMITS.entries})`)
         this.entries.set(key, { name, method, flags, crc, time, date, compSize, size, localOffset })
       }
@@ -175,12 +224,12 @@ export class ZipArchive {
 
   private async dataOffset(e: ZipEntry): Promise<number> {
     if (e.dataOffset !== undefined) return e.dataOffset
-    if (e.localOffset + 30 > this.src.size) throw new Error(`Corrupt ZIP local header for ${e.name}`)
+    if (e.localOffset + 30 > this.src.size) throw new Error(`The file is damaged: the part “${e.name}” cannot be found where the file says it is`)
     const h = await this.src.read(e.localOffset, 30)
     const dv = new DataView(h.buffer, h.byteOffset, h.byteLength)
-    if (h.length < 30 || dv.getUint32(0, true) !== SIG_LOC) throw new Error(`Corrupt ZIP local header for ${e.name}`)
+    if (h.length < 30 || dv.getUint32(0, true) !== SIG_LOC) throw new Error(`The file is damaged: the part “${e.name}” cannot be found where the file says it is`)
     const off = e.localOffset + 30 + dv.getUint16(26, true) + dv.getUint16(28, true)
-    if (off + e.compSize > this.src.size) throw new Error(`Corrupt ZIP (${e.name} runs past the end of the file)`)
+    if (off + e.compSize > this.src.size) throw new Error(`The file is damaged: the part “${e.name}” runs past the end of the file (an incomplete download or copy?)`)
     e.dataOffset = off
     return off
   }
@@ -198,7 +247,7 @@ export class ZipArchive {
   async stream(path: string, onRaw?: (consumed: number, total: number) => void, limit = ZIP_LIMITS.stream): Promise<ReadableStream<Uint8Array>> {
     const e = this.get(path)
     if (!e) throw new Error(`Missing part: ${path}`)
-    if (e.flags & 1) throw new Error('Encrypted documents are not supported')
+    if (e.flags & 1) throw new Error(PASSWORD_MESSAGE)
     if (e.size > limit) throw tooLarge(e.name, limit)
     const off = await this.dataOffset(e)
     let raw = this.src.stream(off, e.compSize)
@@ -216,8 +265,15 @@ export class ZipArchive {
       )
     }
     // stored: as long as its bytes in the file; deflated: counted as it unpacks
-    if (e.method === 0) return e.compSize > limit ? capped(raw, limit, e.name) : raw
-    if (e.method === 8) return capped(raw.pipeThrough(new DecompressionStream('deflate-raw') as unknown as TransformStream<Uint8Array, Uint8Array>), limit, e.name)
+    const source: { err?: unknown } = {}
+    if (e.method === 0) {
+      const stored = guarded(tracked(raw, source), e, source)
+      return e.compSize > limit ? capped(stored, limit, e.name) : stored
+    }
+    if (e.method === 8) {
+      const inflated = tracked(raw, source).pipeThrough(new DecompressionStream('deflate-raw') as unknown as TransformStream<Uint8Array, Uint8Array>)
+      return capped(guarded(inflated, e, source), limit, e.name)
+    }
     throw new Error(`Unsupported ZIP compression method ${e.method} for ${e.name}`)
   }
 
@@ -251,7 +307,7 @@ export class ZipArchive {
   }
 
   async text(path: string): Promise<string> {
-    return new TextDecoder().decode(await this.bytes(path))
+    return decodeXml(await this.bytes(path))
   }
 }
 

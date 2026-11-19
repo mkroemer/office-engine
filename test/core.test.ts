@@ -74,7 +74,8 @@ describe('numfmt', () => {
     expect(f(1e100, '0.00E+00')).toBe('1.00E+100')
     expect(f(1e-100, '0.00E+00')).toBe('1.00E-100')
     expect(f(12345, '##0.0E+0')).toBe('12.3E+3')
-    expect(f(0.125, '# ?/?')).toBe('1/8')
+    // Excel keeps the space between the (empty) whole part and the fraction
+    expect(f(0.125, '# ?/?')).toBe(' 1/8')
   })
   test('dates', () => {
     expect(f(45291.75, 'yyyy-mm-dd hh:mm')).toBe('2023-12-31 18:00')

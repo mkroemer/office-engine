@@ -1,19 +1,29 @@
 /** Math functions. */
-import { A, INF, nums, opt, S, type Ev, type FnDef } from './fn'
+import { A, INF, opt, S, visit, type Ev, type FnDef } from './fn'
 import { roundHalf } from './format'
-import { ERR } from './types'
-import { int, num, type Val } from './values'
+import { ERR, FormulaError, type Value } from './types'
+import { int, num, toNum, type Val } from './values'
 
 /** Remove binary noise (15 significant digits). */
 const clean = (x: number) => Number(x.toPrecision(15))
 
 function roundDir(x: number, d: number, up: boolean): number {
-  if (d > 15) return x
-  const f = Math.pow(10, Math.abs(d))
+  if (x === 0) return 0
   const ax = Math.abs(x)
-  let y = clean(d >= 0 ? ax * f : ax / f)
-  y = up ? Math.ceil(y) : Math.floor(y)
-  const r = d >= 0 ? y / f : y * f
+  const to = up ? Math.ceil : Math.floor
+  let r: number
+  if (d >= 0) {
+    const y = ax * Math.pow(10, d)
+    // no digit left to round away (1E300 to 10 decimals)
+    if (!Number.isFinite(y) || y >= 2 ** 52) return x
+    r = to(clean(y)) / Math.pow(10, d)
+  } else {
+    const f = Math.pow(10, -d)
+    // 10^400 is not a number: what is left at that scale is 0
+    if (!Number.isFinite(f)) return 0
+    r = to(clean(ax / f)) * f
+    if (!Number.isFinite(r)) return 0
+  }
   return x < 0 ? -r : r
 }
 
@@ -30,11 +40,17 @@ function gcd2(a: number, b: number): number {
   return a
 }
 
+/** the integers of GCD / LCM: an empty cell is 0, text that is not a number (even in a range) is #VALUE! */
 function intArgs(args: Val[], ev: Ev): number[] {
-  return nums(args, ev).map((n) => {
+  const out: number[] = []
+  const add = (v: Value) => {
+    const n = toNum(v)
+    if (n instanceof FormulaError) throw n
     if (n < 0) throw ERR.NUM
-    return Math.trunc(n)
-  })
+    out.push(Math.trunc(n))
+  }
+  for (const a of args) visit(a, ev, (v) => (typeof v === 'boolean' ? add(ERR.VALUE) : add(v)), add)
+  return out
 }
 
 export const MATH: Record<string, FnDef> = {
@@ -120,9 +136,10 @@ export const MATH: Record<string, FnDef> = {
     return lo + Math.floor(Math.random() * (hi - lo + 1))
   }),
   FACT: S(1, 1, ([x]) => {
-    const n = Math.trunc(num(x))
+    const v = num(x)
     // 171! is past what a number holds: no need to count up to it (nor to 1E15)
-    if (n < 0 || n > 170) throw ERR.NUM
+    if (v < 0 || v >= 171) throw ERR.NUM
+    const n = Math.trunc(v)
     let r = 1
     for (let i = 2; i <= n; i++) r *= i
     return finite(r)

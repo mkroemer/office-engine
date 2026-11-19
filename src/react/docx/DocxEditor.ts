@@ -8,11 +8,12 @@ import type {
 } from '../../core/docx/types'
 import { cssFont } from '../../core/fonts'
 import type { DocumentClient } from '../../core/worker/client'
-import { opInsert, opInsertRuns, ordered, RichInput, type ReplaceOpts, type RichHost } from '../edit/input'
-import { htmlToParas } from '../../core/html'
-import { cellsIn, deleteCol, deleteRow, distributeCols, gridOf, insertCol, insertRow, mergeCells, newTable, patchCells, rectOf, setBorders, unmergeCell, type BorderPreset, type CellRect } from './tables'
+import { opDelete, opInsert, opInsertRuns, ordered, RichInput, type ReplaceOpts, type RichHost } from '../edit/input'
+import { htmlToParas, type PastedCell, type PastedPara } from '../../core/html'
+import { docxBodyHtml, docxToText } from '../file/text'
+import { cellsIn, deleteCol, deleteRow, distributeCols, gridOf, insertCol, insertRow, mergeCells, newTable, patchCells, rectOf, setBorders, tableFromRows, unmergeCell, type BorderPreset, type CellRect } from './tables'
 import { changeSpans, hasChanges, resolveRuns, trackEdit } from './track'
-import { collapsed, formatRange, markRange, normalize, plen, rlen, runAt, runsText, shiftPa, splitRuns, type Pos, type RRun, type Sel } from '../edit/rich'
+import { collapsed, formatRange, linkSpan, markRange, normalize, plen, rlen, runAt, runsText, shiftPa, splitRuns, type Pos, type RRun, type Sel } from '../edit/rich'
 
 /** a place in a paragraph that survives edits elsewhere: paragraph id, page-break part, offset */
 export interface ParaPos {
@@ -191,9 +192,25 @@ function moveSel(sel: Sel, from: string, to: string): Sel {
 /** a model change: contiguous paragraphs replaced, or top-level blocks replaced */
 export type DocxCommit = { kind: 'paras'; before: Paragraph[]; next: Paragraph[] } | { kind: 'blocks'; bi: number; before: Block[]; next: Block[] }
 
+/**
+ * The list a paragraph is in: what the last edit of it asks for (`pd.list`) while the worker has not said yet what the
+ * paragraph became (`lst` comes with its answer, later), else what the document says. A key coming right after
+ * "Bulleted list" or an Enter acts on the paragraph as it is being made, not as it was.
+ */
+const listOf = (p: Paragraph | undefined): 'bullet' | 'number' | undefined => (!p ? undefined : p.pd?.list !== undefined ? (p.pd.list === 'none' ? undefined : p.pd.list) : p.lst)
+const levelOf = (p: Paragraph): number => p.pd?.ilvl ?? p.ilvl ?? 0
+
 export class DocxEditor implements RichHost<Paragraph> {
   readonly input: RichInput
-  pendingSel: Sel | null = null
+  private pendSel: Sel | null = null
+  /** the caret the last edit asked for, until the view shows it (the input takes it as the selection meanwhile) */
+  get pendingSel(): Sel | null {
+    return this.pendSel
+  }
+  set pendingSel(sel: Sel | null) {
+    this.pendSel = sel
+    if (sel) this.input.expect(sel)
+  }
   styles: StyleInfo[] = []
   private history: Entry[] = []
   private future: Entry[] = []
@@ -378,7 +395,7 @@ export class DocxEditor implements RichHost<Paragraph> {
     if (before.some((b) => !b)) return
     // suggesting: what the edit takes out stays (deleted), what it puts in is marked inserted
     if (this.tracking && opts.history !== false && !UNTRACKED.has(opts.label ?? '')) {
-      const r = trackEdit(before, next, pas[0], sel, this.input.lastSel, { k: 'ins', author: this.author(), date: new Date().toISOString().replace(/\.\d+Z$/, 'Z') })
+      const r = trackEdit(before, next, pas[0], sel, this.input.caret, { k: 'ins', author: this.author(), date: new Date().toISOString().replace(/\.\d+Z$/, 'Z') })
       next = r.next
       sel = r.sel
       if (next.length === 1 && before.length === 1 && opts.label === 'type') opts = { ...opts, remount: true }
@@ -410,7 +427,7 @@ export class DocxEditor implements RichHost<Paragraph> {
       const now = Date.now()
       const last = this.history[this.history.length - 1]
       const label = opts.label ?? 'edit'
-      const selBefore = this.input.lastSel ?? sel
+      const selBefore = this.input.caret ?? sel
       // same paragraph, not just same address: a collaborator's edit above can bring another paragraph to that address
       const typing = label === 'type' && last?.label === 'type' && pas.length === 1 && next.length === 1 && last.after.length === 1
       if (typing && last.pas[0] === pas[0] && last.after[0].pid === before[0].pid && now - last.t < 1500) {
@@ -893,7 +910,7 @@ export class DocxEditor implements RichHost<Paragraph> {
     if (!sel) return
     const r = this.selectedParas(sel)
     if (!r) return
-    const all = r.pas.every((pa) => this.para(pa)?.lst === kind)
+    const all = r.pas.every((pa) => listOf(this.para(pa)) === kind)
     this.setPara({ list: all ? 'none' : kind, ilvl: all ? undefined : 0 }, {}, sel)
   }
 
@@ -904,9 +921,9 @@ export class DocxEditor implements RichHost<Paragraph> {
     const next = r.pas.map((pa) => {
       const p = this.para(pa)!
       const pd: ParaDirty = { ...(p.pd ?? {}) }
-      if (p.lst) pd.ilvl = Math.max(0, Math.min(8, (p.ilvl ?? 0) + dir))
+      if (listOf(p)) pd.ilvl = Math.max(0, Math.min(8, levelOf(p) + dir))
       else pd.indL = Math.max(0, (p.ps.indL ?? 0) + dir * 36)
-      return { ...p, pd, ps: p.lst ? p.ps : { ...p.ps, indL: pd.indL }, edited: true }
+      return { ...p, pd, ps: listOf(p) ? p.ps : { ...p.ps, indL: pd.indL }, edited: true }
     })
     this.replace(r.pas, next, sel, { label: 'para', want: true })
   }
@@ -929,14 +946,59 @@ export class DocxEditor implements RichHost<Paragraph> {
       return true
     }
     const p = this.para(sel.a.pa)
-    if (!p?.lst) return false
+    if (!listOf(p)) return false
     this.indent(shift ? -1 : 1, sel)
     return true
   }
 
   backspaceAtStart(pa: string, p: Paragraph): boolean {
-    if (!p.lst) return false
+    if (!listOf(p)) return false
     this.setPara({ list: 'none' }, {}, { a: { pa, o: 0 }, f: { pa, o: 0 } })
+    return true
+  }
+
+  /** Enter in an empty list item goes one level out, and at the first level ends the list (Word, Docs) */
+  enterAtEmpty(pa: string, p: Paragraph): boolean {
+    if (!listOf(p)) return false
+    const at = { a: { pa, o: 0 }, f: { pa, o: 0 } }
+    if (levelOf(p) > 0) this.indent(-1, at)
+    else this.setPara({ list: 'none' }, {}, at)
+    return true
+  }
+
+  /** ArrowRight after the last character of a table leaves it, as ArrowDown does */
+  arrow(sel: Sel, dir: 1 | -1): boolean {
+    if (dir !== 1 || !sel.a.pa.includes('.')) return false
+    const [bi, ri, ci, pi] = path(sel.a.pa)
+    const t = this.st.blocks[bi]
+    const p = this.para(sel.a.pa)
+    if (t?.t !== 'tbl' || !p || sel.a.o < plen(p.runs as RRun[]) || ri !== t.rows.length - 1) return false
+    const row = t.rows[ri]
+    if (ci !== row.cells.length - 1 || pi !== row.cells[ci].blocks.length - 1) return false
+    const after = String(bi + 1)
+    if (!this.para(after)) return false
+    const to = { a: { pa: after, o: 0 }, f: { pa: after, o: 0 } }
+    if (!this.input.restore(to)) this.pendingSel = to
+    return true
+  }
+
+  /**
+   * Copy / cut of text: the clipboard gets the paragraphs as the model has them (list items, headings, runs), not the
+   * page's DOM (which holds the list markers as text and the colors as computed). Pictures and ranges across a table are
+   * left to the browser.
+   */
+  copy(sel: Sel, data: DataTransfer, cut: boolean): boolean {
+    const [s, e] = ordered(this, sel)
+    const pas = s.pa === e.pa ? (this.para(s.pa) ? [s.pa] : null) : this.span(s.pa, e.pa)
+    if (!pas) return false
+    const parts = pas.map((pa, i) => {
+      const p = this.para(pa)!
+      return { ...p, runs: sliceRunsOf(p, i === 0 ? s.o : 0, i === pas.length - 1 ? e.o : plen(p.runs as RRun[])) }
+    })
+    if (parts.some((p) => p.runs.some((r) => r.t !== 'text'))) return false
+    data.setData('text/html', docxBodyHtml(parts))
+    data.setData('text/plain', docxToText(parts).replace(/\n$/, ''))
+    if (cut) opDelete(this, sel)
     return true
   }
 
@@ -1173,26 +1235,31 @@ export class DocxEditor implements RichHost<Paragraph> {
     opInsertRuns(this, sel, [runs as RRun[]], { label: 'image' })
   }
 
-  async setLink(url: string | null) {
-    const sel = this.input.sel()
+  /** `at`: the selection the link is for (the dialog takes the focus, and the page's selection may not be known by then) */
+  async setLink(url: string | null, at: Sel | null = this.input.sel()) {
+    let sel = at
     if (!sel) return
+    // a caret inside a link: the whole link is meant (Remove, a new address), the caret stays where it is
+    const caret = sel
+    const inLink = collapsed(sel) ? linkSpan((this.para(sel.a.pa)?.runs ?? []) as RRun[], sel.a.o) : null
+    if (inLink) sel = { a: { pa: sel.a.pa, o: inLink[0] }, f: { pa: sel.a.pa, o: inLink[1] } }
     if (!url) {
-      this.patchRuns(sel, (r) => ({ ...r, href: undefined, lk: undefined }))
+      this.patchRuns(sel, (r) => ({ ...r, href: undefined, lk: undefined }), caret)
       return
     }
     const href = /^[a-z][\w+.-]*:/i.test(url.trim()) || url.startsWith('#') ? url.trim() : 'https://' + url.trim()
     // (refused by the worker when following it could run code: javascript:, data:…)
     const lk = await this.client.call('docx.link', href)
     const style = { color: '#0563c1', u: 'single' }
-    if (collapsed(sel)) {
+    if (collapsed(sel) && !inLink) {
       opInsertRuns(this, sel, [[{ t: 'text', text: url, href, lk, s: { ...(runAt(this.para(sel.a.pa)?.runs as RRun[] ?? [], sel.a.o)?.s ?? {}), ...style }, d: style } as RRun]], { label: 'link' })
       return
     }
-    this.patchRuns(sel, (r) => ({ ...r, href, lk, s: { ...(r.s ?? {}), ...style }, d: { ...(r.d ?? {}), ...style } }))
+    this.patchRuns(sel, (r) => ({ ...r, href, lk, s: { ...(r.s ?? {}), ...style }, d: { ...(r.d ?? {}), ...style } }), caret)
   }
 
-  /** applies `fn` to the text runs inside the selection */
-  private patchRuns(sel: Sel, fn: (r: RRun) => RRun) {
+  /** applies `fn` to the text runs inside the selection; `caret`: the selection afterwards */
+  private patchRuns(sel: Sel, fn: (r: RRun) => RRun, caret = sel) {
     const r = this.selectedParas(sel)
     if (!r) return
     const next = r.pas.map((pa, i) => {
@@ -1203,7 +1270,7 @@ export class DocxEditor implements RichHost<Paragraph> {
       const [mid, right] = splitRuns(rest, b - a)
       return this.withRuns(p, [...left, ...mid.map((x) => (x.t === 'text' ? fn(x) : x)), ...right])
     })
-    this.replace(r.pas, next, sel, { label: 'format' })
+    this.replace(r.pas, next, caret, { label: 'format' })
   }
 
   insertPageBreak() {
@@ -1247,34 +1314,119 @@ export class DocxEditor implements RichHost<Paragraph> {
     }
     const html = data.getData('text/html')
     if (!html) return false
-    const paras = htmlToParas(html)
-    if (!paras.length) return false
-    void (async () => {
-      const links = new Map<string, string>()
-      for (const p of paras) {
-        for (const r of p.runs) {
-          if (r.t !== 'text' || !r.href || links.has(r.href)) continue
-          // a link the document does not take is pasted as its text
-          const lk = await this.client.call('docx.link', r.href).catch(() => undefined)
-          if (lk) links.set(r.href, lk)
-          else r.href = undefined
-        }
-      }
-      const lines = paras.map((p) => p.runs.map((r) => (r.t === 'text' && r.href ? { ...r, lk: links.get(r.href) } : r)) as RRun[])
-      const headingId = (n: number) => this.styles.find((s) => s.name.toLowerCase() === `heading ${n}`)?.id
-      const props = paras.map((p) => {
-        if (!p.heading && !p.list) return undefined
-        return (q: Paragraph) => {
-          const pd: ParaDirty = { ...(q.pd ?? {}) }
-          const h = p.heading ? headingId(p.heading) : undefined
-          if (h) pd.style = h
-          if (p.list) pd.list = p.list
-          return { ...q, pd, sid: h ?? q.sid, edited: true }
-        }
-      })
-      opInsertRuns(this, sel, lines, { label: 'paste' }, props as unknown as ((p: RichParaLike) => RichParaLike)[])
-    })()
+    // tables are made at top level only: in a cell a pasted table is lines of text
+    const inCell = sel.a.pa.includes('.') || sel.f.pa.includes('.')
+    const items = htmlToParas(html, true, { tables: !inCell })
+    if (!items.length) return false
+    void this.pasteItems(sel, items).catch((e: Error) => console.error('[office-engine] paste failed', e))
     return true
+  }
+
+  /** links the document takes and pictures it stores, for every run of the pasted paragraphs (cells too) */
+  private async resolvePasted(items: PastedPara[]) {
+    const links = new Map<string, string | undefined>()
+    const all: PastedPara[] = []
+    const collect = (ps: PastedPara[]) =>
+      ps.forEach((p) => {
+        all.push(p)
+        p.table?.forEach((row) => row.forEach((c) => collect(c.paras)))
+      })
+    collect(items)
+    for (const p of all) {
+      const runs: Inline[] = []
+      for (const r of p.runs) {
+        if (r.t === 'text' && r.href) {
+          if (!links.has(r.href)) links.set(r.href, await this.client.call('docx.link', r.href).catch(() => undefined))
+          // a link the document does not take is pasted as its text
+          const lk = links.get(r.href)
+          runs.push(lk ? { ...r, lk } : { ...r, href: undefined })
+        } else if (r.t === 'img') {
+          const blob = dataBlob(r.target)
+          if (!blob) continue
+          const ext = (blob.type.split('/')[1] ?? 'png').replace('svg+xml', 'svg').replace('jpeg', 'jpg')
+          const { rid, path } = await this.client.call('docx.image', await blob.arrayBuffer(), ext)
+          const dims = r.w && r.h ? { w: r.w / 0.75, h: r.h / 0.75 } : await imageSize(blob)
+          const scale = Math.min(1, this.contentW / Math.max(1, dims.w * 0.75))
+          runs.push({ ...r, target: path, rid, w: +(dims.w * 0.75 * scale).toFixed(1), h: +(dims.h * 0.75 * scale).toFixed(1) })
+        } else runs.push(r)
+      }
+      p.runs = runs
+    }
+  }
+
+  private async pasteItems(sel: Sel, items: PastedPara[]) {
+    await this.resolvePasted(items)
+    // a table needs the paragraph split where it goes: the selection is deleted first
+    if (items.some((p) => p.table) && !collapsed(sel)) {
+      const [s] = ordered(this, sel)
+      opDelete(this, sel)
+      sel = { a: s, f: s }
+    }
+    let at = sel
+    for (let i = 0; i < items.length; ) {
+      if (items[i].table) {
+        const caret = this.pasteTable(at, items[i].table!)
+        if (caret) at = caret
+        i++
+        continue
+      }
+      let j = i
+      while (j < items.length && !items[j].table) j++
+      this.pasteParas(at, items.slice(i, j))
+      at = this.pendingSel ?? at
+      i = j
+    }
+  }
+
+  private pasteParas(sel: Sel, paras: PastedPara[]) {
+    const lines = paras.map((p) => p.runs as RRun[])
+    const headingId = (n: number) => this.styles.find((s) => s.name.toLowerCase() === `heading ${n}`)?.id
+    const props = paras.map((p, i) => {
+      // a paragraph after a list item is split from it and would stay an item
+      const leaves = !p.list && i > 0 && !!paras[i - 1].list
+      if (!p.heading && !p.list && !leaves) return undefined
+      return (q: Paragraph) => {
+        const pd: ParaDirty = { ...(q.pd ?? {}) }
+        const h = p.heading ? headingId(p.heading) : undefined
+        if (h) pd.style = h
+        if (p.list) {
+          pd.list = p.list
+          if (p.level) pd.ilvl = p.level
+          else delete pd.ilvl
+        } else if (leaves) pd.list = 'none'
+        return { ...q, pd, sid: h ?? q.sid, edited: true }
+      }
+    })
+    opInsertRuns(this, sel, lines, { label: 'paste' }, props as unknown as ((p: RichParaLike) => RichParaLike)[])
+  }
+
+  /** a table in place of the paragraph at the caret (split there); the caret after it, or null when nothing was pasted */
+  private pasteTable(sel: Sel, rows: PastedCell[][]): Sel | null {
+    const [s] = ordered(this, sel)
+    const bi = Number(s.pa)
+    const p = this.para(s.pa)
+    if (!rows.length || s.pa.includes('.') || !p || p.pid === undefined) return null
+    const mk = () => this.emptyPara(p)
+    const cellBlocks = (paras: PastedPara[]): Block[] =>
+      paras
+        .filter((q) => !q.table)
+        .map((q) => ({ ...mk(), runs: q.runs, edited: true }))
+    const t: Table = { ...tableFromRows(rows.map((r) => r.map((c) => ({ blocks: cellBlocks(c.paras), colSpan: c.colSpan, rowSpan: c.rowSpan }))), this.contentW, mk), tid: this.nextPid++ }
+    const [l, r] = splitRuns(p.runs as RRun[], s.o)
+    let next: Block[]
+    let caret: string
+    if (!plen(l) && this.prevParaPid(bi) !== undefined) {
+      // the caret was at the start of the paragraph: the table goes before it
+      next = [t, p]
+      caret = String(bi + 1)
+    } else {
+      const [a, b] = this.split(p, l, r, false)
+      next = [a, t, b]
+      caret = String(bi + 2)
+    }
+    const to = { a: { pa: caret, o: 0 }, f: { pa: caret, o: 0 } }
+    this.replaceBlocks(bi, 1, next, to)
+    return to
   }
 
   // ---------------------------------------------------------------- styles
@@ -1902,6 +2054,18 @@ export class DocxEditor implements RichHost<Paragraph> {
 }
 
 type RichParaLike = Parameters<NonNullable<Parameters<typeof opInsertRuns>[4]>[number]>[0]
+
+/** the bytes of a data: URL as a Blob of its type; null when it is not a picture or cannot be read */
+function dataBlob(url: string): Blob | null {
+  const m = /^data:(image\/[\w+.-]+)((?:;[\w=.-]+)*),([\s\S]*)$/i.exec(url)
+  if (!m) return null
+  try {
+    const bytes = /;base64/i.test(m[2]) ? Uint8Array.from(atob(m[3].replace(/\s/g, '')), (c) => c.charCodeAt(0)) : new TextEncoder().encode(decodeURIComponent(m[3]))
+    return new Blob([bytes], { type: m[1].toLowerCase() })
+  } catch {
+    return null
+  }
+}
 
 function imageSize(blob: Blob): Promise<{ w: number; h: number }> {
   return new Promise((resolve) => {

@@ -2,7 +2,7 @@
 import { tokenize, type Token } from './lexer'
 import type { Ast } from './parser'
 import { fmtRef, normalizeRef, quoteSheet, refInBounds, sameSheet, type RefAddr } from './refs'
-import { MAX_COL, MAX_ROW, type CellRef, type RangeRef } from './types'
+import { MAX_COL, MAX_REF_ROW, MAX_ROW, type CellRef, type RangeRef } from './types'
 
 /** Re-emit `text`, replacing tokens for which `map` returns a string. Unlexable text is returned unchanged. */
 function rewrite(text: string, map: (t: Token) => string | undefined): string {
@@ -37,7 +37,8 @@ function translateRef(t: Token & { t: 'ref' }, dr: number, dc: number): string {
     if (!a.ac0) a.c0 += dc
     if (!a.ac1) a.c1 += dc
   }
-  if (!refInBounds(a)) return refError(t)
+  // (a reference past Excel's last row, to a row of a large text file, may move on past it)
+  if (!refInBounds(a, t.ref.r1 > MAX_ROW ? MAX_REF_ROW : MAX_ROW)) return refError(t)
   return fmtRef(normalizeRef(a), t.sheetText)
 }
 
@@ -117,7 +118,7 @@ export function shiftFormula(text: string, op: ShiftOp): string {
     const a: RefAddr = { ...t.ref }
     if (op.axis === 'row') {
       if (a.kind === 'cols') return undefined
-      const s = shiftSpan(a.r0, a.r1, op.at, op.delta, MAX_ROW)
+      const s = shiftSpan(a.r0, a.r1, op.at, op.delta, a.r1 > MAX_ROW ? MAX_REF_ROW : MAX_ROW)
       if (!s) return refError(t)
       ;[a.r0, a.r1] = s
     } else {

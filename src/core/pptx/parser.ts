@@ -1,4 +1,5 @@
 import { colorOf, officeHex, type ColorCtx } from '../color'
+import type { DocComment } from '../comments'
 import { readPptxComments, PptxComments, writePptxComments } from './comments'
 import { cssFont } from '../fonts'
 import { OpcPackage, relOfType, type Rels } from '../opc'
@@ -38,6 +39,31 @@ function findShape(nodes: RChild[], sid: number): RNode | undefined {
   }
   return found
 }
+
+/** the `a:tc` at [row, col] of the table in graphic frame `sid` */
+function findCell(nodes: RChild[], sid: number, cell: [number, number]): RNode | undefined {
+  let frame: RNode | undefined
+  for (const n of nodes) {
+    if (!isNode(n)) continue
+    walkOoxml(n, (c) => {
+      if (frame) return true
+      if (local(c.q) !== 'graphicFrame') return
+      const id = getAttr(kidOf(kidOf(c, 'nvGraphicFramePr'), 'cNvPr') ?? c, 'id')
+      if (id !== undefined && Number(id) === sid) frame = c
+      return true
+    })
+  }
+  let tbl: RNode | undefined
+  if (frame) walkOoxml(frame, (c) => {
+    if (tbl) return true
+    if (local(c.q) === 'tbl') tbl = c
+    return !!tbl
+  })
+  return tbl ? kidsOf(kidsOf(tbl, 'tr')[cell[0]], 'tc')[cell[1]] : undefined
+}
+
+/** key of a text target (a shape, or a table cell of a graphic frame) */
+const tkey = (path: string, sid: number, cell?: [number, number]) => `${path}#${sid}${cell ? `:${cell[0]}.${cell[1]}` : ''}`
 
 function applyPRunSet(rPr: RNode, set: PRunSet, A: string) {
   if (set.sz !== undefined) setAttr(rPr, 'sz', String(Math.round(set.sz * 100)))
@@ -198,6 +224,41 @@ function autoNum(type: string, n: number): string {
   return core
 }
 
+/** what a part was (null: absent) before and after an edit */
+export interface PartPatch {
+  path: string
+  before: string | null
+  after: string | null
+}
+
+/**
+ * One undoable edit. A shape edit is the slide XML before / after (`path`); a slide list edit (add, delete, move, hide…)
+ * is the patches of every part it touched, the comments it removed, and the slide to show after undo / redo.
+ */
+export interface UndoEntry {
+  path: string
+  before: string
+  after: string
+  parts?: PartPatch[]
+  gone?: DocComment[]
+  focus?: [number, number]
+}
+
+/**
+ * The stack without what a text edit of slide `p` (now `text`) makes stale: its shape entries go (their XML no longer
+ * matches); a slide list entry that created the slide keeps its place and re-creates the slide as it is now.
+ */
+export function dropUndo(stack: UndoEntry[], p: string, text: string): UndoEntry[] {
+  return stack.filter((e) => {
+    if (e.path === p) return false
+    const at = e.parts?.find((x) => x.path === p)
+    if (!at) return true
+    if (at.before !== null) return false
+    if (at.after !== null) at.after = text
+    return true
+  })
+}
+
 export class PptxPresentation {
   private masters = new Map<string, Promise<Master>>()
   /** the comments (read in `open`) */
@@ -312,7 +373,21 @@ export class PptxPresentation {
       bg: r.background(),
       els,
       hidden: slide.root.a.show === '0',
+      notes: await this.notesOf(slide.rels),
     }
+  }
+
+  /** speaker notes: the text of the body placeholder of the slide's notes slide (paragraphs on lines) */
+  private async notesOf(slideRels: Rels): Promise<string | undefined> {
+    const rel = relOfType(slideRels, 'notesSlide')
+    const root = rel && this.pkg.has(rel.target) ? await this.pkg.xml(rel.target) : undefined
+    for (const sp of kids(path(root, 'cSld', 'spTree'), 'sp')) {
+      if (path(sp, 'nvSpPr', 'nvPr', 'ph')?.a.type !== 'body') continue
+      const lines = kids(kid(sp, 'txBody'), 'p').map((p) => p.c.map((r) => (r.n === 'r' || r.n === 'fld' ? textOf(kid(r, 't')) : r.n === 'br' ? '\n' : '')).join(''))
+      const text = lines.join('\n')
+      return text.trim() ? text : undefined
+    }
+    return undefined
   }
 
   get defaults() {
@@ -325,8 +400,8 @@ export class PptxPresentation {
   /** structural edits (shapes, slides) */
   touched = false
   /** shape edits (slide XML before / after) for undo; text edits drop the entries of their slide */
-  undoStack: { path: string; before: string; after: string }[] = []
-  redoStack: { path: string; before: string; after: string }[] = []
+  undoStack: UndoEntry[] = []
+  redoStack: UndoEntry[] = []
   private originals = new Map<string, string>()
   private lateShapes = new Map<string, string>()
 
@@ -338,8 +413,8 @@ export class PptxPresentation {
     if (!this.originals.has(path)) this.originals.set(path, await this.pkg.text(path))
   }
 
-  genMap(path: string, sid: number): GenPara[] | undefined {
-    return this.genMaps.get(`${path}#${sid}`)
+  genMap(path: string, sid: number, cell?: [number, number]): GenPara[] | undefined {
+    return this.genMaps.get(tkey(path, sid, cell))
   }
 
   get dirty() {
@@ -347,27 +422,31 @@ export class PptxPresentation {
   }
 
   /** Rewrites the paragraphs of shape `sid` on slide `index` and returns the re-rendered slide. */
-  async setText(index: number, sid: number, paras: PParaSpec[]): Promise<SlideModel> {
+  async setText(index: number, sid: number, paras: PParaSpec[], cell?: [number, number]): Promise<SlideModel> {
     const info = this.meta.slides[index]
     if (!info) throw new Error(`No slide #${index}`)
     const p = info.path
     await this.keepOriginal(p)
     const curNodes = parseRaw(await this.pkg.text(p))
-    const shape = findShape(curNodes, sid)
+    // a table cell (`a:tc`) holds its text like a shape (`p:sp`) does: an `txBody` of `a:p`
+    const find = (nodes: RChild[]) => (cell ? findCell(nodes, sid, cell) : findShape(nodes, sid))
+    const shape = find(curNodes)
     // a shape added after the slide's original was taken is its own template
-    const key = `${p}#${sid}`
-    if (shape && !this.lateShapes.has(key) && !findShape(parseRaw(this.originals.get(p)!), sid)) this.lateShapes.set(key, serialize([shape]))
+    const key = tkey(p, sid, cell)
+    if (shape && !this.lateShapes.has(key) && !find(parseRaw(this.originals.get(p)!))) this.lateShapes.set(key, serialize([shape]))
     const late = this.lateShapes.get(key)
-    const origShape = late ? (parseRaw(late)[0] as RNode) : findShape(parseRaw(this.originals.get(p)!), sid)
-    if (!shape || !origShape) throw new Error(`Shape ${sid} not found`)
+    const origShape = late ? (parseRaw(late)[0] as RNode) : find(parseRaw(this.originals.get(p)!))
+    if (!shape || !origShape) throw new Error(cell ? `Cell ${cell} of table ${sid} not found` : `Shape ${sid} not found`)
     let txBody = kidOf(shape, 'txBody')
     const origBody = kidOf(origShape, 'txBody')
     const origParas = kidsOf(origBody, 'p')
     const P = prefixOf(shape.q)
     const A = prefixOf((kidOf(origBody, 'bodyPr') ?? origParas[0])?.q ?? 'a:x') || 'a:'
     if (!txBody) {
-      txBody = el(P + 'txBody', {}, [el(A + 'bodyPr'), el(A + 'lstStyle')])
-      shape.c.push(txBody)
+      txBody = el((cell ? A : P) + 'txBody', {}, [el(A + 'bodyPr'), el(A + 'lstStyle')])
+      // in a cell the text body comes before the cell properties
+      if (cell) shape.c.unshift(txBody)
+      else shape.c.push(txBody)
       shape.self = false
     }
     const origRuns = origParas.map((op) => kidsOf(op).filter((c) => ['r', 'br', 'fld'].includes(local(c.q))))
@@ -418,10 +497,11 @@ export class PptxPresentation {
     const keep = txBody.c.filter((c) => !(isNode(c) && local(c.q) === 'p'))
     txBody.c = [...keep, ...out]
     txBody.self = false
-    this.pkg.setPart(p, serialize(curNodes))
-    this.genMaps.set(`${p}#${sid}`, map)
-    this.undoStack = this.undoStack.filter((e) => e.path !== p)
-    this.redoStack = this.redoStack.filter((e) => e.path !== p)
+    const text = serialize(curNodes)
+    this.pkg.setPart(p, text)
+    this.genMaps.set(key, map)
+    this.undoStack = dropUndo(this.undoStack, p, text)
+    this.redoStack = dropUndo(this.redoStack, p, text)
     return this.slide(index)
   }
 
@@ -663,13 +743,13 @@ class SlideRenderer {
   }
 
   private textBody(
-    txBody: XEl | undefined, chain: XEl[], ph: { type: string } | undefined, styleFont?: XEl, part?: Part, sid?: number,
+    txBody: XEl | undefined, chain: XEl[], ph: { type: string } | undefined, styleFont?: XEl, part?: Part, sid?: number, cell?: [number, number],
   ): TextBody | undefined {
     if (!txBody) return undefined
     const paras = kids(txBody, 'p')
     const empty = !paras.some((p) => p.c.some((c) => c.n === 'r' || c.n === 'fld'))
     if (empty && sid === undefined) return undefined
-    const gm = sid !== undefined ? this.pres.genMap(this.slide.path, sid) : undefined
+    const gm = sid !== undefined ? this.pres.genMap(this.slide.path, sid, cell) : undefined
     const m = this.master
     let base: XEl | undefined
     if (ph) {
@@ -924,7 +1004,10 @@ class SlideRenderer {
     const gd = path(el, 'graphic', 'graphicData')
     if (!gd) return
     const tbl = kid(gd, 'tbl')
-    if (tbl) return void out.push(this.table(tbl, box, part))
+    if (tbl) {
+      const id = path(el, 'nvGraphicFramePr', 'cNvPr')?.a.id
+      return void out.push(this.table(tbl, box, part, part === this.slide && id ? Number(id) : undefined))
+    }
     const ole = kid(gd, 'oleObj')
     const olePic = kid(ole, 'pic')
     if (olePic) {
@@ -937,7 +1020,7 @@ class SlideRenderer {
     out.push({ t: 'placeholder', box, label })
   }
 
-  private table(tbl: XEl, box: Box, part: Part): SlideEl {
+  private table(tbl: XEl, box: Box, part: Part, sid?: number): SlideEl {
     const cols = kids(kid(tbl, 'tblGrid'), 'gridCol').map((g) => emuToPx(num(g.a.w, 0)))
     const tblPr = kid(tbl, 'tblPr')
     const flag = (k: string) => tblPr?.a[k] === '1' || tblPr?.a[k] === 'true'
@@ -1006,7 +1089,9 @@ class SlideRenderer {
           return outer ? bord[side] : bord[inner] ?? bord[side]
         }
         const textEl = kid(tc, 'txBody')
-        let text = this.textBody(textEl, textEl ? [tc] : [], undefined, undefined, part)
+        // the text of a cell of the slide's own table is editable, so an empty one has a body too
+        let text = this.textBody(textEl, textEl ? [tc] : [], undefined, undefined, part, sid, [ri, ci])
+        if (!text && sid !== undefined && !(tc.a.hMerge === '1' || tc.a.vMerge === '1' || tc.a.hMerge === 'true' || tc.a.vMerge === 'true')) text = this.textBody({ n: 'txBody', a: {}, c: [{ n: 'p', a: {}, c: [], t: '' }], t: '' }, [tc], undefined, undefined, part, sid, [ri, ci])
         if (text) {
           text.ins = [
             emuToPx(num(tcPr?.a.marL, 91440)), emuToPx(num(tcPr?.a.marT, 45720)),
@@ -1034,7 +1119,7 @@ class SlideRenderer {
       })
       return { h: emuToPx(num(tr.a.h, 0)), cells }
     })
-    return { t: 'table', box, cols, rows }
+    return { t: 'table', box, cols, rows, sid }
   }
 }
 

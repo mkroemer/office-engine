@@ -72,6 +72,9 @@ function dosNow(): { time: number; date: number } {
   }
 }
 
+/** a part's name as a package spells it: with `/`, whatever the file it came from wrote (Windows tools write `word\\document.xml`), and no leading one */
+const partName = (name: string) => name.replace(/\\/g, '/').replace(/^\/+/, '')
+
 /**
  * Re-packs an archive: unchanged entries are copied as stored (no recompression,
  * zero-copy when the source is a Blob); changed/added entries are deflated.
@@ -84,7 +87,7 @@ export async function rebuildZip(zip: ZipArchive | null, changes: Map<string, Pa
   let offset = 0
   let count = 0
   const pending = new Map<string, { name: string; data: PartData | null }>()
-  for (const [k, v] of changes) pending.set(normalize(k), { name: k.replace(/^\/+/, ''), data: v })
+  for (const [k, v] of changes) pending.set(normalize(k), { name: partName(k), data: v })
 
   const writeEntry = (name: string, method: number, crc: number, csize: number, size: number, time: number, date: number, body: BlobPart[]) => {
     const nameBytes = enc.encode(name)
@@ -135,13 +138,13 @@ export async function rebuildZip(zip: ZipArchive | null, changes: Map<string, Pa
     const ch = pending.get(key)
     if (ch) {
       pending.delete(key)
-      if (ch.data !== null) await writeNew(e.name, ch.data)
+      if (ch.data !== null) await writeNew(partName(e.name), ch.data)
       continue
     }
     let raw = await zip!.rawData(e)
     // Bun drops lazily-read file slices when composing Blobs: materialize there (browsers stay zero-copy)
     if (IS_BUN && raw instanceof Blob) raw = new Uint8Array(await raw.arrayBuffer())
-    writeEntry(e.name, e.method, e.crc, e.compSize, e.size, e.time, e.date, [raw as BlobPart])
+    writeEntry(partName(e.name), e.method, e.crc, e.compSize, e.size, e.time, e.date, [raw as BlobPart])
   }
   for (const { name, data } of pending.values()) if (data !== null) await writeNew(name, data)
 

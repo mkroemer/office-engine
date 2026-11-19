@@ -94,6 +94,32 @@ describe('collab xlsx', () => {
     }
   }, 30_000)
 
+  test('N1-019: a duplicated sheet is the same copy for every participant, also for one that joins later', async () => {
+    const hub = new CollabHub()
+    const a = await open(hub, 'Ann', () => 1)
+    const b = await open(hub, 'Bob', () => 3)
+    await settle([a.collab, b.collab])
+    await a.client.call('xlsx.set', 0, [{ r: 30, c: 0, input: 'copied' }])
+    await b.client.call('xlsx.bookOp', { op: 'duplicate', index: 0 })
+    await settle([a.collab, b.collab])
+    const names = (x: DocumentClient) => x.info.xlsx!.sheets.map((s) => s.name).join(',')
+    expect(names(a.client)).toBe(names(b.client))
+    expect(names(a.client).split(',').slice(0, 2)).toEqual(['Sales', 'Sales (2)'])
+    const c = await open(hub, 'Cid', () => 0)
+    await settle([a.collab, b.collab, c.collab])
+    expect(names(c.client)).toBe(names(a.client))
+    for (const x of [a, b, c]) {
+      await x.client.call('xlsx.load', 1)
+      await sleep(30)
+      const blk = await x.client.call('xlsx.block', 1, 30, 31)
+      expect(blk.rows[0]?.cells[0]?.[1]).toBe('copied')
+    }
+    for (const x of [a, b, c]) {
+      x.collab.close()
+      x.client.destroy()
+    }
+  }, 30_000)
+
   for (const lag of [[0, 6], [6, 0], [3, 3]]) test(`text with line breaks (wrap style, grown row) against concurrent formatting and row heights converges (latency ${lag})`, async () => {
     const hub = new CollabHub()
     const a = await open(hub, 'Ann', () => lag[0])

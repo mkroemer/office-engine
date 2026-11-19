@@ -148,7 +148,8 @@ function index(a: Val[], ev: Ev): Val {
   else if (h === 1) [r, c] = [1, r]
   else if (w === 1) c = 1
   else c = 0
-  if (r < 0 || c < 0 || r > h || c > w) throw ERR.REF
+  if (r < 0 || c < 0) throw ERR.VALUE
+  if (r > h || c > w) throw ERR.REF
   if (src instanceof RangeV) {
     const [r0, r1] = r ? [src.r0 + r - 1, src.r0 + r - 1] : [src.r0, src.r1]
     const [c0, c1] = c ? [src.c0 + c - 1, src.c0 + c - 1] : [src.c0, src.c1]

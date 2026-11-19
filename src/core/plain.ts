@@ -10,6 +10,8 @@ import { decodeEntities, htmlToParas } from './html'
 import { BlobSource, type ByteSource } from './source'
 import { isSvg, svgImage } from './svgfile'
 import { dict } from './dict'
+import { composes, isWindows1258, knownEncoding } from './encoding'
+import { describeBinary, unreadText } from './filetype'
 
 export type PlainFormat = 'csv' | 'tsv' | 'text' | 'markdown' | 'html' | 'svg' | DiagramLang
 
@@ -29,6 +31,13 @@ export const PLAIN_EXT: Record<string, PlainFormat> = dict({
   svgz: 'svg',
   ...DIAGRAM_EXT,
 })
+
+/**
+ * Names of the old Word / Excel files that are often something else: a web page or a table saved as .doc / .xls (accounting
+ * software, "Save as Web Page"). Their bytes decide; the other package names are always read as packages, so an error
+ * page served for a missing .docx still fails.
+ */
+const SNIFFED_EXT = new Set(['doc', 'xls', 'xlt'])
 
 /** packages (Office, iWork, OpenDocument, Visio), the legacy binary formats and RTF: never read as text */
 const PACKAGE_EXT = new Set([
@@ -117,8 +126,18 @@ function isText(b: Uint8Array): boolean {
   return true
 }
 
-/** Text of a file: byte order mark, then the declared charset, then UTF-8, then Windows-1252 (Excel's CSV on Windows). */
-export function decodeText(b: Uint8Array, type?: string): string {
+/**
+ * Text of a file: the encoding asked for (`encoding`, a `TextDecoder` label), else the byte order mark, then the
+ * declared charset, then UTF-8, then Windows-1258 (Excel's CSV on Vietnamese Windows) when the bytes read as
+ * Vietnamese in it, then Windows-1252 (Excel's CSV on other Windows).
+ */
+export function decodeText(b: Uint8Array, type?: string, encoding?: string): string {
+  if (encoding) {
+    const label = knownEncoding(encoding)
+    if (!label) throw new Error(`Unknown text encoding “${encoding}”`)
+    const text = new TextDecoder(label, { ignoreBOM: false }).decode(b)
+    return composes(label) ? text.normalize('NFC') : text
+  }
   if (b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf) return new TextDecoder('utf-8').decode(b)
   if (b[0] === 0xff && b[1] === 0xfe) return new TextDecoder('utf-16le').decode(b)
   if (b[0] === 0xfe && b[1] === 0xff) {
@@ -140,8 +159,43 @@ export function decodeText(b: Uint8Array, type?: string): string {
   try {
     return new TextDecoder('utf-8', { fatal: true }).decode(b)
   } catch {
-    return new TextDecoder('windows-1252').decode(b)
+    return isWindows1258(b) ? new TextDecoder('windows-1258').decode(b).normalize('NFC') : new TextDecoder('windows-1252').decode(b)
   }
+}
+
+/** a web page saved as one file (MHTML: a MIME message whose parts are the HTML and its pictures) */
+export const isMhtml = (text: string) => /^\s*(?:(?:From|Subject|Date|MIME-Version|Content-Type):[^\r\n]*\r?\n)+/i.test(text) && /^Content-Type:\s*(?:multipart\/related|text\/html)/im.test(text.slice(0, 2048))
+
+/** The HTML part of an MHTML file (decoded from quoted-printable or base64), or the text when it has none. */
+export function mhtmlToHtml(text: string): string {
+  const lf = text.replace(/\r\n?/g, '\n')
+  const header = (h: string, name: string) => new RegExp(`^${name}:\\s*([^\\n]*(?:\\n[ \\t][^\\n]*)*)`, 'im').exec(h)?.[1].replace(/\n[ \t]+/g, ' ')
+  const boundary = /boundary="?([^"\s;]+)"?/i.exec(lf.slice(0, lf.indexOf('\n\n') < 0 ? 2048 : lf.indexOf('\n\n')))?.[1]
+  const parts = boundary ? lf.split(`--${boundary}`).slice(1) : [lf]
+  for (const part of parts) {
+    const cut = part.indexOf('\n\n')
+    if (cut < 0) continue
+    const head = part.slice(0, cut)
+    if (!/^\s*text\/html/i.test(header(head, 'Content-Type') ?? '') && boundary) continue
+    let body = part.slice(cut + 2)
+    const how = (header(head, 'Content-Transfer-Encoding') ?? '').trim().toLowerCase()
+    const charset = /charset="?([^"\s;]+)/i.exec(header(head, 'Content-Type') ?? '')?.[1] ?? 'utf-8'
+    let bytes: Uint8Array
+    if (how === 'base64') {
+      const bin = atob(body.replace(/[^A-Za-z0-9+/=]/g, ''))
+      bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0))
+    } else if (how === 'quoted-printable') {
+      const raw = body.replace(/=\n/g, '').replace(/=([0-9A-F]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+      bytes = Uint8Array.from(raw, (c) => c.charCodeAt(0))
+    } else bytes = new TextEncoder().encode(body)
+    try {
+      body = new TextDecoder(charset).decode(bytes)
+    } catch {
+      body = new TextDecoder().decode(bytes)
+    }
+    return body
+  }
+  return text
 }
 
 /** a file with neither a known extension nor a MIME type: SVG, HTML, delimited rows, or text */
@@ -173,7 +227,14 @@ export function plainFormat(name: string | undefined, type: string | undefined, 
   // ZIP (a package, whatever its name says); OLE: legacy binary Office or encrypted, the ZIP reader says so
   if ((head[0] === 0x50 && head[1] === 0x4b) || (head[0] === 0xd0 && head[1] === 0xcf)) return null
   const ext = extOf(name)
-  if (PACKAGE_EXT.has(ext)) return null
+  if (PACKAGE_EXT.has(ext)) {
+    // .doc / .xls that is HTML, CSV, TSV, MHTML or plain text: read as what it is; XML 2003 and the like say what they are
+    if (!SNIFFED_EXT.has(ext) || !head.length || isGzip(head) || !isText(head)) return null
+    const text = decodeText(head, type)
+    const unread = unreadText(text)
+    if (unread) throw new Error(unread)
+    return isMhtml(text) ? 'html' : sniff(text, whole)
+  }
   // a gzip-compressed plain file (.svgz, .csv.gz): the name inside says the format, also once the server has unpacked it
   const inner = unpackedName(name)
   const byExt = PLAIN_EXT[ext] ?? (inner ? PLAIN_EXT[extOf(inner)] : undefined)
@@ -182,7 +243,10 @@ export function plainFormat(name: string | undefined, type: string | undefined, 
     throw new Error(`${name ? `“${name}”` : 'The file'} is a gzip file: only gzip-compressed CSV / text / Markdown / HTML / SVG and diagram files open (.svgz, .csv.gz…)`)
   }
   if (!isText(head)) {
-    if (byExt) throw new Error(`“${name}” is not a text file`)
+    if (byExt) {
+      const what = describeBinary(head)
+      throw new Error(`“${name}” is ${what ? `${what}, not a text file` : 'not a text file'}`)
+    }
     return null
   }
   if (byExt) return byExt

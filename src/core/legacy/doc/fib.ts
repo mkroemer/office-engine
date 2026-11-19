@@ -62,8 +62,9 @@ export interface Fib {
 export function readFib(wd: Bytes): Fib {
   if (wd.length < 0x44) throw new Error('Word document is truncated (no file information block)')
   let nFib = wd.u16(2)
-  if (nFib < 0xc0) throw new Error('Word 6.0 / Word 95 and older documents are not supported (only Word 97-2003)')
-  if (wd.u16(0) !== 0xa5ec) throw new Error('Not a Word document (bad signature)')
+  // Word 6.0 and 95 write another signature (0xA5DC); a Word 97 stream that is zeros or garbage is a damaged file
+  if (wd.u16(0) === 0xa5dc || (wd.u16(0) === 0xa5ec && nFib > 0 && nFib < 0xc0)) throw new Error('Word 6.0 / Word 95 and older documents are not supported (only Word 97-2003)')
+  if (wd.u16(0) !== 0xa5ec) throw new Error('The file is damaged: it is a Word file, but its text cannot be found (the document stream is missing or garbled)')
   const flags = wd.u16(0x0a)
   if (flags & 0x0100) throw new Error('Password-protected Word documents are not supported')
 

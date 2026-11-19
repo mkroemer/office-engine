@@ -77,7 +77,8 @@ export interface TextBody {
 export type SlideEl = (
   | { t: 'shape'; box: Box; geom: string; adj?: Record<string, number>; fill?: Fill; stroke?: Stroke; text?: TextBody; path?: string; sid?: number }
   | { t: 'pic'; box: Box; target?: string; crop?: [number, number, number, number]; stroke?: Stroke; geom?: string; video?: boolean }
-  | { t: 'table'; box: Box; cols: number[]; rows: { h: number; cells: TCell[] }[] }
+  /** `sid`: id of the graphic frame, on the slide's own tables (cell text editing) */
+  | { t: 'table'; box: Box; cols: number[]; rows: { h: number; cells: TCell[] }[]; sid?: number }
   | { t: 'placeholder'; box: Box; label: string }
 ) & { top?: number }
 

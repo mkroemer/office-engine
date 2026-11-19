@@ -250,18 +250,17 @@ describe('New / Open', () => {
     expect(await v.shown('A3')).toBe('Pear; green')
     expect(await v.shown('B2')).toBe('12.5')
     expect(await v.shown('C2')).toBe('007')
-    // converted files start unsaved
-    expect(await v.barButton('Save').count()).toBe(1)
+    // a converted file has no changes yet (N3-013): not unsaved
+    expect(await v.barButton('Save').count()).toBe(0)
   })
 
   test('Open: Markdown, HTML and text become documents', async () => {
     const v = await viewer({ src: 'samples/sample.xlsx', onSave: true })
     await v.chooseFile(() => v.menu('Open…'), file('notes.md', '# Notes\n\nSome **bold** and [a link](https://example.com).\n\n- one\n- two\n'))
-    // the converted workbook is unsaved: confirm
-    await v.page.locator('.de-dialog').waitFor().catch(() => {})
-    if (await v.page.locator('.de-dialog').count()) await v.page.locator('.de-dialog button', { hasText: 'Continue' }).click()
+    // the opened workbook has no changes: nothing to confirm
     await v.page.locator('.de-page-inner').first().waitFor()
     expect(await v.title()).toBe('notes.md')
+    expect(await v.page.locator('.de-dialog').count()).toBe(0)
     // a Markdown file is not unsaved for being shown as a document: Save (File menu) gives it back as it is
     let n = (await v.events('save')).length
     await v.menu('Save')
@@ -284,12 +283,15 @@ describe('New / Open', () => {
     expect(paras.map(paraText)).toEqual(['Web title', 'Para it', 'a'])
     expect(paras[0].ps.outline).toBe(1)
 
-    // a text file is saved as a Word document (unsaved until then)
+    // a text file is saved as a Word document (File → Save: the bar's Save shows once there are changes)
 
     await v.chooseFile(() => v.menu('Open…'), file('plain.txt', 'line one\nline two'))
     await v.page.waitForFunction(() => document.querySelector('.de-bar .de-title')?.textContent === 'plain.txt')
     await v.page.waitForTimeout(500)
-    expect((await docxParas((await v.save()).bytes)).map(paraText)).toEqual(['line one', 'line two'])
+    n = (await v.events('save')).length
+    await v.menu('Save')
+    const txt = await v.waitEvent('save', n + 1)
+    expect((await docxParas(Buffer.from(txt.b64 as string, 'base64'))).map(paraText)).toEqual(['line one', 'line two'])
   })
 
   test('a Markdown file edited as a document keeps its tables, nested lists, code, quotes and front matter when saved', async () => {
@@ -318,6 +320,28 @@ describe('New / Open', () => {
     await v.chooseFile(() => v.menu('Open…'), { name: 'scan.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.7') })
     expect(await v.toast()).toContain('Cannot open “scan.pdf”')
     expect(await v.title()).toBe('sample.pptx')
+  })
+
+  test('N3-009: a text file with no extension opens, as it does through src', async () => {
+    const v = await viewer({ src: 'samples/sample.docx' })
+    await v.chooseFile(() => v.menu('Open…'), file('notes', 'Dear team,\nthe meeting moved, again.\nThanks\n', ''))
+    await v.page.locator('.de-page-inner').first().waitFor()
+    await v.page.waitForFunction(() => document.querySelector('.de-bar .de-title')?.textContent === 'notes')
+    expect(await v.page.locator('.de-toast').count()).toBe(0)
+    await v.page.locator('.de-page-inner', { hasText: 'the meeting moved, again.' }).first().waitFor()
+  })
+
+  test('N3-013: a converted file is not unsaved: opening the next one asks nothing', async () => {
+    const v = await viewer({ src: 'samples/sample.docx' })
+    for (const sample of ['sample.xls', 'sample.doc', 'sample.csv']) {
+      await v.chooseFile(() => v.menu('Open…'), `${SAMPLES}/${sample}`)
+      await v.page.waitForFunction((s) => document.querySelector('.de-bar .de-title')?.textContent === s, sample)
+      await v.page.waitForTimeout(300)
+      expect(await v.page.locator('.de-save-dirty').count()).toBe(0)
+      await v.chooseFile(() => v.menu('Open…'), `${SAMPLES}/sample.docx`)
+      await v.page.waitForFunction(() => document.querySelector('.de-bar .de-title')?.textContent === 'sample.docx')
+      expect(await v.page.locator('.de-dialog').count()).toBe(0)
+    }
   })
 
   test('unsaved changes are confirmed; Cancel keeps the document', async () => {
