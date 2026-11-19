@@ -3,9 +3,11 @@
  * Kept separate from the implementations so the UI bundle stays small.
  * Format: `NAME: 'arg1, [arg2], ...|Description'`.
  */
+import { CAT_DESCRIBE } from './catalog-describe'
 import { CAT_DIST } from './catalog-dist'
 import { CAT_ENGINEERING } from './catalog-engineering'
 import { CAT_FINANCIAL } from './catalog-financial'
+import { CAT_MORE } from './catalog-more'
 
 const BASE: Record<string, string> = {
   ABS: 'number|Absolute value of a number.',
@@ -144,7 +146,7 @@ const BASE: Record<string, string> = {
   YEAR: 'serial_number|Year of a date.',
 }
 
-const RAW: Record<string, string> = { ...BASE, ...CAT_DIST, ...CAT_FINANCIAL, ...CAT_ENGINEERING }
+const RAW: Record<string, string> = { ...BASE, ...CAT_DIST, ...CAT_DESCRIBE, ...CAT_FINANCIAL, ...CAT_ENGINEERING, ...CAT_MORE }
 
 export interface FnInfo {
   name: string

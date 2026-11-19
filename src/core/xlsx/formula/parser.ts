@@ -3,6 +3,7 @@ import { FormulaSyntaxError, tokenize, type Token } from './lexer'
 import type { RefAddr } from './refs'
 import type { ErrorCode, Value } from './types'
 import { FormulaError } from './types'
+import type { Val } from './values'
 
 export type BinOp = '+' | '-' | '*' | '/' | '^' | '&' | '=' | '<>' | '<' | '>' | '<=' | '>='
 
@@ -21,6 +22,10 @@ export type Ast =
   | { type: 'range'; left: Ast; right: Ast }
   | { type: 'union'; items: Ast[] }
   | { type: 'call'; name: string; args: Ast[] }
+  /** what an expression gives, called as a function: LAMBDA(x, x + 1)(5) */
+  | { type: 'invoke'; fn: Ast; args: Ast[] }
+  /** a value already computed (never parsed: an argument handed to a function called through a function value) */
+  | { type: 'value'; value: Val }
 
 const CMP = new Set(['=', '<>', '<', '>', '<=', '>='])
 
@@ -106,15 +111,29 @@ class Parser {
       this.i++
       return { type: 'unary', op: op as '-' | '+', arg: this.unary() }
     }
+    // @: the one value of a range / array that is the formula's own (a file writes it SINGLE)
+    if (this.isOp('@')) {
+      this.i++
+      return { type: 'call', name: 'SINGLE', args: [this.unary()] }
+    }
     return this.range()
   }
   private range(): Ast {
-    let l = this.primary()
+    let l = this.spilled()
     while (this.isOp(':')) {
       this.i++
-      l = { type: 'range', left: l, right: this.primary() }
+      l = { type: 'range', left: l, right: this.spilled() }
     }
     return l
+  }
+  /** x#: all the cells the dynamic array formula in x fills */
+  private spilled(): Ast {
+    let x = this.primary()
+    while (this.isOp('#')) {
+      this.i++
+      x = { type: 'call', name: 'ANCHORARRAY', args: [x] }
+    }
+    return x
   }
 
   private primary(): Ast {
@@ -136,14 +155,14 @@ class Parser {
         return t.sheet === undefined ? { type: 'name', name: t.v } : { type: 'name', name: t.v, sheet: t.sheet }
       case 'func': {
         this.expectPunc('(')
-        return { type: 'call', name: t.v, args: this.args() }
+        return this.called({ type: 'call', name: t.v, args: this.args() })
       }
       case 'punc':
         if (t.v === '(') {
           const first = this.expr()
           if (!this.isPunc(',')) {
             this.expectPunc(')')
-            return first
+            return this.called(first)
           }
           const items = [first]
           while (this.isPunc(',')) {
@@ -157,6 +176,15 @@ class Parser {
     }
     this.i--
     return this.fail('unexpected token')
+  }
+
+  /** `x` followed by arguments is `x` called with them: LAMBDA(…)(1, 2) */
+  private called(x: Ast): Ast {
+    while (this.isPunc('(')) {
+      this.i++
+      x = { type: 'invoke', fn: x, args: this.args() }
+    }
+    return x
   }
 
   private args(): Ast[] {

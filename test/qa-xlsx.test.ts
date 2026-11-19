@@ -428,7 +428,8 @@ describe('xlsx: formulas that were not computed', () => {
 
   test('N1-027 / P2-008 / P1-014: what the engine cannot compute keeps the value of the file', async () => {
     const src = await book({
-      sheets: [{ name: 'S', rows: rows([[1000, { f: 'PMT(0.05/12,60,A1)', v: -18.87 }, { f: 'IFERROR(PMT(0.05/12,60,A1),0)', v: -18.87 }, { f: 'Rate*A1', v: 50 }, { f: 'B1*2', v: -37.74 }, { f: 'Table1[Total]', v: 7 }]]) }],
+      // (a function that asks a service, a name and a table the workbook does not have: none can be computed)
+      sheets: [{ name: 'S', rows: rows([[1000, { f: 'STOCKHISTORY("X",A1)', v: -18.87 }, { f: 'IFERROR(STOCKHISTORY("X",A1),0)', v: -18.87 }, { f: 'Missing*A1', v: 50 }, { f: 'B1*2', v: -37.74 }, { f: 'Table1[Total]', v: 7 }]]) }],
       names: '<definedName name="Rate">0.05</definedName>',
     })
     const o = await openBook(src)

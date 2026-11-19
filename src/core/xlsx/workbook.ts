@@ -4,12 +4,13 @@ import type { LoadReport, RowPages, SheetLoader } from './import'
 import { toCsv } from '../convert'
 import { parseTheme, type Theme } from '../theme'
 import { Calc } from './calc'
-import { kid, kids, parseXmlStream, type Attrs, type SaxHandler, type XEl } from '../xml'
+import { desc, kid, kids, parseXml, parseXmlStream, type Attrs, type SaxHandler, type XEl } from '../xml'
 import { sheetColor } from '../color'
 import { formatValue, formatText } from './numfmt'
 import { parseSheetStyles, type SheetStyles } from './styles'
 import { expandShared, formulaAt } from './structure'
-import { stripFunctionPrefixes } from './formula'
+import { stripFunctionPrefixes, type PivotInfo, type TableInfo } from './formula'
+import { readPivots } from './pivot'
 import { isoToSerial } from './formula/dates'
 import type { Shift } from './follow'
 import { MAX_COL, MAX_ROWS, MAX_COL_WIDTH, MAX_ROW_HEIGHT_PT, ooxmlCapped, ooxmlInt, ooxmlNumber } from './limits'
@@ -103,6 +104,13 @@ export class SheetData {
   depOf = new Map<number, number>()
   /** array formulas: first cell key → the cells the formula fills. One only while that cell has a formula. */
   arrays = new Map<number, Merge>()
+  /**
+   * The formulas that are dynamic arrays (by cell key): computed without implicit intersection, their values spill
+   * over the cells next to them, as many as they give (`arrays` has the cells of each as it is now).
+   */
+  dynamic = new Set<number>()
+  /** the cells of the sheet's filter (header row included): the rows hidden in it are filtered out */
+  filter?: Merge
   /** edited cell keys (r * MAX_COL + c) */
   edited = new Set<number>()
   /** row heights in pt / hidden flags (from the file or the editor) */
@@ -177,6 +185,7 @@ class SheetHandler implements SaxHandler {
   private capture = 0 // 1 v, 2 f, 3 inline t
   private fShared = -1
   private fArray = ''
+  private cm = 0
   private inIs = false
   newSizes: [number, number][] = []
   headerReady = false
@@ -187,7 +196,13 @@ class SheetHandler implements SaxHandler {
   private rowUnordered = false
 
   /** fontPt: font size per cell format, used to auto-grow rows without explicit height */
-  constructor(private d: SheetData, private fontPt: number[] = [], private basePt = 11) {}
+  constructor(
+    private d: SheetData,
+    private fontPt: number[] = [],
+    private basePt = 11,
+    /** whether a cell's metadata (`cm`) says its array formula is a dynamic one */
+    private dynamic: (cm: number) => boolean = () => false,
+  ) {}
 
   open(name: string, a: Attrs): boolean | void {
     switch (name) {
@@ -201,10 +216,16 @@ class SheetHandler implements SaxHandler {
         this.col = ref[1]
         this.cType = a.t ?? ''
         this.cStyle = a.s ? Number(a.s) : 0
+        this.cm = a.cm ? Number(a.cm) : 0
         this.val = ''
         this.formula = ''
         this.hasVal = false
         return
+      }
+      case 'autoFilter': {
+        const rg = a.ref ? parseRange(a.ref.replace(/\$/g, '')) : undefined
+        if (rg && rg.r0 >= 0 && rg.c0 >= 0 && rg.r1 >= rg.r0 && rg.c1 >= rg.c0) this.d.filter = rg
+        return true
       }
       case 'v':
         this.capture = 1
@@ -334,7 +355,10 @@ class SheetHandler implements SaxHandler {
         else if (again) this.d.formulas.delete(key)
         if (this.fArray) {
           const rg = this.formula ? parseRange(this.fArray) : undefined
-          if (rg && rg.r0 >= 0 && rg.c0 >= 0 && rg.r1 >= rg.r0 && rg.c1 >= rg.c0 && rg.r1 < MAX_ROWS && rg.c1 < MAX_COL) this.d.arrays.set(key, rg)
+          if (rg && rg.r0 >= 0 && rg.c0 >= 0 && rg.r1 >= rg.r0 && rg.c1 >= rg.c0 && rg.r1 < MAX_ROWS && rg.c1 < MAX_COL) {
+            this.d.arrays.set(key, rg)
+            if (this.cm && this.dynamic(this.cm)) this.d.dynamic.add(key)
+          }
           this.fArray = ''
         }
         if (this.fShared >= 0) {
@@ -424,7 +448,7 @@ function ordered(cells: unknown[]): unknown[] {
 }
 
 /** a formula calling a function whose value is of the moment (what the file holds for it is of the day it was saved) */
-const CLOCK = /(?:^|[^A-Za-z0-9_.])(?:TODAY|NOW|RAND|RANDBETWEEN)\s*\(/i
+const CLOCK = /(?:^|[^A-Za-z0-9_.])(?:TODAY|NOW|RAND|RANDBETWEEN|RANDARRAY)\s*\(/i
 
 class SstHandler implements SaxHandler {
   strings: string[] = []
@@ -512,6 +536,38 @@ function csvField(c: CellOut, raw: number | undefined, numFmt: string | undefine
   return text
 }
 
+/** a defined name: the formula it stands for (without `=`), and the sheet (by index) it is local to */
+export interface DefinedName {
+  name: string
+  text: string
+  local?: number
+}
+
+/** a table column's name as written in its part: `_x000a_` is a line break */
+const decodeColumn = (s: string) => s.replace(/_x([0-9A-Fa-f]{4})_/g, (_m, h: string) => String.fromCharCode(parseInt(h, 16)))
+
+/**
+ * The cell metadata records that mark dynamic array formulas: those of type XLDAPR whose properties say `fDynamic`.
+ * A cell names its record by `cm` (counted from 1).
+ */
+async function readDynamicCm(pkg: OpcPackage, rels: Rels): Promise<Set<number>> {
+  const out = new Set<number>()
+  const rel = relOfType(rels, 'sheetMetadata')
+  if (!rel || !pkg.has(rel.target)) return out
+  // (the properties are in an extension list, which the cached reading of a part leaves out)
+  const root = parseXml(await pkg.text(rel.target))
+  const types = kids(kid(root, 'metadataTypes'), 'metadataType').map((t) => t.a.name)
+  const future = kids(root, 'futureMetadata').find((f) => f.a.name === 'XLDAPR')
+  const dynamic = kids(future, 'bk').map((bk) => {
+    const p = desc(bk, 'dynamicArrayProperties')
+    return !!p && (p.a.fDynamic === '1' || p.a.fDynamic === 'true')
+  })
+  kids(kid(root, 'cellMetadata'), 'bk').forEach((bk, i) => {
+    for (const rc of kids(bk, 'rc')) if (types[Number(rc.a.t) - 1] === 'XLDAPR' && dynamic[Number(rc.a.v)]) out.add(i + 1)
+  })
+  return out
+}
+
 export class XlsxWorkbook {
   sheetsData = new Map<number, SheetData>()
   /** the comments (read in `open`) */
@@ -522,6 +578,16 @@ export class XlsxWorkbook {
   rich = new Map<number, TextRun[]>()
   /** `<workbookProtection lockStructure>`: sheets cannot be added, renamed, deleted or moved */
   lockStructure = false
+  /** the defined names, by name in lower case: what each stands for, and the sheet it is local to (see `loadNames`) */
+  names = new Map<string, DefinedName[]>()
+  /** the tables (lists with a header row) of all the sheets, for structured references */
+  tables: TableInfo[] = []
+  /** the pivot tables, as far as GETPIVOTDATA reads them */
+  pivots: PivotInfo[] = []
+  /** the cell metadata records (`cm`, counted from 1) that mark a dynamic array formula */
+  dynamicCm = new Set<number>()
+  /** the record a dynamic array formula written by this engine names (set when the file is saved) */
+  dynamicRecord = 0
   private sstLoading?: Promise<void>
   /** sheets filled from something else than their XML (a text file being imported), by sheet path: run when the sheet loads */
   readonly loaders = new Map<string, SheetLoader>()
@@ -557,11 +623,55 @@ export class XlsxWorkbook {
     const wb = new XlsxWorkbook(pkg, mainPath, rels, sheets, styles, date1904, theme, full === '1' || full === 'true')
     const lock = kid(root, 'workbookProtection')?.a.lockStructure
     wb.lockStructure = lock === '1' || lock === 'true'
+    await wb.loadNames().catch((e: Error) => console.warn('[office-engine] names and tables not read:', e.message))
+    wb.dynamicCm = await readDynamicCm(pkg, rels).catch(() => new Set<number>())
     wb.comments = await readXlsxComments(pkg, mainPath, rels, sheets).catch((e: Error) => {
       console.warn('[office-engine] comments not read:', e.message)
       return new XlsxComments()
     })
     return wb
+  }
+
+  /**
+   * Reads the defined names and the tables from the package as it is now: when the file is opened, and after an
+   * edit rewrote them (rows / columns moved, a sheet renamed or deleted).
+   */
+  async loadNames(): Promise<void> {
+    const names = new Map<string, DefinedName[]>()
+    const root = await this.pkg.xml(this.mainPath, false)
+    for (const n of kids(kid(root, 'definedNames'), 'definedName')) {
+      const name = n.a.name
+      // (macros and the names Excel keeps for itself — print areas, filters — are not formulas to evaluate)
+      if (!name || n.a.function === '1' || n.a.vbProcedure === '1' || n.a.xlm === '1' || name.startsWith('_xlnm.')) continue
+      const local = n.a.localSheetId !== undefined ? Number(n.a.localSheetId) : undefined
+      const list = names.get(name.toLowerCase())
+      const def: DefinedName = { name, text: n.t.trim(), local }
+      if (list) list.push(def)
+      else names.set(name.toLowerCase(), [def])
+    }
+    const tables: TableInfo[] = []
+    for (const sheet of this.sheets) {
+      const rels = await this.pkg.rels(sheet.path).catch(() => undefined)
+      for (const r of rels?.values() ?? []) {
+        if (!r.type.endsWith('/table') || r.external || !this.pkg.has(r.target)) continue
+        const t = await this.pkg.xml(r.target, false).catch(() => undefined)
+        const ref = t?.a.ref ? parseRange(t.a.ref.replace(/\$/g, '')) : undefined
+        const name = t?.a.displayName ?? t?.a.name
+        if (!t || !ref || !name || !(ref.r0 >= 0 && ref.c0 >= 0 && ref.r1 >= ref.r0 && ref.c1 >= ref.c0)) continue
+        tables.push({
+          name,
+          sheet: sheet.name,
+          ...ref,
+          headers: t.a.headerRowCount === '0' ? 0 : 1,
+          totals: Number(t.a.totalsRowCount ?? 0) > 0 ? 1 : 0,
+          columns: kids(kid(t, 'tableColumns'), 'tableColumn').map((c) => decodeColumn(c.a.name ?? '')),
+        })
+      }
+    }
+    this.names = names
+    this.tables = tables
+    this.pivots = await readPivots(this.pkg, this.sheets, this.date1904).catch(() => [])
+    this.calc.namesChanged()
   }
 
   meta(): WorkbookMeta {
@@ -637,7 +747,7 @@ export class XlsxWorkbook {
           }
           await loader(d, rep)
         } else {
-          const h = new SheetHandler(d, this.styles.xfs.map((x) => x.fontPt), this.styles.xfs[0]?.fontPt ?? 11)
+          const h = new SheetHandler(d, this.styles.xfs.map((x) => x.fontPt), this.styles.xfs[0]?.fontPt ?? 11, (cm) => this.dynamicCm.has(cm))
           await parseXmlStream(await this.pkg.stream(info.path, (l, t) => onBytes?.('sheet', l, t)), h, {
             onChunk: () => report(h.headerReady, () => h.newSizes.splice(0)),
           })

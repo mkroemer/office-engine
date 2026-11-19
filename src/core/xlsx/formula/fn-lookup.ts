@@ -113,6 +113,39 @@ function xlookup(a: Val[], ev: Ev): Val {
   return slice(a[2], ret, i, vertical)
 }
 
+/** XMATCH(value, array, [match_mode], [search_mode]): the position of a value in a row or column */
+function xmatch(a: Val[], ev: Ev): number {
+  const x = lookupValue(a[0], ev)
+  const d = grid(a[1], ev)
+  if (d.length > 1 && d[0].length > 1) throw ERR.VALUE
+  const mode = a.length > 2 && a[2] !== null ? int(ev.scalar(a[2])) : 0
+  const search = a.length > 3 && a[3] !== null ? int(ev.scalar(a[3])) : 1
+  if (search !== 1 && search !== -1 && search !== 2 && search !== -2) throw ERR.VALUE
+  let list = flat(d)
+  const rev = search === -1
+  if (rev) list = [...list].reverse()
+  let i = -1
+  if (mode === 0 || mode === 2) i = findExact(list, x, mode === 2)
+  else if (mode === 1 || mode === -1) {
+    i = findExact(list, x, false)
+    if (i < 0) {
+      // the next larger (1) / next smaller (-1) value
+      let best: Value = null
+      for (let k = 0; k < list.length; k++) {
+        const v = list[k]
+        if (v === null || v instanceof FormulaError || typeof v !== typeof x) continue
+        const c = compare(v, x)
+        if (mode === 1 ? c > 0 && (best === null || compare(v, best) < 0) : c < 0 && (best === null || compare(v, best) > 0)) {
+          best = v
+          i = k
+        }
+      }
+    }
+  } else throw ERR.VALUE
+  if (i < 0) throw ERR.NA
+  return (rev ? list.length - 1 - i : i) + 1
+}
+
 function lookup(a: Val[], ev: Ev): Value {
   const x = lookupValue(a[0], ev)
   const d = grid(a[1], ev)
@@ -238,6 +271,7 @@ export const LOOKUP: Record<string, FnDef> = {
   HLOOKUP: A(3, 4, lift((i) => i === 0 || i === 2, (a, ev) => vhlookup(a, ev, false))),
   XLOOKUP: A(3, 6, lift((i) => i === 0, xlookup)),
   MATCH: A(2, 3, lift((i) => i === 0, match)),
+  XMATCH: A(2, 4, lift((i) => i === 0, xmatch)),
   LOOKUP: A(2, 3, lookup),
   INDEX: A(2, 4, index),
   OFFSET: A(3, 5, offset),

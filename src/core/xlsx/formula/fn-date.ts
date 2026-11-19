@@ -1,8 +1,9 @@
 /** Date & time functions (serial numbers; 1900 system with Lotus bug or 1904). */
-import { dateToSerial, daysInMonth, serialSeconds, serialToYmd, ymdToSerial } from './dates'
+import { dateToSerial, daysInMonth, getDate1904, parseDateText, serialSeconds, serialToYmd, ymdToSerial } from './dates'
+import { days360, yearfrac } from './daycount'
 import { A, nums, opt, S, type FnDef } from './fn'
 import { ERR, type Value } from './types'
-import { num, str } from './values'
+import { bool, num, str } from './values'
 
 /** 31/12/9999: past it Excel has no date (a code like 20240115 is not one) */
 const MAX_SERIAL = 2958466
@@ -123,4 +124,112 @@ export const DATE: Record<string, FnDef> = {
     const hol = new Set(a.length > 2 ? nums([a[2]], ev).map(Math.floor) : [])
     return networkdays(day(ev.scalar(a[0])), day(ev.scalar(a[1])), hol)
   }),
+  'NETWORKDAYS.INTL': A(2, 4, (a, ev) => {
+    const off = weekend(a.length > 2 ? ev.scalar(a[2]) : 1)
+    const hol = new Set(a.length > 3 ? nums([a[3]], ev).map(Math.floor) : [])
+    const s = day(ev.scalar(a[0]))
+    const e = day(ev.scalar(a[1]))
+    const [lo, hi] = s <= e ? [s, e] : [e, s]
+    // whole weeks by count, the days left one by one
+    const days = hi - lo + 1
+    let n = Math.floor(days / 7) * off.filter((x) => !x).length
+    for (let d = hi - (days % 7) + 1; d <= hi; d++) if (!off[serialToYmd(d).dow]) n++
+    for (const h of hol) if (h >= lo && h <= hi && !off[serialToYmd(h).dow]) n--
+    return s <= e ? n : -n
+  }),
+  WORKDAY: A(2, 3, (a, ev) => workday(day(ev.scalar(a[0])), Math.trunc(num(ev.scalar(a[1]))), weekend(1), a.length > 2 ? nums([a[2]], ev) : [])),
+  'WORKDAY.INTL': A(2, 4, (a, ev) =>
+    workday(day(ev.scalar(a[0])), Math.trunc(num(ev.scalar(a[1]))), weekend(a.length > 2 ? ev.scalar(a[2]) : 1), a.length > 3 ? nums([a[3]], ev) : []),
+  ),
+  DATEVALUE: S(1, 1, ([x]) => {
+    if (typeof x !== 'string') throw ERR.VALUE
+    const n = parseDateText(x.trim())
+    if (n === null) throw ERR.VALUE
+    return Math.floor(n)
+  }),
+  TIMEVALUE: S(1, 1, ([x]) => {
+    if (typeof x !== 'string') throw ERR.VALUE
+    const n = parseDateText(x.trim())
+    if (n === null) throw ERR.VALUE
+    return n - Math.floor(n)
+  }),
+  DAYS360: S(2, 3, (a) => days360(day(a[0]), day(a[1]), a.length > 2 && bool(a[2]))),
+  YEARFRAC: S(2, 3, (a) => {
+    const basis = Math.trunc(opt(a, 2, 0))
+    if (basis < 0 || basis > 4) throw ERR.NUM
+    return yearfrac(day(a[0]), day(a[1]), basis)
+  }),
+  ISOWEEKNUM: S(1, 1, ([x]) => isoWeek(day(x))),
+  WEEKNUM: S(1, 2, (a) => {
+    const d = day(a[0])
+    const type = Math.trunc(opt(a, 1, 1))
+    if (type === 21) return isoWeek(d)
+    // the day the week starts on (0 = Sunday); week 1 is the week 1 January is in
+    const start = type === 1 || type === 17 ? 0 : type === 2 || type === 11 ? 1 : type >= 12 && type <= 16 ? type - 10 : -1
+    if (start < 0) throw ERR.NUM
+    const jan1 = ymdToSerial(serialToYmd(d).y, 1, 1)
+    const lead = (serialToYmd(jan1).dow - start + 7) % 7
+    return Math.floor((d - jan1 + lead) / 7) + 1
+  }),
+  // Google Sheets: a Unix time (seconds, 2: milliseconds, 3: microseconds) as a date, in UTC
+  EPOCHTODATE: S(1, 2, (a) => {
+    const unit = Math.trunc(opt(a, 1, 1))
+    if (unit < 1 || unit > 3) throw ERR.NUM
+    const t = num(a[0])
+    if (t < 0) throw ERR.NUM
+    return 25569 - (getDate1904() ? 1462 : 0) + t / (86400 * Math.pow(1000, unit - 1))
+  }),
+}
+
+/**
+ * The days off of a week, by day (0 = Sunday): a number (1 Saturday-Sunday, 2 Sunday-Monday … 7 Friday-Saturday,
+ * 11 Sunday only … 17 Saturday only) or seven characters, Monday first, `1` for a day off.
+ */
+function weekend(v: Value): boolean[] {
+  const off = [false, false, false, false, false, false, false]
+  if (typeof v === 'string') {
+    if (!/^[01]{7}$/.test(v) || v === '1111111') throw ERR.VALUE
+    for (let i = 0; i < 7; i++) if (v[i] === '1') off[(i + 1) % 7] = true
+    return off
+  }
+  const n = Math.trunc(num(v))
+  if (n >= 1 && n <= 7) {
+    // 1: Saturday (6) and Sunday (0); each next number a day later
+    off[(n + 5) % 7] = true
+    off[(n + 6) % 7] = true
+  } else if (n >= 11 && n <= 17) off[(n - 11) % 7] = true
+  else throw ERR.NUM
+  return off
+}
+
+/** the working day `n` working days after (before, when negative) `start` */
+function workday(start: number, n: number, off: boolean[], holidays: number[]): number {
+  const hol = new Set(holidays.map(Math.floor))
+  const work = off.filter((x) => !x).length
+  const step = n < 0 ? -1 : 1
+  let left = Math.abs(n)
+  let d = start
+  // whole weeks at once while no holiday can be among them
+  if (!hol.size) {
+    const weeks = Math.floor(left / work)
+    if (weeks > 1) {
+      d += step * (weeks - 1) * 7
+      left -= (weeks - 1) * work
+    }
+  }
+  while (left > 0) {
+    d += step
+    if (d < 0 || d >= MAX_SERIAL) throw ERR.NUM
+    if (!off[serialToYmd(d).dow] && !hol.has(d)) left--
+  }
+  return d
+}
+
+/** ISO 8601 week: weeks start on Monday, the first is the one holding the year's first Thursday */
+function isoWeek(d: number): number {
+  const dow = (serialToYmd(d).dow + 6) % 7
+  // the Thursday of this week tells the year the week belongs to
+  const thursday = d - dow + 3
+  const jan1 = ymdToSerial(serialToYmd(thursday).y, 1, 1)
+  return Math.floor((thursday - jan1) / 7) + 1
 }
