@@ -3,7 +3,8 @@ import { basisDays, yearfrac } from './daycount'
 import { daysInMonth, serialToYmd, ymdToSerial } from './dates'
 import { A, guard, INF, nums, S, type Ev, type FnDef } from './fn'
 import { ERR, FormulaError, type Value } from './types'
-import { bool, int, num, type Val } from './values'
+import { roundHalf } from './format'
+import { bool, int, num, str, type Val } from './values'
 
 // ---------------------------------------------------------------- argument helpers
 
@@ -735,4 +736,36 @@ export const FINANCIAL: Record<string, FnDef> = {
     const t = days / 365
     return fin((-t + Math.sqrt(t * t - (2 * t - 1) * (1 - 100 / p))) / (t - 0.5))
   }),
+  EUROCONVERT: S(3, 5, (a) => {
+    const n = num(a[0])
+    const from = EURO[str(a[1]).toUpperCase()]
+    const to = EURO[str(a[2]).toUpperCase()]
+    const full = a.length > 3 && a[3] !== null ? bool(a[3]) : false
+    const tri = a.length > 4 && a[4] !== null ? int(a[4]) : undefined
+    if (!from || !to || (tri !== undefined && tri < 3)) throw ERR.VALUE
+    if (from === to) return n
+    // through the euro: the amount in euros (rounded when asked), then in the currency asked
+    let euro = n / from[0]
+    if (tri !== undefined && from[0] !== 1) euro = roundHalf(euro, tri)
+    const res = euro * to[0]
+    return fin(full ? res : roundHalf(res, to[1]))
+  }),
+}
+
+/** the currencies the euro replaced: how many make one euro (the rates the EU fixed), and the decimals an amount is computed to */
+const EURO: Record<string, [number, number]> = {
+  BEF: [40.3399, 0],
+  LUF: [40.3399, 0],
+  DEM: [1.95583, 2],
+  ESP: [166.386, 0],
+  FRF: [6.55957, 2],
+  IEP: [0.787564, 2],
+  ITL: [1936.27, 0],
+  NLG: [2.20371, 2],
+  ATS: [13.7603, 2],
+  PTE: [200.482, 0],
+  FIM: [5.94573, 2],
+  GRD: [340.75, 0],
+  SIT: [239.64, 2],
+  EUR: [1, 2],
 }

@@ -22,6 +22,7 @@ export const CAT_FINANCIAL: Record<string, string> = {
   DOLLARFR: 'decimal_dollar, fraction|Converts a decimal price to one written as a fraction.',
   DURATION: 'settlement, maturity, coupon, yld, frequency, [basis]|Macaulay duration of a security with periodic interest.',
   EFFECT: 'nominal_rate, npery|Effective annual interest rate.',
+  EUROCONVERT: 'number, source, target, [full_precision], [triangulation_precision]|Converts an amount between the euro and a currency it replaced, or between two of those.',
   FV: 'rate, nper, pmt, [pv], [type]|Future value of an investment with constant payments.',
   FVSCHEDULE: 'principal, schedule|Future value of a principal after a series of compound interest rates.',
   INTRATE: 'settlement, maturity, investment, redemption, [basis]|Interest rate of a fully invested security.',

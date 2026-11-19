@@ -141,9 +141,15 @@ export const DATE: Record<string, FnDef> = {
   'WORKDAY.INTL': A(2, 4, (a, ev) =>
     workday(day(ev.scalar(a[0])), Math.trunc(num(ev.scalar(a[1]))), weekend(a.length > 2 ? ev.scalar(a[2]) : 1), a.length > 3 ? holidays(a[3], ev) : []),
   ),
-  DATEVALUE: S(1, 1, ([x]) => {
+  DATEVALUE: S(1, 1, ([x], ev) => {
     if (typeof x !== 'string') throw ERR.VALUE
-    const n = parseDateText(x.trim())
+    const t = x.trim()
+    let n = parseDateText(t)
+    // a day and a month without a year (5-Jul, 7/5): of this year
+    if (n === null) {
+      const y = ev.now().getFullYear()
+      n = parseDateText(`${t}-${y}`) ?? parseDateText(`${t}/${y}`) ?? parseDateText(`${t} ${y}`)
+    }
     if (n === null) throw ERR.VALUE
     return Math.floor(n)
   }),

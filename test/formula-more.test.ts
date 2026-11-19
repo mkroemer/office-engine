@@ -263,6 +263,9 @@ describe('dates', () => {
     expect(ev('DATEVALUE("22-AUG-2011")')).toBe(40777)
     expect(ev('DATEVALUE("2011/02/23 10:30")')).toBe(40597)
     expect(ev('DATEVALUE("nope")')).toEqual(E('#VALUE!'))
+    // without a year: of this one (the provider's clock says 2024)
+    expect(ev('DATEVALUE("5-JUL")')).toBe(45478)
+    expect(ev('DATEVALUE("7/5")')).toBe(45478)
     near('TIMEVALUE("2:24 AM")', 0.1)
     near('TIMEVALUE("22-Aug-2011 6:35 AM")', 0.2743055556)
     expect(ev('DAYS360(DATE(2011,1,30),DATE(2011,2,1))')).toBe(1)
@@ -436,6 +439,19 @@ describe('lookup and information', () => {
 })
 
 const TABLE = { name: 'Staff', sheet: 'Sheet1', r0: 0, c0: 0, r1: 4, c1: 2, headers: 1, totals: 0, columns: ['Name', 'Dept', 'Salary'] }
+
+describe('EUROCONVERT', () => {
+  test('the examples of its help page', () => {
+    expect(ev('EUROCONVERT(1.2,"DEM","EUR")')).toBe(0.61)
+    expect(ev('EUROCONVERT(1,"FRF","EUR",TRUE,3)')).toBe(0.152)
+    expect(ev('EUROCONVERT(1,"FRF","EUR",FALSE,3)')).toBe(0.15)
+    near('EUROCONVERT(1,"FRF","DEM",TRUE,3)', 0.29728616, 8)
+    expect(ev('EUROCONVERT(100,"EUR","ITL")')).toBe(193627)
+    expect(ev('EUROCONVERT(5,"DEM","dem")')).toBe(5)
+    expect(ev('EUROCONVERT(1,"USD","EUR")')).toEqual(E('#VALUE!'))
+    expect(ev('EUROCONVERT(1,"FRF","DEM",TRUE,2)')).toEqual(E('#VALUE!'))
+  })
+})
 
 describe('Google Sheets functions', () => {
   test('the operators as functions, the converters', () => {
