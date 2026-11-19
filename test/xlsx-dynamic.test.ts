@@ -128,6 +128,80 @@ describe('dynamic array formulas', () => {
     expect(await shown(re, ['B1', 'B2', 'B3'])).toEqual(['1', '2', '3'])
   })
 
+  const NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+  const META =
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<metadata xmlns="${NS}" xmlns:xda="http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray"><metadataTypes count="1"><metadataType name="XLDAPR" minSupportedVersion="120000" copy="1" pasteAll="1" pasteValues="1" merge="1" splitFirst="1" rowColShift="1" clearFormats="1" clearComments="1" assign="1" coerce="1" cellMeta="1"/></metadataTypes>` +
+    '<futureMetadata name="XLDAPR" count="1"><bk><extLst><ext uri="{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}"><xda:dynamicArrayProperties fDynamic="1" fCollapsed="0"/></ext></extLst></bk></futureMetadata><cellMetadata count="1"><bk><rc t="1" v="0"/></bk></cellMetadata></metadata>'
+  /** a workbook as Excel saves dynamic array formulas: no word to compute it when it is read */
+  const excel = (sheet: string) =>
+    book({
+      sheets: [{ name: 'S', rows: sheet }],
+      parts: { 'xl/metadata.xml': META },
+      rels: '<Relationship Id="rIdM" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata" Target="metadata.xml"/>',
+      types: '<Override PartName="/xl/metadata.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml"/>',
+    })
+
+  test('a file of Excel: its dynamic array formulas, one of them showing #SPILL!', async () => {
+    const o = await openBook(
+      await excel(
+        '<row r="1"><c r="A1"><v>5</v></c><c r="B1" cm="1" t="e"><f t="array" ref="B1">_xlfn.SEQUENCE(3)</f><v>#SPILL!</v></c><c r="D1" cm="1"><f t="array" ref="D1:D2">_xlfn._xlws.FILTER(A1:A3,A1:A3&gt;4)</f><v>5</v></c></row>' +
+          '<row r="2"><c r="A2"><v>1</v></c><c r="B2" t="inlineStr"><is><t>x</t></is></c><c r="D2"><v>7</v></c></row><row r="3"><c r="A3"><v>7</v></c></row>',
+      ),
+    )
+    expect(await shown(o, ['B1', 'B2', 'D1', 'D2'])).toEqual(['#SPILL!', 'x', '5', '7'])
+    expect(await o.formula(0, 0, 1)).toBe('=SEQUENCE(3)')
+    // the cell in the way cleared: the formula fills its cells
+    await o.set(0, 'B2', '')
+    expect(await shown(o, ['B1', 'B2', 'B3'])).toEqual(['1', '2', '3'])
+    // the other follows the cells it reads, with the cells it fills
+    await o.set(0, 'A2', '6')
+    expect(await shown(o, ['D1', 'D2', 'D3'])).toEqual(['5', '6', '7'])
+    await o.set(0, 'A1', '0')
+    expect(await shown(o, ['D1', 'D2', 'D3'])).toEqual(['6', '7', ''])
+    const xml = await (await o.save()).text(SHEET)
+    expect(cellXml(xml, 'B1')).toContain('<f t="array" ref="B1:B3">')
+    expect(cellXml(xml, 'B1')).toContain('cm="1"')
+    expect(cellXml(xml, 'D3')).toBe('')
+  })
+
+  test('a formula waiting for a cell another formula fills goes on when that one gives it back', async () => {
+    const o = await openBook(await book({ sheets: [{ name: 'S', rows: rows([[1]]) }] }))
+    await o.set(0, 'E1', '=SEQUENCE(2)')
+    await o.set(0, 'A2', '=SEQUENCE(1,5)')
+    expect(await shown(o, ['A2', 'E2'])).toEqual(['#SPILL!', '2'])
+    await o.set(0, 'E1', '=SEQUENCE(1)')
+    expect(await shown(o, ['A2', 'B2', 'E2', 'E1'])).toEqual(['1', '2', '5', '1'])
+    // the formula put back finds the cell taken: the one that fills it keeps it
+    await o.engine.call('xlsx.undo', [])
+    expect(await shown(o, ['A2', 'E2', 'E1'])).toEqual(['1', '5', '#SPILL!'])
+    // and when the formula in the way is replaced by one that fills nothing
+    const p = await openBook(await book({ sheets: [{ name: 'S', rows: rows([[1]]) }] }))
+    await p.set(0, 'E1', '=SEQUENCE(2)')
+    await p.set(0, 'A2', '=SEQUENCE(1,5)')
+    await p.set(0, 'E1', '=1+1')
+    expect(await shown(p, ['A2', 'E2', 'E1'])).toEqual(['1', '5', '2'])
+  })
+
+  test('the sheet reaches as far as the cells filled', async () => {
+    const o = await openBook(await book({ sheets: [{ name: 'S', rows: rows([[1]]) }] }))
+    const res: any = await o.set(0, 'B1', '=SEQUENCE(10,3)')
+    expect(res.grown).toEqual({ rows: 10, cols: 4 })
+    await o.set(0, 'F1', '=SUM(B:B)')
+    await o.set(0, 'F2', '=COUNT(2:2)')
+    expect(await shown(o, ['F1', 'F2'])).toEqual(['145', '3'])
+    const xml = await (await o.save()).text(SHEET)
+    expect(cellXml(xml, 'D10')).toContain('<v>30</v>')
+  })
+
+  test('a range holding a dynamic array formula is not sorted', async () => {
+    const o = await openBook(await book({ sheets: [{ name: 'S', rows: rows([[3], [1], [2]]) }] }))
+    await o.set(0, 'B1', '=A1:A3*2')
+    await expect(o.engine.call('xlsx.sheetOp', [0, { op: 'sort', range: { r0: 0, c0: 0, r1: 2, c1: 1 }, col: 0 }])).rejects.toThrow(/dynamic array/)
+    // the cells it reads are sorted, and it follows
+    await o.engine.call('xlsx.sheetOp', [0, { op: 'sort', range: { r0: 0, c0: 0, r1: 2, c1: 0 }, col: 0 }])
+    expect(await shown(o, ['B1', 'B2', 'B3'])).toEqual(['2', '4', '6'])
+  })
+
   test('saved as an array formula marked dynamic, and read back as one', async () => {
     const o = await openBook(await book({ sheets: [{ name: 'S', rows: rows([[5], [1], [7]]) }] }))
     await o.set(0, 'C1', '=FILTER(A1:A3,A1:A3>4)')
@@ -212,6 +286,11 @@ describe('names, tables, 3-D references', () => {
     await o.set(0, 'D3', '=Twice(21)')
     await o.set(0, 'D4', '=Nope+1')
     expect(await shown(o, ['D1', 'D2', 'D3', 'D4'])).toEqual(['10', '2.5', '42', '#NAME?'])
+    // in a cell of the table: an optional parameter of LAMBDA is not a column of it
+    await o.set(0, 'A3', '=LAMBDA(a,[b],IF(ISOMITTED(b),a,a+b))(5)')
+    expect(await shown(o, ['A3'])).toEqual(['5'])
+    expect(cellXml(await (await o.save()).text(SHEET), 'A3')).toContain('_xlfn.LAMBDA(_xlpm.a,[_xlpm.b],')
+    await o.set(0, 'A3', 'b')
     // a change in the cells a name stands for computes what uses the name
     await o.set(0, 'B3', '30')
     expect(await shown(o, ['D1', 'D2'])).toEqual(['37', '15'])
@@ -229,6 +308,20 @@ describe('names, tables, 3-D references', () => {
     await o.set(0, 'D6', '=T!Local*2')
     expect(await o.shown(1, 0, 1)).toBe('20')
     expect(await shown(o, ['D5', 'D6'])).toEqual(['#NAME?', '20'])
+  })
+
+  test('a name local to a sheet, in a workbook that lists a chart sheet before it', async () => {
+    const o = await openBook(
+      await book({
+        sheets: [{ name: 'Chart', kind: 'chartsheet' }, { name: 'S', rows: rows([[1]]) }, { name: 'T', rows: rows([[10]]) }],
+        names: '<definedName name="Loc" localSheetId="2">T!$A$1</definedName>',
+      }),
+    )
+    await o.load(1)
+    await o.set(1, 'B1', '=Loc*2')
+    await o.set(0, 'B1', '=Loc*2')
+    expect(await o.shown(1, 0, 1)).toBe('20')
+    expect(await o.shown(0, 0, 1)).toBe('#NAME?')
   })
 
   test('structured references', async () => {

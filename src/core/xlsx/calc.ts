@@ -369,7 +369,10 @@ export class Calc {
     }
     if (was && !now) this.unspill(sheet, d, key, undefined)
     if (now) d.dynamic.add(key)
-    else d.dynamic.delete(key)
+    else {
+      d.dynamic.delete(key)
+      this.blockedAt.get(sheet)?.delete(key)
+    }
   }
 
   /** empties the cells a dynamic array formula filled (not those of `keep`, not those holding a formula); they are noted in `spilt` */
@@ -428,9 +431,11 @@ export class Calc {
    * the formula gives the others back and shows #SPILL! while the cell holds something), and those that could not
    * spill over a cell that changed. Returns the formulas to compute again, and the cells emptied on the way.
    */
-  private disturbed(cells: { sheet: number; key: number }[]): { sheet: number; key: number }[] {
+  private disturbed(changed: { sheet: number; key: number }[], formulas: { sheet: number; key: number }[]): { sheet: number; key: number }[] {
     const out: { sheet: number; key: number }[] = []
-    if (!this.filledBy.size && !this.blockedAt.size) return out
+    // (no dynamic array formula anywhere: nothing to look for, however many cells changed)
+    if (!this.blockedAt.size && ![...this.wb.sheetsData.values()].some((d) => d.dynamic.size)) return out
+    const cells = [...changed, ...formulas]
     const touched = new Set<Id>()
     for (const c of cells) touched.add(idOf(c.sheet, c.key))
     const done = new Set<Id>()
@@ -445,11 +450,49 @@ export class Calc {
           out.push({ sheet: s, key: k })
         }
       }
-      const waiting = this.blockedAt.get(ch.sheet)
-      if (waiting) {
-        const r = Math.floor(ch.key / MAX_COL)
-        const c = ch.key % MAX_COL
-        for (const [k, rg] of waiting) if (r >= rg.r0 && r <= rg.r1 && c >= rg.c0 && c <= rg.c1) out.push({ sheet: ch.sheet, key: k })
+    }
+    out.push(...this.unblocked(cells))
+    return out
+  }
+
+  /** the formulas showing #SPILL! that wait for one of the cells (they could not fill it): to compute again now that it changed */
+  private unblocked(cells: { sheet: number; key: number }[]): { sheet: number; key: number }[] {
+    const out: { sheet: number; key: number }[] = []
+    if (!this.blockedAt.size || !cells.length) return out
+    // by sheet: the cells changed, and the block of the sheet they are all in
+    const by = new Map<number, { keys: Set<number>; r0: number; c0: number; r1: number; c1: number }>()
+    for (const ch of cells) {
+      if (!this.blockedAt.get(ch.sheet)?.size) continue
+      const r = Math.floor(ch.key / MAX_COL)
+      const c = ch.key % MAX_COL
+      const b = by.get(ch.sheet)
+      if (!b) by.set(ch.sheet, { keys: new Set([ch.key]), r0: r, c0: c, r1: r, c1: c })
+      else {
+        b.keys.add(ch.key)
+        if (r < b.r0) b.r0 = r
+        if (r > b.r1) b.r1 = r
+        if (c < b.c0) b.c0 = c
+        if (c > b.c1) b.c1 = c
+      }
+    }
+    for (const [sheet, b] of by) {
+      for (const [k, rg] of this.blockedAt.get(sheet)!) {
+        if (rg.r1 < b.r0 || rg.r0 > b.r1 || rg.c1 < b.c0 || rg.c0 > b.c1) continue
+        // the fewer of the two to go through: the cells it waits for, or the cells changed
+        let hit = false
+        if ((rg.r1 - rg.r0 + 1) * (rg.c1 - rg.c0 + 1) <= b.keys.size) {
+          for (let r = rg.r0; r <= rg.r1 && !hit; r++) for (let c = rg.c0; c <= rg.c1 && !hit; c++) hit = b.keys.has(r * MAX_COL + c)
+        } else {
+          for (const key of b.keys) {
+            const r = Math.floor(key / MAX_COL)
+            const c = key % MAX_COL
+            if (r >= rg.r0 && r <= rg.r1 && c >= rg.c0 && c <= rg.c1) {
+              hit = true
+              break
+            }
+          }
+        }
+        if (hit) out.push({ sheet, key: k })
       }
     }
     return out
@@ -522,6 +565,9 @@ export class Calc {
     if (store(d, key, blocked ? new FormulaError('#SPILL!') : data[0][0]) && this.track) d.revalued.add(key)
     this.touched(sheet, c0)
     if (next) {
+      // (the sheet reaches as far as the cells filled: a whole column read, the rows shown and saved)
+      if (next.r1 > d.maxRow) d.maxRow = next.r1
+      if (next.c1 > d.maxCol) d.maxCol = next.c1
       for (let c = next.c0; c <= next.c1; c++) this.touched(sheet, c)
       for (let r = next.r0; r <= next.r1; r++) {
         for (let c = next.c0; c <= next.c1; c++) {
@@ -964,19 +1010,21 @@ export class Calc {
     this.index()
     // the cells a formula gave back when it stopped being a dynamic array changed too
     const emptied = this.spilt.splice(0)
-    const again = this.disturbed([...changed, ...formulas])
+    const again = this.disturbed(changed, formulas)
     if (this.respill) {
       this.respill = false
       for (const [sheet, d] of this.wb.sheetsData) {
         for (const key of d.dynamic) {
-          if (d.arrays.has(key) || this.blockedAt.get(sheet)?.has(key)) continue
+          if (this.blockedAt.get(sheet)?.has(key)) continue
           const row = d.rows[Math.floor(key / MAX_COL)]
           const i = row ? colAt(row, key % MAX_COL) : 0
           if (row && row[i] === key % MAX_COL && row[i + 1] === T_ERR && row[i + 2] === '#SPILL!') again.push({ sheet, key })
         }
       }
     }
-    const queue = this.affected([...changed, ...emptied, ...this.spilt.splice(0)], again.length ? [...formulas, ...again] : formulas, volatile)
+    const gone = this.spilt.splice(0)
+    if (emptied.length || gone.length) again.push(...this.unblocked([...emptied, ...gone]))
+    const queue = this.affected(emptied.length || gone.length ? [...changed, ...emptied, ...gone] : changed, again.length ? [...formulas, ...again] : formulas, volatile)
     const pending = new Set<Id>(queue)
     const sheets = new Set<number>()
     const visiting = new Set<Id>()
@@ -993,13 +1041,14 @@ export class Calc {
       for (let round = 0; this.spilt.length && round < 8; round++) {
         const cells = this.spilt.splice(0)
         for (const c of cells) sheets.add(c.sheet)
-        const more = this.affected(cells, [], false, false)
+        // (and the formulas that could not fill one of those cells)
+        const more = this.affected(cells, this.unblocked(cells), false, false)
         for (const id of more) pending.add(id)
         for (const id of more) {
           if (!pending.has(id)) continue
           this.settle(id, pending, visiting)
         }
-        queue.push(...more)
+        for (const id of more) queue.push(id)
       }
     } finally {
       this.track = true

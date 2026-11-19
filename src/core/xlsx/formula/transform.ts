@@ -357,10 +357,20 @@ function withParameterPrefixes(text: string): string {
  */
 function withThisRow(text: string, table: string | undefined): string {
   if (!text.includes('[@') && !(table !== undefined && text.includes('['))) return text
+  // (an optional parameter of LAMBDA is written in brackets too: `[y]` is no column)
+  let params: Set<string> | undefined
+  if (/\bLAMBDA\s*\(/i.test(text)) {
+    try {
+      params = parameters(parseFormula(text))
+    } catch {
+      return text
+    }
+  }
   return rewrite(text, (t) => {
     if (t.t !== 'name' || t.sheet !== undefined) return undefined
     const open = t.v.indexOf('[')
     if (open < 0 || !t.v.endsWith(']')) return undefined
+    if (open === 0 && params?.has(t.v.slice(1, -1).trim().toLowerCase())) return undefined
     const name = open > 0 ? t.v.slice(0, open) : table
     if (name === undefined) return undefined
     const inner = t.v.slice(open + 1, -1).trim()

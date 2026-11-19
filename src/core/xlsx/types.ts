@@ -155,6 +155,8 @@ export interface XlsxEditResult {
   sheets?: SheetInfo[]
   /** sheets whose formula values changed (cached rows are stale) */
   recalc?: number[]
+  /** the sheet reaches further than before (a formula filled cells past its last row / column): its rows and columns now */
+  grown?: { rows: number; cols: number }
 }
 
 /** a copied cell: kind of value (as the workbook holds it: number, text, boolean, error…), value, format, formula (no "=") */

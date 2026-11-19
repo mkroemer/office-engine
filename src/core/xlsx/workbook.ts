@@ -356,8 +356,10 @@ class SheetHandler implements SaxHandler {
         if (this.fArray) {
           const rg = this.formula ? parseRange(this.fArray) : undefined
           if (rg && rg.r0 >= 0 && rg.c0 >= 0 && rg.r1 >= rg.r0 && rg.c1 >= rg.c0 && rg.r1 < MAX_ROWS && rg.c1 < MAX_COL) {
-            this.d.arrays.set(key, rg)
-            if (this.cm && this.dynamic(this.cm)) this.d.dynamic.add(key)
+            const dynamic = this.cm > 0 && this.dynamic(this.cm)
+            if (dynamic) this.d.dynamic.add(key)
+            // (a dynamic array formula that fills its own cell only fills no cells: it gives one value, or cannot spill)
+            if (!dynamic || rg.r1 > rg.r0 || rg.c1 > rg.c0) this.d.arrays.set(key, rg)
           }
           this.fArray = ''
         }
@@ -639,37 +641,45 @@ export class XlsxWorkbook {
   async loadNames(): Promise<void> {
     const names = new Map<string, DefinedName[]>()
     const root = await this.pkg.xml(this.mainPath, false)
+    // `localSheetId` counts the sheets the workbook lists, chart sheets too: by name, the worksheet it is here (-1: none)
+    const listed = kids(kid(root, 'sheets'), 'sheet').map((s) => this.sheets.findIndex((x) => x.name.toLowerCase() === (s.a.name ?? '').toLowerCase()))
     for (const n of kids(kid(root, 'definedNames'), 'definedName')) {
       const name = n.a.name
       // (macros and the names Excel keeps for itself — print areas, filters — are not formulas to evaluate)
       if (!name || n.a.function === '1' || n.a.vbProcedure === '1' || n.a.xlm === '1' || name.startsWith('_xlnm.')) continue
-      const local = n.a.localSheetId !== undefined ? Number(n.a.localSheetId) : undefined
+      const local = n.a.localSheetId !== undefined ? (listed[Number(n.a.localSheetId)] ?? -1) : undefined
+      // (local to a sheet that is not a worksheet: no formula of a cell can use it)
+      if (local !== undefined && local < 0) continue
       const list = names.get(name.toLowerCase())
       const def: DefinedName = { name, text: n.t.trim(), local }
       if (list) list.push(def)
       else names.set(name.toLowerCase(), [def])
     }
-    const tables: TableInfo[] = []
-    for (const sheet of this.sheets) {
-      const rels = await this.pkg.rels(sheet.path).catch(() => undefined)
-      for (const r of rels?.values() ?? []) {
-        if (!r.type.endsWith('/table') || r.external || !this.pkg.has(r.target)) continue
-        const t = await this.pkg.xml(r.target, false).catch(() => undefined)
-        const ref = t?.a.ref ? parseRange(t.a.ref.replace(/\$/g, '')) : undefined
-        const name = t?.a.displayName ?? t?.a.name
-        if (!t || !ref || !name || !(ref.r0 >= 0 && ref.c0 >= 0 && ref.r1 >= ref.r0 && ref.c1 >= ref.c0)) continue
-        tables.push({
-          name,
-          sheet: sheet.name,
-          ...ref,
-          headers: t.a.headerRowCount === '0' ? 0 : 1,
-          totals: Number(t.a.totalsRowCount ?? 0) > 0 ? 1 : 0,
-          columns: kids(kid(t, 'tableColumns'), 'tableColumn').map((c) => decodeColumn(c.a.name ?? '')),
-        })
-      }
-    }
+    // (the sheets side by side: each has its relationships to read, which a workbook of many sheets would wait for one by one)
+    const perSheet = await Promise.all(
+      this.sheets.map(async (sheet) => {
+        const out: TableInfo[] = []
+        const rels = await this.pkg.rels(sheet.path).catch(() => undefined)
+        for (const r of rels?.values() ?? []) {
+          if (!r.type.endsWith('/table') || r.external || !this.pkg.has(r.target)) continue
+          const t = await this.pkg.xml(r.target, false).catch(() => undefined)
+          const ref = t?.a.ref ? parseRange(t.a.ref.replace(/\$/g, '')) : undefined
+          const name = t?.a.displayName ?? t?.a.name
+          if (!t || !ref || !name || !(ref.r0 >= 0 && ref.c0 >= 0 && ref.r1 >= ref.r0 && ref.c1 >= ref.c0)) continue
+          out.push({
+            name,
+            sheet: sheet.name,
+            ...ref,
+            headers: t.a.headerRowCount === '0' ? 0 : 1,
+            totals: Number(t.a.totalsRowCount ?? 0) > 0 ? 1 : 0,
+            columns: kids(kid(t, 'tableColumns'), 'tableColumn').map((c) => decodeColumn(c.a.name ?? '')),
+          })
+        }
+        return out
+      }),
+    )
     this.names = names
-    this.tables = tables
+    this.tables = perSheet.flat()
     this.pivots = await readPivots(this.pkg, this.sheets, this.date1904).catch(() => [])
     this.calc.namesChanged()
   }

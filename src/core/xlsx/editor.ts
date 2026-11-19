@@ -55,6 +55,7 @@ interface LayoutState {
 interface BookState {
   names: XlsxWorkbook['names']
   tables: XlsxWorkbook['tables']
+  pivots: XlsxWorkbook['pivots']
 }
 
 export interface Change {
@@ -627,6 +628,8 @@ export class XlsxEditor {
   }
 
   private lastRecalc: number[] = []
+  /** the sheet reached further after the last change than before (a formula filled cells past its last row / column): how far */
+  private lastGrown: { rows: number; cols: number } | undefined
 
   /**
    * Before anything is edited: every sheet is in memory (a formula may read any, and a sheet never shown may hold
@@ -647,6 +650,7 @@ export class XlsxEditor {
   private apply(d: SheetData, cells: CellChange[], which: 'prev' | 'next') {
     const sheet = [...this.wb.sheetsData].find(([, x]) => x === d)?.[0] ?? 0
     const formulaKeys: { sheet: number; key: number }[] = []
+    const reach = [d.maxRow, d.maxCol]
     // A value a dynamic array formula spilled into a cell is not the cell's own: what is typed over it replaces
     // nothing, and undoing leaves the cell empty for the formula to fill again.
     if (which === 'next' && d.dynamic.size) {
@@ -671,6 +675,7 @@ export class XlsxEditor {
       return !a || !b || a[0] !== b[0] || a[1] !== b[1] || c.prevF !== c.nextF
     })
     this.lastRecalc = changed.length || formulaKeys.length ? [...this.wb.calc.recalc(changed.map((c) => ({ sheet, key: c.key })), formulaKeys)] : []
+    this.lastGrown = d.maxRow > reach[0] || d.maxCol > reach[1] ? { rows: d.maxRow + 1, cols: d.maxCol + 1 } : undefined
   }
 
   private applyRaw(d: SheetData, cells: CellChange[], which: 'prev' | 'next') {
@@ -690,7 +695,7 @@ export class XlsxEditor {
     this.undoStack.push({ sheet, cells, range, lay })
     if (this.undoStack.length > 200) this.undoStack.shift()
     this.redoStack = []
-    return { sheet, range, recalc: this.lastRecalc, layout: lay ? this.layout(sheet) : undefined }
+    return { sheet, range, recalc: this.lastRecalc, layout: lay ? this.layout(sheet) : undefined, ...(this.lastGrown ? { grown: this.lastGrown } : {}) }
   }
 
   /** after rows/columns moved: rebuild the dependency graph and recompute every formula */
@@ -976,6 +981,7 @@ export class XlsxEditor {
   private step(ch: Change, which: 'prev' | 'next'): XlsxEditResult {
     const d = this.sheet(ch.sheet)
     this.lastRecalc = []
+    this.lastGrown = undefined
     if (ch.full) restore(d, which === 'prev' ? ch.full.before : ch.full.after)
     for (const o of ch.others ?? []) {
       const od = this.wb.sheetsData.get(o.sheet)
@@ -986,6 +992,7 @@ export class XlsxEditor {
       const b = which === 'prev' ? ch.book.before : ch.book.after
       this.wb.names = b.names
       this.wb.tables = b.tables
+      this.wb.pivots = b.pivots
       this.wb.calc.namesChanged()
     }
     if (ch.cm) for (const [id, c] of which === 'prev' ? [...ch.cm.before].reverse() : ch.cm.after) this.wb.comments.set(id, c)
@@ -997,7 +1004,7 @@ export class XlsxEditor {
     this.apply(d, ch.cells, which)
     if (ch.lay) applyLayout(d, which === 'prev' ? ch.lay.before : ch.lay.after)
     const recalc = ch.full || ch.others?.length || ch.sort ? this.recalcAll() : this.lastRecalc
-    return { sheet: ch.sheet, range: ch.range, layout: ch.full || ch.lay ? this.layout(ch.sheet) : undefined, recalc }
+    return { sheet: ch.sheet, range: ch.range, layout: ch.full || ch.lay ? this.layout(ch.sheet) : undefined, recalc, ...(this.lastGrown ? { grown: this.lastGrown } : {}) }
   }
 
   undo(): XlsxEditResult | null {
@@ -1148,7 +1155,7 @@ export class XlsxEditor {
         for (const h of followed.headers) setEntry(d, h.r, h.c, [T_STR, h.text, getEntry(d, h.r, h.c)?.[2] ?? 0])
         if (followed.parts.length) this.bookChanged = true
         // (the names and tables the formulas know are those of the parts as they are now)
-        const book = { names: this.wb.names, tables: this.wb.tables }
+        const book: BookState = { names: this.wb.names, tables: this.wb.tables, pivots: this.wb.pivots }
         if (followed.parts.length) await this.wb.loadNames()
         const cm = this.shiftComments(this.wb.sheets[sheet].path, axis, op.at, delta)
         this.formulaTouched = true
@@ -1157,7 +1164,7 @@ export class XlsxEditor {
         if (edits.length) ch.others = edits.map((e) => ({ sheet: this.indexOf(e.d), key: e.key, prev: e.prev, next: e.next }))
         if (followed.parts.length) {
           ch.parts = followed.parts
-          ch.book = { before: book, after: { names: this.wb.names, tables: this.wb.tables } }
+          ch.book = { before: book, after: { names: this.wb.names, tables: this.wb.tables, pivots: this.wb.pivots } }
         }
         this.undoStack.push(ch)
         this.redoStack = []
@@ -1486,6 +1493,15 @@ export class XlsxEditor {
     if (d.merges.some((m) => m.r1 >= range.r0 && m.r0 <= range.r1 && m.c1 >= range.c0 && m.c0 <= range.c1)) {
       throw new Error('This range has merged cells: unmerge them to sort it.')
     }
+    // (Excel refuses too: the cells a formula fills are not cells to move, and the formula moved would fill others)
+    if (d.dynamic.size) {
+      for (const key of d.dynamic) {
+        const rg = d.arrays.get(key) ?? { r0: Math.floor(key / MAX_COL), c0: key % MAX_COL, r1: Math.floor(key / MAX_COL), c1: key % MAX_COL }
+        if (rg.r1 >= range.r0 && rg.r0 <= range.r1 && rg.c1 >= range.c0 && rg.c0 <= range.c1) {
+          throw new Error('This range has a formula that fills several cells (a dynamic array): it cannot be sorted. Sort the cells the formula reads, or use SORT.')
+        }
+      }
+    }
     const n = range.r1 - range.r0 + 1
     const rank = new Uint8Array(n)
     const vals: Value[] = new Array(n)
@@ -1562,16 +1578,7 @@ export class XlsxEditor {
       d.rows[r] = next.length ? next : undefined
       d.rewrite.add(r)
     }
-    // (a dynamic array formula that moves is one where it lands; the cells it filled stay as values until it is computed)
-    const dynamic = new Set<number>()
-    for (const [key] of drop) {
-      d.formulas.delete(key)
-      if (d.dynamic.delete(key)) {
-        dynamic.add(key)
-        d.arrays.delete(key)
-      }
-    }
-    for (let i = 0; i < put.length; i++) if (dynamic.has(drop[i]?.[0])) d.dynamic.add(put[i][0])
+    for (const [key] of drop) d.formulas.delete(key)
     for (const [key, f] of put) {
       d.formulas.set(key, f)
       // (a formula typed and not computed yet holds its own text: the text it has now)

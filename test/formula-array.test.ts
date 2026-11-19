@@ -54,6 +54,16 @@ describe('LET and LAMBDA', () => {
     expect(ev('LET(y,LAMBDA(f,n,IF(n<2,1,n*f(f,n-1))),y(y,5))')).toBe(120)
   })
 
+  test('a function that calls itself twice at every level ends in #NUM!, not in a hang', () => {
+    const t = Date.now()
+    expect(ev('LET(y,LAMBDA(f,n,f(f,n+1)+f(f,n+1)),y(y,1))')).toEqual(E('#NUM!'))
+    expect(Date.now() - t).toBeLessThan(2000)
+    // deep, and wide on the way back: the same
+    expect(ev('LET(y,LAMBDA(f,n,IF(n>20,f(f,n+1)+f(f,n+1),f(f,n+1))),y(y,1))')).toEqual(E('#NUM!'))
+    // a function that calls itself twice, to an end: computed (2^15 calls)
+    expect(ev('LET(y,LAMBDA(f,n,IF(n<1,1,f(f,n-1)+f(f,n-1))),y(y,15))')).toBe(32768)
+  })
+
   test('MAP, REDUCE, SCAN, BYROW, BYCOL, MAKEARRAY', () => {
     expect(arr('MAP({1,2,3},LAMBDA(x,x*2))')).toEqual([[2, 4, 6]])
     expect(arr('MAP(A1:A3,{10;20;30},LAMBDA(a,b,a+b))')).toEqual([[13], [21], [32]])
@@ -279,6 +289,8 @@ describe('as a file writes them', () => {
     expect(withFunctionPrefixes('SUM([Qty])', 'Sales')).toBe('SUM(Sales[Qty])')
     expect(withFunctionPrefixes('SUM(Table1[Qty])', 'Sales')).toBe('SUM(Table1[Qty])')
     expect(withFunctionPrefixes('[@Qty]*2')).toBe('[@Qty]*2')
+    // an optional parameter of LAMBDA is no column of the table the formula is in
+    expect(withFunctionPrefixes('LAMBDA(a,[b],a+[@Qty])(1)', 'Sales')).toBe('_xlfn.LAMBDA(_xlpm.a,[_xlpm.b],_xlpm.a+Sales[[#This Row],[Qty]])(1)')
     expect(stripFunctionPrefixes('_xlfn.LET(_xlpm.x,1,_xlpm.x+1)')).toBe('LET(x,1,x+1)')
     expect(stripFunctionPrefixes('=_xlfn.LAMBDA(_xlpm.a,[_xlpm.b],_xlpm.a+_xlpm.b)(1,2)')).toBe('=LAMBDA(a,[b],a+b)(1,2)')
     expect(stripFunctionPrefixes('_xlfn.LET(_xlpm.f,_xlfn.LAMBDA(_xlpm.v,_xlpm.v*2),_xlpm.f(A1))')).toBe('LET(f,LAMBDA(v,v*2),f(A1))')

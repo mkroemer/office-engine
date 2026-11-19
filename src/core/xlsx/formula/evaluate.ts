@@ -21,6 +21,12 @@ interface Scope {
 /** a name of LET / LAMBDA as it is looked up: without regard to case, nor to the prefix a file gives it */
 const local = (name: string) => name.toLowerCase().replace(/^_xlpm\./, '')
 
+/**
+ * Calls of function values and readings of defined names one formula may make in all: past it the result is #NUM!.
+ * (The depth alone does not bound the work: a function that calls itself twice at each level is 2^depth calls.)
+ */
+const MAX_STEPS = 10_000_000
+
 /** function values calling one another, nested: past this many the result is #NUM! (a LAMBDA that calls itself without end) */
 const MAX_CALLS = 192
 
@@ -60,6 +66,7 @@ export class Evaluator implements Ev {
   /** the names in reach of what is being evaluated (LET, LAMBDA) */
   private scope: Scope | undefined
   private calls = 0
+  private steps = 0
 
   constructor(ctx: EvalContext, root?: Ast) {
     this.root = root
@@ -148,7 +155,8 @@ export class Evaluator implements Ev {
   private apart<T>(f: () => T): T {
     const saved = this.scope
     this.scope = undefined
-    if (++this.calls > MAX_CALLS) {
+    if (++this.calls > MAX_CALLS || ++this.steps > MAX_STEPS) {
+      if (this.calls > MAX_CALLS) this.runaway()
       this.calls--
       this.scope = saved
       throw ERR.NUM
@@ -200,9 +208,21 @@ export class Evaluator implements Ev {
     }, FUNCTIONS[name].min, FUNCTIONS[name].max)
   }
 
+  /**
+   * The calls went as deep as they may: a function that calls itself without end. What is left of the evaluation
+   * gets few calls more (every level of it may be calling itself again and again: 2^depth calls).
+   */
+  private runaway() {
+    this.steps = Math.max(this.steps, MAX_STEPS - 10_000)
+  }
+
   invoke(f: Val, args: (Val | undefined)[]): Val {
     if (!(f instanceof LambdaV)) return f instanceof FormulaError ? f : ERR.VALUE
-    if (this.calls >= MAX_CALLS) return ERR.NUM
+    if (this.calls >= MAX_CALLS) {
+      this.runaway()
+      return ERR.NUM
+    }
+    if (++this.steps > MAX_STEPS) return ERR.NUM
     this.calls++
     try {
       return f.fn(args)
