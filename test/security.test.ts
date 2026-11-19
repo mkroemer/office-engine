@@ -18,7 +18,7 @@ import { isSharedCall } from '../src/collab/docx'
 import { CollabSession, type Adapter } from '../src/collab/session'
 import { MemoryTransport } from '../src/collab/transport'
 import { PEER_COLORS } from '../src/collab/protocol'
-import { INHERITED, inheritedDocx, inheritedPptx, inheritedXlsx, PROBE_HOST, probeDocx, probePptx, probeXlsx } from './probes'
+import { INHERITED, inheritedDocx, inheritedPptx, inheritedVisio, inheritedXlsx, PROBE_HOST, probeDocx, probePptx, probeVisio, probeXlsx } from './probes'
 
 const S = (n: string) => `${import.meta.dir}/../playground/public/samples/${n}`
 const URL_COLOR = 'fff url(https://probe.invalid/x.png)'
@@ -146,7 +146,7 @@ describe('colors given to CSS', () => {
     expect(cssFont('constructor')).toBe('"constructor", sans-serif')
   })
 
-  for (const [kind, build] of [['pptx', probePptx], ['xlsx', probeXlsx], ['docx', probeDocx]] as const) {
+  for (const [kind, build] of [['pptx', probePptx], ['xlsx', probeXlsx], ['docx', probeDocx], ['visio', probeVisio]] as const) {
     test(`${kind}: no color of a crafted file reaches the views with a url() in it`, async () => {
       const json = JSON.stringify(await models(await build()))
       expect(json.length).toBeGreaterThan(1000)
@@ -188,7 +188,7 @@ describe('keys every object inherits', () => {
     }
   })
 
-  for (const [kind, build] of [['pptx', inheritedPptx], ['xlsx', inheritedXlsx], ['docx', inheritedDocx]] as const) {
+  for (const [kind, build] of [['pptx', inheritedPptx], ['xlsx', inheritedXlsx], ['docx', inheritedDocx], ['visio', inheritedVisio]] as const) {
     test(`${kind}: a file naming them opens, and what the views get can leave the worker`, async () => {
       for (const name of INHERITED) {
         const all = await models(await build(name))

@@ -401,7 +401,7 @@ export function CommentsPanel({ ctl }: { ctl: CommentsCtl }) {
                 <span className="de-cm-name">{ctl.me.name}</span>
               </div>
             </div>
-            <Composer ctl={ctl} placeholder={str.comments.newPlaceholder} submit={str.comments.post}autoFocus onSubmit={(t, m) => ctl.post(t, m)} onCancel={() => ctl.cancelDraft()} />
+            <Composer ctl={ctl} placeholder={str.comments.newPlaceholder} submit={str.comments.post} autoFocus onSubmit={(t, m) => ctl.post(t, m)} onCancel={() => ctl.cancelDraft()} />
           </div>
         )}
         {shown.map((t) => (
@@ -409,7 +409,7 @@ export function CommentsPanel({ ctl }: { ctl: CommentsCtl }) {
         ))}
         {!shown.length && !st.draft && (
           <div className="de-cm-empty">
-            {all.length ? str.comments.allResolved : ctl.canComment ? str.comments.noneYet(ctl.host?.hint ?? '') : str.comments.none}
+            {all.length ? str.comments.allResolved : ctl.canComment ? str.comments.noneYet(ctl.host?.hint() ?? '') : str.comments.none}
           </div>
         )}
       </div>

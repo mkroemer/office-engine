@@ -4,12 +4,11 @@ import './core/default-worker'
 import { DocViewer, type DocViewerProps } from './react/DocViewer'
 import type { Icons } from './react/edit/Toolbar'
 import type { StringsOverride } from './react/strings'
-import { ViewerController } from './react/controller'
+import { createViewerController, type ViewerController } from './react/controller'
 
 export type MountOptions = Omit<DocViewerProps, 'styleTarget'>
 
 const THEMES = ['light', 'dark', 'auto'] as const
-const LOCALE_NAMES = ['en', 'de'] as const
 
 export interface MountedViewer {
   /** the viewer's state and commands (the one passed in `options.controller`, else its own) */
@@ -22,14 +21,16 @@ export interface MountedViewer {
 export function mount(el: HTMLElement, options: MountOptions): MountedViewer {
   let root: Root | null = createRoot(el)
   let props = options
-  const controller = options.controller ?? new ViewerController()
+  const ownController = createViewerController()
+  let controller = options.controller ?? ownController
   const shadow = el.getRootNode() instanceof ShadowRoot ? (el.getRootNode() as ShadowRoot) : undefined
   const render = () => root?.render(createElement(DocViewer, { ...props, controller, styleTarget: shadow }))
   render()
   return {
-    controller,
+    get controller() { return controller },
     update(next) {
       props = { ...props, ...next }
+      controller = props.controller ?? ownController
       render()
     },
     destroy() {
@@ -43,11 +44,11 @@ export function mount(el: HTMLElement, options: MountOptions): MountedViewer {
  * `<office-viewer src="/file.xlsx" style="height:600px"></office-viewer>`
  * Rendered inside a shadow root so host page CSS cannot leak in.
  * Attributes: src, name, editable, toolbar / thumbnails / save / download / file-menu / open / capture-select-all ("false" to turn off),
- * theme ("light" | "dark" | "auto"), locale ("en" | "de"), headless (the document alone, driven through `controller`);
+ * theme ("light" | "dark" | "auto"), locale (BCP 47 number/date formatting tag); other languages are supplied through `.strings`.
  * real-time collaboration: collab (hub WebSocket URL), room, user (display name), base (snapshot seq `src` was opened at).
  * Properties: `file` (File/Blob/ArrayBuffer) for local data; `icons` (map or resolver, as DocViewer's `icons`);
- * `strings` (texts replacing the locale's); `controller` (ViewerController) for the viewer's
- * state and commands.
+ * `strings` (texts replacing English or the enclosing provider's).
+ * `controller` (ViewerController) for state and commands; `headless` displays the document alone.
  */
 export class OfficeViewerElement extends HTMLElement {
   static observedAttributes = ['src', 'name', 'toolbar', 'thumbnails', 'editable', 'save', 'download', 'file-menu', 'open', 'capture-select-all', 'theme', 'collab', 'room', 'user', 'base', 'comments', 'locale', 'headless']
@@ -55,8 +56,12 @@ export class OfficeViewerElement extends HTMLElement {
   private _file?: Blob | ArrayBuffer
   private _icons?: Icons
   private _strings?: StringsOverride
+  // one function each for the element's life: a new one with every update would run the viewer's load effect again (a `load` event per update)
+  private readonly onLoad: NonNullable<MountOptions['onLoad']> = (client) => this.dispatchEvent(new CustomEvent('load', { detail: { kind: client.kind, name: client.name } }))
+  private readonly onError: NonNullable<MountOptions['onError']> = (error) => this.dispatchEvent(new CustomEvent('error', { detail: error }))
+  private readonly onComment = (e: unknown) => this.dispatchEvent(new CustomEvent('comment', { detail: e }))
   /** the viewer's state and commands, the same object for the element's whole life */
-  readonly controller = new ViewerController()
+  readonly controller = createViewerController()
 
   get file() {
     return this._file
@@ -115,7 +120,7 @@ export class OfficeViewerElement extends HTMLElement {
       captureSelectAll: this.getAttribute('capture-select-all') !== 'false',
       theme: THEMES.find((t) => t === this.getAttribute('theme')),
       icons: this._icons,
-      locale: LOCALE_NAMES.find((l) => l === this.getAttribute('locale')),
+      locale: this.getAttribute('locale') ?? undefined,
       strings: this._strings,
       headless: this.hasAttribute('headless') && this.getAttribute('headless') !== 'false',
       controller: this.controller,
@@ -133,10 +138,10 @@ export class OfficeViewerElement extends HTMLElement {
           ? false
           : {
               user: this.getAttribute('user') ? { name: this.getAttribute('user')! } : undefined,
-              onEvent: (e) => this.dispatchEvent(new CustomEvent('comment', { detail: e })),
+              onEvent: this.onComment,
             },
-      onLoad: (client) => this.dispatchEvent(new CustomEvent('load', { detail: { kind: client.kind, name: client.name } })),
-      onError: (error) => this.dispatchEvent(new CustomEvent('error', { detail: error })),
+      onLoad: this.onLoad,
+      onError: this.onError,
     }
   }
 

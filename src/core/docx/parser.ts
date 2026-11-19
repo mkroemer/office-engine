@@ -3,14 +3,15 @@ import { OpcPackage, relOfType, type Rels } from '../opc'
 import type { RNode } from '../raw'
 import { parseTheme, type Theme } from '../theme'
 import { emuToPt } from '../units'
-import { desc, descAll, kid, kids, num, parseXml, parseXmlStream, path, TreeBuilder, type SaxHandler, type XEl } from '../xml'
-import { Numbering } from './numbering'
+import { desc, descAll, kid, kids, num, DOCX_UNDERSTOOD, parseXml, parseXmlStream, path, TreeBuilder, type SaxHandler, type XEl } from '../xml'
+import { formatNumber, Numbering } from './numbering'
+import { ommlText } from './omml'
 import { readDocxComments, type DocxComments } from './comments'
 import {
   borderCss, merge, readMargins, readPPr, readRPr, readTableBorders, shading, StyleSheet, type NumPr,
 } from './styles'
 import type {
-  Block, CellBorders, DocxMeta, HeaderFooters, Inline, ListMarker, PageSet, PageSetup, Paragraph, ParaStyle, RunSet, RunStyle, SrcRef, Table, TrackMark, TableCell, TableRow,
+  Block, CellBorders, DocxMeta, HeaderFooters, HFKind, Inline, ListMarker, PageSet, PageSetup, Paragraph, ParaStyle, RunSet, RunStyle, SrcRef, Table, TrackMark, TableCell, TableRow,
 } from './types'
 import { DEFAULT_PAGE } from './types'
 
@@ -55,6 +56,8 @@ export interface ConvHooks {
   item?: () => number
   /** comment ranges in the body: the thread root of a w:id (undefined: not a known comment) */
   comment?(num: string | undefined): string | undefined
+  /** the number a footnote / endnote reference shows (its place among the document's notes) */
+  note?(kind: 'foot' | 'end', id: string | undefined): string | undefined
 }
 
 const sameMarks = (a: string[] | undefined, b: string[] | undefined) => (a?.length ?? 0) === (b?.length ?? 0) && (!a || a.every((x, i) => b![i] === x))
@@ -107,20 +110,83 @@ export function pageSetup(sectPr: XEl | undefined): PageSetup {
 }
 
 // runs inside w:del / w:moveFrom count: deleted text is shown (tracked changes) and written back
-const RUN_STOP = new Set(['p', 'oMath', 'oMathPara', 'pPr', 'rPr', 'r'])
+const RUN_STOP = new Set(['p', 'oMath', 'oMathPara', 'pPr', 'rPr', 'r', 'fldSimple'])
+/** inline elements that stand in the run order like a run: kept as a whole, copied verbatim on write-back */
+const RUN_LIKE = new Set(['r', 'oMath', 'oMathPara', 'fldSimple'])
 
 /** Runs of a paragraph in preorder (the ordinal is the run's identity for write-back). */
 export function collectRuns(p: XEl): Map<XEl, number> {
   const m = new Map<XEl, number>()
   const rec = (n: XEl) => {
     for (const c of n.c) {
-      if (c.n === 'r') m.set(c, m.size)
+      if (RUN_LIKE.has(c.n)) m.set(c, m.size)
       if (!RUN_STOP.has(c.n)) rec(c)
     }
   }
   rec(p)
   return m
 }
+
+/** the text of an element made of runs (a simple field, ruby), tabs and breaks as the converter reads them */
+function textOfRuns(e: XEl): string {
+  let s = ''
+  for (const c of e.c) {
+    switch (c.n) {
+      case 't': case 'delText': s += c.t; break
+      case 'tab': case 'ptab': s += '\t'; break
+      case 'br': if (c.a.type !== 'page') s += '\n'; break
+      case 'cr': s += '\n'; break
+      case 'noBreakHyphen': s += '\u2011'; break
+      case 'softHyphen': s += '\u00AD'; break
+      case 'rPr': case 'rubyPr': case 'rt': break
+      default: s += textOfRuns(c)
+    }
+  }
+  return s
+}
+
+/**
+ * Runs lying inside a PAGE / NUMPAGES complex field (begin … end): the converter models those as one field, every other
+ * field run is kept as it is. A field left open at the end of the list is not one of them.
+ */
+function pageFieldRuns(runs: Iterable<XEl>): Set<XEl> {
+  const out = new Set<XEl>()
+  const open: { instr: string; runs: XEl[]; phase: 'instr' | 'result' }[] = []
+  for (const r of runs) {
+    if (r.n !== 'r') continue
+    for (const f of open) f.runs.push(r)
+    for (const c of r.c) {
+      if (c.n === 'fldChar') {
+        if (c.a.fldCharType === 'begin') open.push({ instr: '', runs: [r], phase: 'instr' })
+        else if (c.a.fldCharType === 'separate' && open.length) open[open.length - 1].phase = 'result'
+        else if (c.a.fldCharType === 'end') {
+          const f = open.pop()
+          // (a field inside the instruction of another is not one the converter models: its runs are kept as they are)
+          if (f && fieldKind(f.instr) && !open.some((o) => o.phase === 'instr')) for (const x of f.runs) out.add(x)
+        }
+      } else if (c.n === 'instrText' && open.length && open[open.length - 1].phase === 'instr') open[open.length - 1].instr += c.t
+    }
+  }
+  return out
+}
+
+const RPR_READ = new Set(['b', 'bCs', 'i', 'iCs', 'strike', 'dstrike', 'caps', 'smallCaps', 'vanish', 'u', 'color', 'sz', 'szCs', 'rFonts', 'highlight', 'shd', 'vertAlign', 'spacing'])
+
+/** a signature of the run properties the converter does not read into a style (language, character style, direction…) */
+function rprExtra(rPr: XEl | undefined): string | undefined {
+  let sig: string | undefined
+  for (const c of rPr?.c ?? []) if (!RPR_READ.has(c.n)) (sig ??= ''), (sig += c.n + JSON.stringify(c.a) + ';')
+  return sig
+}
+
+const pick = (o: { src?: SrcRef }, _k: 'src'): { src?: SrcRef } => (o.src ? { src: o.src } : {})
+
+/** run children the converter reads (or that carry nothing): any other child makes the run one to keep as it is */
+const RUN_KNOWN = new Set([
+  'rPr', 'fldChar', 'instrText', 't', 'delText', 'tab', 'ptab', 'br', 'cr', 'noBreakHyphen', 'softHyphen', 'sym', 'drawing', 'commentReference',
+  'pict', 'object', 'footnoteReference', 'endnoteReference', 'lastRenderedPageBreak', 'annotationRef', 'footnoteRef', 'endnoteRef', 'separator',
+  'continuationSeparator', 'pgNum', 'dayShort', 'dayLong', 'monthShort', 'monthLong', 'yearShort', 'yearLong', 'contentPart', 'ruby',
+])
 
 /** Paragraphs of a body item (root included) in preorder. */
 export function collectParas(roots: XEl[], into = new Map<XEl, number>()): Map<XEl, number> {
@@ -150,8 +216,15 @@ export class Converter {
   /** the tracked change (w:ins / w:del) the runs being read belong to */
   private tc?: TrackMark
   private boxDepth = 0
+  /** the wrapper elements (content control, smart tag…) the runs being read lie in, by number */
+  private wraps: number[] = []
+  private wrapSeq = 0
   private tableDepth = 0
   private cur?: { pid?: number; runs: Map<XEl, number>; forced?: ConvHooks['forced'] }
+  /** inlines made so far (a run that makes none is kept as an opaque one) */
+  private made = 0
+  /** runs of the paragraph being read that lie inside a field modeled as one */
+  private inField = new Set<XEl>()
   /** comment threads whose range is open at this point of the body, in the order they opened */
   private open: string[] = []
   /** threads whose range was seen */
@@ -250,16 +323,19 @@ export class Converter {
     if (pid !== undefined) cur.pid = pid
     const saved = this.cur
     this.cur = { pid, runs: collectRuns(el), forced }
+    const savedField = this.inField
+    this.inField = pageFieldRuns(this.cur.runs.keys())
     const parts: Paragraph[] = [cur]
     const sink: Sink = {
       push: (x) => {
+        this.made++
         // pictures, boxes, fields, note references inside w:ins / w:del belong to the change too
         if (this.tc && x.t !== 'text' && !x.tc) x = { ...x, tc: this.tc } as Inline
         const runs = cur.runs
         const last = runs[runs.length - 1]
         if (x.t === 'text' && !x.cm) delete x.cm
         if (
-          x.t === 'text' && last?.t === 'text' && last.href === x.href && last.lk === x.lk &&
+          x.t === 'text' && last?.t === 'text' && last.href === x.href && last.lk === x.lk && last.rp === x.rp &&
           sameRecord(last.s, x.s) && sameRecord(last.d, x.d) && sameMarks(last.cm, x.cm) && sameRecord(last.tc, x.tc)
         )
           last.text += x.text
@@ -282,6 +358,7 @@ export class Converter {
     }
     this.inlines(el.c, base, undefined, undefined, sink)
     this.cur = saved
+    this.inField = savedField
     if (this.fields.length > 0) rec.ro = true
     for (const p of parts) {
       if (rec.ro) p.ro = true
@@ -318,9 +395,14 @@ export class Converter {
         }
         case 'fldSimple': {
           const kind = fieldKind(c.a.instr ?? '')
-          if (kind) {
-            const r = kid(c, 'r')
-            sink.push({ t: 'field', kind, s: merge(base, readRPr(kid(r, 'rPr'), this.theme)), ...(r ? this.srcOf(r) : {}) })
+          const r = kid(c, 'r')
+          const s = merge(base, readRPr(kid(r, 'rPr'), this.theme))
+          if (kind) sink.push({ t: 'field', kind, s, ...this.srcOf(c) })
+          else if (this.cur && !desc(c, 'drawing') && !desc(c, 'pict')) {
+            // a field (DATE, MERGEFIELD…) shows its result and stays whole: one object, written back as it is
+            const text = textOfRuns(c)
+            if (text) sink.push({ t: 'ref', text, s, ...pick(this.srcOf(c), 'src'), ...(this.tc ? { tc: this.tc } : {}) })
+            else sink.push({ t: 'shape', w: 0, h: 0, ...pick(this.srcOf(c), 'src'), ...(this.tc ? { tc: this.tc } : {}) })
           } else this.inlines(c.c, base, href, lk, sink)
           break
         }
@@ -329,7 +411,9 @@ export class Converter {
         case 'del':
         case 'moveFrom': {
           const prev = this.tc
-          this.tc = { k: c.n === 'ins' || c.n === 'moveTo' ? 'ins' : 'del', id: c.a.id, author: c.a.author, date: c.a.date }
+          this.tc = { k: c.n === 'ins' || c.n === 'moveTo' ? 'ins' : 'del', id: c.a.id, author: c.a.author, date: c.a.date, ...(c.n === 'moveTo' || c.n === 'moveFrom' ? { mv: true } : {}) }
+          // a deletion inside an insertion: both stay (rejecting everything must take the text out)
+          if (this.tc.k === 'del' && prev?.k === 'ins') this.tc.ins = prev
           this.inlines(c.c, base, href, lk, sink)
           this.tc = prev
           break
@@ -338,10 +422,11 @@ export class Converter {
         case 'customXml':
         case 'bdo':
         case 'dir':
-          this.inlines(c.c, base, href, lk, sink)
-          break
         case 'sdt':
-          this.inlines(kid(c, 'sdtContent')?.c ?? [], base, href, lk, sink)
+          // (the wrappers are kept by the writer; runs in different ones must not merge, see `rp`)
+          this.wraps.push(++this.wrapSeq)
+          this.inlines(c.n === 'sdt' ? kid(c, 'sdtContent')?.c ?? [] : c.c, base, href, lk, sink)
+          this.wraps.pop()
           break
         case 'commentRangeStart':
         case 'commentRangeEnd':
@@ -349,8 +434,11 @@ export class Converter {
           break
         case 'oMath':
         case 'oMathPara': {
-          const text = descAll(c, 't').map((t) => t.t).join('')
-          if (text) sink.push({ t: 'text', text, s: { ...base, i: true, font: '"Cambria Math", "STIX Two Math", serif' } })
+          const text = ommlText(c)
+          const s = { ...base, i: true, font: '"Cambria Math", "STIX Two Math", serif' }
+          // an equation is one object: it is written back as it was, not as the flat text shown here
+          if (this.cur) sink.push({ t: 'ref', text, s, ...pick(this.srcOf(c), 'src'), ...(this.tc ? { tc: this.tc } : {}) })
+          else if (text) sink.push({ t: 'text', text, s })
           break
         }
       }
@@ -360,12 +448,32 @@ export class Converter {
   private run(r: XEl, base: RunStyle, href: string | undefined, lk: string | undefined, sink: Sink): void {
     const rPr = kid(r, 'rPr')
     const s = merge<RunStyle>(base, this.styles.char(kid(rPr, 'rStyle')?.a.val), readRPr(rPr, this.theme))
-    if (s.vanish) return
     const { src, d, cm } = this.srcOf(r)
     const tc = this.tc
-    const text = (t: string, style = s, link = href) => sink.push({ t: 'text', text: t, s: style, href: link, lk: link === href ? lk : undefined, src, d, cm, ...(tc ? { tc } : {}) })
+    const made = this.made
+    // what the run holds that is not read into text or an object is not lost: the run stays as an object that is written back as it is
+    const keep = () => {
+      if (this.made === made && src) sink.push({ t: 'shape', w: 0, h: 0, src, ...(tc ? { tc } : {}) })
+    }
+    if (s.vanish) return keep()
+    if (r.c.some((c) => c.n === 'ruby')) {
+      // ruby: the base text is shown, the run with its annotation stays whole
+      const text = textOfRuns(kid(r, 'ruby')!.c.find((c) => c.n === 'rubyBase') ?? r)
+      sink.push({ t: 'ref', text, s, ...(src ? { src } : {}), ...(tc ? { tc } : {}) })
+      return
+    }
+    // a column break, a break that clears a float, an absolute position tab: the run is kept whole (the text model has only '\n' and '\t')
+    if (src && !this.fields.length && r.c.some((c) => c.n === 'ptab' || (c.n === 'br' && (c.a.type === 'column' || c.a.clear !== undefined)))) {
+      sink.push({ t: 'ref', text: textOfRuns(r), s, src, ...(tc ? { tc } : {}) })
+      return
+    }
+    const rp = (rprExtra(rPr) ?? '') + (this.wraps.length ? '|w' + this.wraps.join('.') : '') || undefined
+    const text = (t: string, style = s, link = href) => sink.push({ t: 'text', text: t, s: style, href: link, lk: link === href ? lk : undefined, src, d, cm, ...(tc ? { tc } : {}), ...(rp ? { rp } : {}) })
     for (const c of r.c) {
       const f = this.fields[this.fields.length - 1]
+      // only the result of the outermost field is shown: no instruction, and nothing of a field inside an instruction
+      const hidden = this.fields.some((x) => x.phase === 'instr' || x.kind)
+      const inInstr = (n: number) => this.fields.slice(0, n).some((x) => x.phase === 'instr')
       switch (c.n) {
         case 'fldChar': {
           const type = c.a.fldCharType
@@ -375,11 +483,11 @@ export class Converter {
             f.kind = fieldKind(f.instr)
             const link = /HYPERLINK\s+(?:\\l\s+)?"([^"]+)"/.exec(f.instr)
             if (link) f.href = /\\l/.test(f.instr) ? '#' + link[1] : link[1]
-            if (f.kind) sink.push({ t: 'field', kind: f.kind, s, src })
+            if (f.kind && !inInstr(this.fields.length - 1)) sink.push({ t: 'field', kind: f.kind, s, src })
           } else if (type === 'end') {
             if (f && f.phase === 'instr') {
               const kind = fieldKind(f.instr)
-              if (kind) sink.push({ t: 'field', kind, s, src })
+              if (kind && !inInstr(this.fields.length - 1)) sink.push({ t: 'field', kind, s, src })
             }
             this.fields.pop()
           }
@@ -390,12 +498,12 @@ export class Converter {
           break
         case 't':
         case 'delText':
-          if (f && (f.phase === 'instr' || f.kind)) break
-          if (c.t) text(c.t, s, f?.href ?? href)
+          if (hidden) break
+          if (c.t) text(c.t, s, [...this.fields].reverse().find((x) => x.href)?.href ?? href)
           break
         case 'tab':
         case 'ptab':
-          if (!f || (f.phase === 'result' && !f.kind)) text('\t')
+          if (!hidden) text('\t')
           break
         case 'br':
           if (c.a.type === 'page') sink.pageBreak()
@@ -433,10 +541,13 @@ export class Converter {
           break
         case 'footnoteReference':
         case 'endnoteReference':
-          sink.push({ t: 'ref', text: c.a.id ?? '*', s: { ...s, va: 'sup' }, src })
+          sink.push({ t: 'ref', text: this.hooks.note?.(c.n === 'footnoteReference' ? 'foot' : 'end', c.a.id) ?? c.a.id ?? '*', s: { ...s, va: 'sup' }, src })
           break
       }
     }
+    // the runs of a field the converter does not model as one (DATE, MERGEFIELD, TOC…), and runs made of markup it does not read
+    // (and the text of a field nested in an instruction, which is not shown)
+    if (r.c.some((c) => !RUN_KNOWN.has(c.n) || ((c.n === 'fldChar' || c.n === 'instrText' || c.n === 't' || c.n === 'delText' || c.n === 'tab' || c.n === 'ptab') && !this.inField.has(r))) || r.a['#mc']) keep()
   }
 
   private target(id: string | undefined): string | undefined {
@@ -797,7 +908,20 @@ export class DocxDocument {
       console.warn('[office-engine] comments not read:', e.message)
       return readDocxComments(pkg, mainPath, new Map())
     })
-    return new DocxDocument(pkg, mainPath, rels, styles, numbering, theme, comments)
+    const doc = new DocxDocument(pkg, mainPath, rels, styles, numbering, theme, comments)
+    const setRel = relOfType(rels, 'settings')
+    const settings = setRel ? await pkg.xml(setRel.target).catch(() => undefined) : undefined
+    if (settings) {
+      const on = (e: XEl | undefined) => !!e && e.a.val !== '0' && e.a.val !== 'false' && e.a.val !== 'off'
+      doc.evenOdd = on(kid(settings, 'evenAndOddHeaders'))
+      for (const [k, tag] of [['foot', 'footnotePr'], ['end', 'endnotePr']] as const) {
+        const pr = kid(settings, tag)
+        const fmt = kid(pr, 'numFmt')?.a.val
+        if (fmt) doc.noteFmt[k] = fmt
+        doc.noteStart[k] = Math.max(1, Math.min(num(kid(pr, 'numStart')?.a.val, 1)!, 999_999))
+      }
+    }
+    return doc
   }
 
   get dirty() {
@@ -809,9 +933,26 @@ export class DocxDocument {
   }
 
   /** relationship ids of the headers / footers shown (final section) */
-  hfRefs?: Record<keyof HeaderFooters, string | undefined>
+  hfRefs?: Record<HFKind, string | undefined>
+  /** the parts of even pages (shown when `evenOdd`); the editor does not change them */
+  evenRefs: { header?: string; footer?: string } = {}
+  /** the file sets different headers / footers for odd and even pages */
+  evenOdd = false
+  /** number format and first number of footnotes / endnotes (settings.xml; Word's defaults otherwise) */
+  noteFmt = { foot: 'decimal', end: 'lowerRoman' }
+  noteStart = { foot: 1, end: 1 }
+  private noteSeq = { foot: new Map<string, number>(), end: new Map<string, number>() }
+
+  /** what a footnote / endnote reference shows: its place among the notes of the document, in the format of its kind */
+  noteText = (kind: 'foot' | 'end', id: string | undefined): string | undefined => {
+    if (id === undefined) return undefined
+    const seq = this.noteSeq[kind]
+    let n = seq.get(id)
+    if (n === undefined) seq.set(id, (n = seq.size + this.noteStart[kind]))
+    return formatNumber(n, this.noteFmt[kind])
+  }
   /** headers / footers created by the editor: referenced from the sections on save */
-  hfNew = new Map<keyof HeaderFooters, string>()
+  hfNew = new Map<HFKind, string>()
   /** "different first page" as set by the editor (undefined: as in the file) */
   titlePgSet?: boolean
   /** "different first page" in the file */
@@ -822,12 +963,14 @@ export class DocxDocument {
   /** the headers / footers, converted with the styles as they are now; undefined when the document has none */
   async headers(): Promise<HeaderFooters | undefined> {
     const r = this.hfRefs
-    if (!r || !Object.values(r).some(Boolean)) return undefined
+    if (!r || !(Object.values(r).some(Boolean) || this.evenRefs.header || this.evenRefs.footer)) return undefined
     return {
       header: await this.headerFooter(r.header),
       footer: await this.headerFooter(r.footer),
       firstHeader: await this.headerFooter(r.firstHeader),
       firstFooter: await this.headerFooter(r.firstFooter),
+      evenHeader: await this.headerFooter(this.evenRefs.header),
+      evenFooter: await this.headerFooter(this.evenRefs.footer),
     }
   }
 
@@ -863,6 +1006,7 @@ export class DocxDocument {
         return pid
       },
       comment: (num) => this.comments.rootOfNum(num),
+      note: this.noteText,
     }
     const conv = new Converter(this.styles, this.numbering, this.theme, this.rels, hooks)
     const baseMeta = {
@@ -895,7 +1039,7 @@ export class DocxDocument {
       }
     }
     let capture: Capture | undefined
-    const tb = new TreeBuilder({ emitDepth: 2, onElement: (el) => capture!.element(el) })
+    const tb = new TreeBuilder({ understood: DOCX_UNDERSTOOD, emitDepth: 2, onElement: (el) => capture!.element(el) })
     capture = new Capture(tb, onItem)
     const flush = () => {
       if (!pending.length) return
@@ -943,6 +1087,8 @@ export class DocxDocument {
       this.titlePg = meta.titlePg
       // first-page parts are known even when "different first page" is off (turning it on shows them)
       const first = (tag: string) => ref(tag, 'first')
+      this.evenRefs = { header: ref('headerReference', 'even'), footer: ref('footerReference', 'even') }
+      if (this.evenOdd) meta.evenOdd = true
       this.hfRefs = { header: ref('headerReference', 'default'), footer: ref('footerReference', 'default'), firstHeader: first('headerReference'), firstFooter: first('footerReference') }
       Object.assign(meta, await this.headers())
     }
@@ -956,9 +1102,9 @@ export class DocxDocument {
 
   /** Re-converts generated paragraph XML into blocks (styles, list levels resolved by the engine). */
   reconvert(pid: number, xml: string, map: GenRun[], layer: Layer | undefined, marker?: ListMarker): { blocks: Block[]; rec: ParaRecord } {
-    const root = parseXml(xml)
+    const root = parseXml(xml, undefined, DOCX_UNDERSTOOD)
     const forced: NonNullable<ConvHooks['forced']> = { pid, root, map, layer, marker }
-    const conv = new Converter(this.styles, this.numbering, this.theme, this.rels, { forced })
+    const conv = new Converter(this.styles, this.numbering, this.theme, this.rels, { forced, note: this.noteText })
     const out: Block[] = []
     conv.paragraph(root, out)
     return { blocks: out, rec: forced.rec! }

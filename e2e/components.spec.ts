@@ -38,6 +38,12 @@ describe('host UI components', () => {
     const v = await open({ width: 640, height: 900 })
     const more = v.page.locator('.de-ebar button[data-host-button][aria-label="More tools"]')
     await more.waitFor()
+    // Hosts can use a wide text button: reserve its actual width, not the engine's icon width.
+    await v.page.waitForFunction(() => {
+      const bar = document.querySelector('.de-ebar')!
+      const right = bar.getBoundingClientRect().right
+      return [...bar.querySelectorAll(':scope > span')].every((el) => el.getBoundingClientRect().right <= right)
+    }, null, { timeout: 5000 })
     await more.click()
     expect(await v.page.locator('.de-ebar-more button[data-host-button]').count()).toBeGreaterThan(0)
     expect(v.errors).toEqual([])
@@ -55,6 +61,32 @@ describe('host UI components', () => {
     await dialog.waitFor({ state: 'detached' })
     const p = (await docxParas((await v.save()).bytes)).find((x) => paraText(x).startsWith('This document'))!
     expect(runsOf(p).find((r) => r.text.includes('document'))!.href).toBe('https://example.org/docs')
+    expect(v.errors).toEqual([])
+  })
+
+  test('docx: the built-in edit-link prompt keeps Remove link on the left and removes the link', async () => {
+    const v = await viewer({ src: 'samples/sample.docx', editable: true, onSave: true })
+    await v.selectText('document')
+    await v.page.keyboard.press('Control+k')
+    const dialog = v.page.locator('.de-dialog')
+    await dialog.locator('input').fill('https://example.org/docs')
+    await v.page.keyboard.press('Enter')
+    await dialog.waitFor({ state: 'detached' })
+    await v.selectText('document')
+    await v.page.keyboard.press('Control+k')
+    const extra = dialog.locator('button.de-dialog-extra')
+    await extra.waitFor()
+    expect(await extra.innerText()).toBe('Remove')
+    const bounds = await dialog.locator('.de-dialog-btns').evaluate((row) => {
+      const [extra, cancel] = row.querySelectorAll('button')
+      return { left: row.getBoundingClientRect().left, extra: extra.getBoundingClientRect().left, gap: cancel.getBoundingClientRect().left - extra.getBoundingClientRect().right }
+    })
+    expect(bounds.extra).toBe(bounds.left)
+    expect(bounds.gap).toBeGreaterThan(20)
+    await extra.click()
+    await dialog.waitFor({ state: 'detached' })
+    const p = (await docxParas((await v.save()).bytes)).find((x) => paraText(x).startsWith('This document'))!
+    expect(runsOf(p).find((r) => r.text.includes('document'))!.href).toBeUndefined()
     expect(v.errors).toEqual([])
   })
 })

@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { cellFormat } from '../edit/format'
 import type { BorderKind, FmtPatch } from '../../core/xlsx/types'
 import { MOD } from '../common/ContextMenu'
 import { EditorBar } from '../common/Slots'
-import { Btn, ColorBtn, Dropdown, fontName, fontOptions, Icon, Menu, Pop, Select, Sep, SizeBox, type IconName } from '../edit/Toolbar'
+import { Btn, ColorBtn, Dropdown, fontOptions, Icon, Menu, Pop, PromptBox, Select, Sep, SizeBox, useDismiss, type DropOption, type IconName } from '../edit/Toolbar'
 import { useStrings, type Strings } from '../strings'
 
 type FormatName = keyof Strings['xlsx']['formats']
@@ -80,6 +81,41 @@ function decimals(fmt: string, d: number): string {
   return base.slice(0, m.index) + '0' + (n ? '.' + '0'.repeat(n) : '') + base.slice(m.index + m[0].length)
 }
 
+const CUSTOM = '\u0000custom'
+
+/** the number formats, the one of the cell first when it is none of them, and a field for a format code typed by hand */
+function NumberFormat({ format, onPick }: { format: string; onPick: (code: string) => void }) {
+  const [typing, setTyping] = useState(false)
+  const ref = useRef<HTMLSpanElement>(null)
+  useDismiss(ref, typing, () => setTyping(false))
+  const t = useStrings()
+  const known = FORMATS.find((x) => x.value === format)
+  const options: DropOption<string>[] = [
+    ...(known ? [] : [{ value: format, label: t.xlsx.formats.custom, hint: format }]),
+    ...FORMATS.map(({ k, ...x }) => ({ ...x, label: t.xlsx.formats[k] })),
+    { value: CUSTOM, label: t.xlsx.customFormat, sep: true },
+  ]
+  return (
+    <span ref={ref} className="de-tb-color">
+      <Select title={t.xlsx.numberFormat(t.xlsx.formats[known?.k ?? 'custom'])} width={96} menuWidth={270} value={format} options={options} onChange={(v) => (v === CUSTOM ? setTyping(true) : onPick(v))} />
+      {typing && (
+        <div className="de-tb-pop" role="dialog" aria-label={t.xlsx.customFormatTitle} onKeyDown={(e) => e.key === 'Escape' && setTyping(false)}>
+          <PromptBox
+            placeholder={t.xlsx.formatCode}
+            initial={format === 'General' ? '' : format}
+            ok={t.common.apply}
+            onOk={(v) => {
+              setTyping(false)
+              // (a format code holds 255 characters at most)
+              onPick(v.trim().slice(0, 255) || 'General')
+            }}
+          />
+        </div>
+      )}
+    </span>
+  )
+}
+
 export function XlsxToolbar(props: {
   css: Record<string, string | number>
   /** workbook default font (cells without an explicit font) */
@@ -105,18 +141,14 @@ export function XlsxToolbar(props: {
   const { css, onFormat: f } = props
   const [bColor, setBColor] = useState('#000000')
   const [bStyle, setBStyle] = useState<(typeof BORDER_STYLES)[number]['value']>('thin')
-  const deco = String(css.textDecoration ?? '')
-  const align = (css.textAlign as string | undefined) ?? ''
+  const look = cellFormat(css, props.base)
+  const align = look.align ?? ''
   const valign = css.alignItems === 'flex-start' ? 'top' : css.alignItems === 'center' ? 'center' : 'bottom'
   const rot = Number(css.textRotate ?? 0)
-  const pt = (v: unknown) => (typeof v === 'string' && v.endsWith('pt') ? parseFloat(v) : typeof v === 'number' ? Math.round(v * 0.75 * 2) / 2 : undefined)
-  const sz = pt(css.fontSize) ?? pt(props.base.fontSize)
-  const font = fontName((css.fontFamily ?? props.base.fontFamily) as string | undefined)
+  const sz = look.size
+  const font = look.font ?? ''
   const t = useStrings()
   const kb = (label: string, keys: string) => t.edit.keyed(label, keys)
-  const known = FORMATS.find((x) => x.value === props.format)
-  const options = FORMATS.map(({ k, ...x }) => ({ ...x, label: t.xlsx.formats[k] }))
-  const formats = known ? options : [{ value: props.format, label: t.xlsx.formats.custom, hint: props.format }, ...options]
   const borderTitle = (k: BorderKind) => (k === 'none' ? t.xlsx.clearBorders : t.format.borders[k])
   return (
     <EditorBar>
@@ -128,19 +160,19 @@ export function XlsxToolbar(props: {
       <Btn icon="percent" title={t.xlsx.percent} onClick={() => f({ numFmt: '0%' })} />
       <Btn icon="decLess" title={t.xlsx.decLess} onClick={() => f({ numFmt: decimals(props.format, -1) })} />
       <Btn icon="decMore" title={t.xlsx.decMore} onClick={() => f({ numFmt: decimals(props.format, 1) })} />
-      <Select title={t.xlsx.numberFormat(t.xlsx.formats[known?.k ?? 'custom'])} width={96} menuWidth={270} value={props.format} options={formats} onChange={(v) => f({ numFmt: v })} />
+      <NumberFormat format={props.format} onPick={(v) => f({ numFmt: v })} />
       <Sep />
       <Select title={t.edit.font} width={112} menuWidth={200} value={font} placeholder={t.edit.font} options={fontOptions(font)} onChange={(v) => f({ font: v })} />
       <Sep />
       <SizeBox value={sz} sizes={SIZES} onChange={(v) => f({ sz: v })} />
       <Sep />
-      <Btn icon="bold" title={kb(t.edit.bold, `${MOD}B`)} active={css.fontWeight === 700} onClick={() => props.onToggle('b')} />
-      <Btn icon="italic" title={kb(t.edit.italic, `${MOD}I`)} active={css.fontStyle === 'italic'} onClick={() => props.onToggle('i')} />
-      <Btn icon="underline" title={kb(t.edit.underline, `${MOD}U`)} active={deco.includes('underline')} onClick={() => props.onToggle('u')} />
-      <Btn icon="strike" title={kb(t.edit.strike, `${MOD}⇧X`)} active={deco.includes('line-through')} onClick={() => props.onToggle('strike')} />
-      <ColorBtn icon="color" title={t.edit.textColor} value={css.color as string | undefined} onPick={(c) => f({ color: c })} noneLabel={t.edit.automatic} />
+      <Btn icon="bold" title={kb(t.edit.bold, `${MOD}B`)} active={look.bold} onClick={() => props.onToggle('b')} />
+      <Btn icon="italic" title={kb(t.edit.italic, `${MOD}I`)} active={look.italic} onClick={() => props.onToggle('i')} />
+      <Btn icon="underline" title={kb(t.edit.underline, `${MOD}U`)} active={look.underline} onClick={() => props.onToggle('u')} />
+      <Btn icon="strike" title={kb(t.edit.strike, `${MOD}⇧X`)} active={look.strike} onClick={() => props.onToggle('strike')} />
+      <ColorBtn icon="color" title={t.edit.textColor} value={look.color} onPick={(c) => f({ color: c })} noneLabel={t.edit.automatic} />
       <Sep />
-      <ColorBtn icon="fill" title={t.xlsx.fillColor} value={typeof css.background === 'string' && !css.background.includes('gradient') ? css.background : undefined} onPick={(c) => f({ fill: c })} noneLabel={t.format.noFill} />
+      <ColorBtn icon="fill" title={t.xlsx.fillColor} value={look.highlight} onPick={(c) => f({ fill: c })} noneLabel={t.format.noFill} />
       <Pop icon="borders" title={t.xlsx.borders} chevron>
         {(close) => (
           <div className="de-borders-pop">

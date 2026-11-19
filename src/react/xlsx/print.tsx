@@ -4,10 +4,10 @@ import type { CellOut, Merge, WorkbookMeta } from '../../core/xlsx/types'
 import type { Printable } from '../file/print'
 import type { Axis } from './axis'
 import { fitNumber, fontPx } from './fit'
+import { fontOf } from './measure'
 import { cssColor, cssPaint } from '../../core/color'
 import { dict } from '../../core/dict'
-import { formatCount } from '../strings'
-import { en, type Strings } from '../strings/en'
+import { type Strings } from '../strings/en'
 
 export interface SheetLayout {
   rows: number
@@ -41,7 +41,7 @@ async function sheetRows(client: DocumentClient, sheet: number, rows: number): P
 const VALIGN: Record<string, CSSProperties['verticalAlign']> = dict({ 'flex-start': 'top', center: 'middle', 'flex-end': 'bottom' })
 
 /** The sheet as a table (used range, hidden rows / columns left out), fitted to the paper width. */
-export async function sheetPrintable(client: DocumentClient, sheet: number, l: SheetLayout, meta: WorkbookMeta, t: Strings = en): Promise<Printable> {
+export async function sheetPrintable(client: DocumentClient, sheet: number, l: SheetLayout, meta: WorkbookMeta, t: Strings): Promise<Printable> {
   if (!l.done) throw new Error(t.xlsx.sheetLoading)
   const data = await sheetRows(client, sheet, Math.min(l.rows, MAX_PRINT_ROWS))
   let lastR = -1
@@ -99,10 +99,10 @@ export async function sheetPrintable(client: DocumentClient, sheet: number, l: S
       const cell = cells.get(c)
       const m = anchors.get(key(r, c))
       const [, raw = '', si = 0, kind = 0, color] = cell ?? []
-      const { textAlign, textRotate: _rot, alignItems, whiteSpace, ...rest } = (meta.styles[si] ?? {}) as Record<string, string | number>
+      const { textAlign, textRotate: _rot, shrinkToFit: _shrink, alignItems, whiteSpace, ...rest } = (meta.styles[si] ?? {}) as Record<string, string | number>
       // like the grid: fewer decimals or ### when a number does not fit
       const w = m ? l.colAxis.pos(Math.min(m.c1, lastC) + 1) - l.colAxis.pos(m.c0) : l.colAxis.size(c)
-      const text = kind === 1 && raw ? fitNumber(raw, w - 6, fontPx(rest.fontSize, basePx)) : raw
+      const text = kind === 1 && raw ? fitNumber(raw, w - 6, fontPx(rest.fontSize, basePx), fontOf(rest, meta.baseFont as Record<string, string>, basePx)) : raw
       const align = (textAlign as string) ?? (kind === 1 ? 'right' : kind === 2 ? 'center' : 'left')
       // like the grid: left-aligned text runs over empty neighbours (and past the last column)
       const next = cols[k + 1]
@@ -161,6 +161,6 @@ export async function sheetPrintable(client: DocumentClient, sheet: number, l: S
     node,
     size: landscape ? 'landscape' : 'auto',
     margin: '12mm',
-    notice: l.rows > MAX_PRINT_ROWS ? t.xlsx.printOnlyFirst(formatCount(t, MAX_PRINT_ROWS)) : undefined,
+    notice: l.rows > MAX_PRINT_ROWS ? t.xlsx.printOnlyFirst(MAX_PRINT_ROWS, t.locale) : undefined,
   }
 }

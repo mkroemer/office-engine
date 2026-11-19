@@ -9,7 +9,7 @@ import {
   escAttr, escText, type RChild, type RNode,
 } from '../raw'
 import { EMU_PER_PX } from '../units'
-import type { PptxPresentation } from './parser'
+import type { PartPatch, PptxPresentation } from './parser'
 import { COMMENT_EXT_RE, isCommentRel } from './comments'
 import type { Box, PresentationMeta, ShapeOp, SlideModel, SlideOp } from './types'
 import { dict } from '../dict'
@@ -168,11 +168,20 @@ async function editSlide(pres: PptxPresentation, index: number, fn: (nodes: RChi
   return pres.slide(index)
 }
 
-/** undoes / redoes the last shape edit; returns the slide index and its new model */
-export async function undoShapes(pres: PptxPresentation, redo = false): Promise<{ index: number; model: SlideModel } | null> {
+/** undoes / redoes the last edit (a shape edit, or a change of the slide list); returns the slide shown and its model */
+export async function undoShapes(pres: PptxPresentation, redo = false): Promise<{ index: number; model: SlideModel; meta?: PresentationMeta } | null> {
   const e = (redo ? pres.redoStack : pres.undoStack).pop()
   if (!e) return null
   ;(redo ? pres.undoStack : pres.redoStack).push(e)
+  pres.touched = true
+  if (e.parts) {
+    for (const x of e.parts) pres.pkg.setPart(x.path, redo ? x.after : x.before)
+    // the comments of a deleted slide come back with it (and go again on redo)
+    for (const c of e.gone ?? []) pres.comments.set(c.id, redo ? null : c)
+    const meta = await refreshMeta(pres)
+    const index = Math.max(0, Math.min(meta.count - 1, e.focus?.[redo ? 1 : 0] ?? 0))
+    return { index, model: await pres.slide(index), meta: { ...meta, slides: meta.slides.map((x) => ({ ...x })) } }
+  }
   pres.pkg.setPart(e.path, redo ? e.after : e.before)
   const index = pres.meta.slides.findIndex((s) => s.path === e.path)
   if (index < 0) return null
@@ -386,7 +395,54 @@ async function insertSlidePart(pres: PptxPresentation, after: number, xml: strin
   pres.pkg.setPart(pres.mainPath, serialize(nodes))
 }
 
+/** the text of a part, null when it is not there */
+const textOrNull = async (pres: PptxPresentation, path: string) => (pres.pkg.has(path) ? pres.pkg.text(path) : null)
+
+/**
+ * A slide list edit, undoable: what it touched (the presentation, its relationships and content types, the slide's
+ * part and the parts that go with it) is kept as before / after text, with the comments it removed.
+ */
 export async function slideOp(pres: PptxPresentation, op: SlideOp): Promise<PresentationMeta> {
+  const src = pres.meta.slides[op.op === 'add' ? -1 : op.op === 'move' ? op.from : op.index]
+  const watch = [pres.mainPath, relsPathFor(pres.mainPath), '[Content_Types].xml']
+  if (src) {
+    watch.push(src.path, relsPathFor(src.path))
+    if (op.op === 'delete') {
+      for (const r of (await pres.pkg.rels(src.path)).values()) {
+        if (!r.external && (r.type.endsWith('/notesSlide') || isCommentRel(r.type))) watch.push(r.target, relsPathFor(r.target))
+      }
+    }
+  }
+  const known = new Set(pres.pkg.paths())
+  const before = new Map<string, string | null>()
+  for (const w of new Set(watch)) before.set(w, await textOrNull(pres, w))
+  const commentsBefore = pres.comments.list()
+  const meta = await applySlideOp(pres, op)
+  // parts the operation created had no text before
+  for (const w of pres.pkg.paths()) if (!known.has(w) && !before.has(w)) before.set(w, null)
+  const parts: PartPatch[] = []
+  for (const [path, was] of before) {
+    const now = await textOrNull(pres, path)
+    if (now !== was) parts.push({ path, before: was, after: now })
+  }
+  if (parts.length) {
+    const kept = new Set(pres.comments.list().map((c) => c.id))
+    const gone = commentsBefore.filter((c) => !kept.has(c.id))
+    // the slide to show after undo / redo
+    const focus: [number, number] =
+      op.op === 'add' ? [Math.max(0, op.after), Math.max(0, op.after + 1)]
+      : op.op === 'duplicate' ? [op.index, op.index + 1]
+      : op.op === 'delete' ? [op.index, Math.max(0, op.index - 1)]
+      : op.op === 'move' ? [op.from, op.to]
+      : [op.index, op.index]
+    pres.undoStack.push({ path: '', before: '', after: '', parts, gone: gone.length ? gone : undefined, focus })
+    if (pres.undoStack.length > 200) pres.undoStack.shift()
+    pres.redoStack = []
+  }
+  return meta
+}
+
+async function applySlideOp(pres: PptxPresentation, op: SlideOp): Promise<PresentationMeta> {
   const slides = pres.meta.slides
   pres.touched = true
   switch (op.op) {

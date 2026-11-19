@@ -86,6 +86,47 @@ describe('viewing', () => {
     expect(v.errors).toEqual([])
   })
 
+  test('visio: pages as slides, read-only, shapes and text drawn, downloads as PowerPoint; File → Open takes a drawing', async () => {
+    const v = await viewer({ src: 'samples/sample.vsdx', editable: true })
+    const { page } = v
+    expect(await v.title()).toBe('sample.vsdx')
+    expect(await page.locator('.de-badge').innerText()).toBe('VISIO')
+    expect(await v.barButton('Edit').count()).toBe(0)
+    expect(await page.locator('.de-ebar').count()).toBe(0)
+    // the background page is under both pages, not a slide of its own
+    await page.waitForFunction(() => /Slide 1 of 2/.test(document.querySelector('.de-bar')?.textContent ?? ''))
+    expect(await page.locator('.de-thumb').count()).toBe(2)
+    const first = page.locator('.de-slide-inner').first()
+    const text = await first.innerText()
+    for (const t of ['Order handling', 'Receive order', 'In stock?', 'Pick, pack and ship', 'yes', 'no']) expect(text).toContain(t)
+    // every shape is a path: the masters' fills are painted, the connectors end in line ends
+    expect(await first.locator('svg path[fill="#dbeafe"]').count()).toBe(3)
+    expect(await first.locator('svg path[marker-end]').count()).toBe(7)
+    // a label sits on its connector: its middle is on the line
+    const label = (await first.getByText('yes', { exact: true }).boundingBox())!
+    const link = (await first.locator('svg path[marker-end]').nth(2).boundingBox())!
+    expect(Math.abs(label.y + label.height / 2 - (link.y + link.height / 2))).toBeLessThan(3)
+    expect(label.x).toBeGreaterThan(link.x)
+    expect(label.x + label.width).toBeLessThan(link.x + link.width)
+
+    await page.locator('.de-thumb').nth(1).click()
+    await page.waitForFunction(() => /Slide 2 of 2/.test(document.querySelector('.de-bar')?.textContent ?? ''))
+    const second = page.locator('.de-slide-inner').nth(1)
+    expect(await second.innerText()).toContain('Masters, groups and themes are followed')
+    expect(await second.innerText()).not.toContain('Hidden layer')
+    expect(await second.locator('img').count()).toBe(1)
+
+    const dl = await v.downloadAs('PowerPoint presentation')
+    expect(dl.name).toBe('sample.pptx')
+    expect(dl.bytes.subarray(0, 2).toString()).toBe('PK')
+
+    // opened from the File menu, like any other file
+    await v.chooseFile(() => v.menu('Open…'), `${import.meta.dir}/../playground/public/samples/sample.vsdx`)
+    await page.waitForFunction(() => /Slide 1 of 2/.test(document.querySelector('.de-bar')?.textContent ?? ''))
+    expect(await page.locator('.de-badge').innerText()).toBe('VISIO')
+    expect(v.errors).toEqual([])
+  })
+
   test('numbers: tables as sheets, read-only, downloads as Excel', async () => {
     const v = await viewer({ src: 'samples/sample.numbers', editable: true })
     const { page } = v
@@ -224,7 +265,7 @@ describe('viewing', () => {
     }
   })
 
-  test('a Markdown file edited as a document is saved as Markdown, its source built again', async () => {
+  test('a Markdown file edited as a document is saved as Markdown, the edited part built again', async () => {
     const v = await viewer({ src: 'samples/sample.md', onSave: true })
     const { page } = v
     await page.locator('.de-page-inner').first().waitFor()
@@ -236,7 +277,9 @@ describe('viewing', () => {
     const md = saved.bytes.toString('utf8')
     expect(md).toStartWith('# Field notes (edited)\n')
     expect(md).toContain('- Survey the northern sites')
-    expect(md).toContain('![Mermaid diagram](data:image/svg+xml;base64,')
+    // what was not edited stays as the file has it: the table and the diagram's source
+    expect(md).toContain('| North | 1280     | done   |')
+    expect(md).toContain('```mermaid\nflowchart LR')
     // the source pane shows the Markdown built from the document
     await page.getByTestId('de-code-toggle').click()
     const input = page.getByTestId('de-source-input')
@@ -265,9 +308,11 @@ describe('viewing', () => {
     const html = saved.bytes.toString('utf8')
     expect(html).toStartWith('<!doctype html>')
     expect(html).toContain('<h1>Sample page 2</h1>')
-    expect(html).toContain('<li>Edit the document, or its markup under <strong>Code</strong></li>')
+    // the rest of the page as the file has it
+    expect(html).toContain('<li>Edit the document, or its markup under <b>Code</b></li>')
     expect(html).toContain('<a href="https://p10node.github.io/office-engine/">links</a>')
-    expect(html).toContain('<img src="data:image/svg+xml;base64,')
+    expect(html).toContain('<pre class="mermaid">')
+    expect(html).toContain('<title>Sample page</title>')
     expect(v.errors).toEqual([])
   })
 

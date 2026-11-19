@@ -1,6 +1,6 @@
 /** Tokenizer for OOXML formula text (no leading '='). Tokens carry source spans so transforms can splice text. */
 import { colIndex, normalizeRef, type RefAddr } from './refs'
-import { MAX_COL, MAX_ROW, type ErrorCode } from './types'
+import { MAX_COL, MAX_REF_ROW, MAX_ROW, type ErrorCode } from './types'
 
 export class FormulaSyntaxError extends Error {
   constructor(
@@ -39,6 +39,8 @@ const ERRS: [string, ErrorCode][] = [
   ['#N/A', '#N/A'],
   ['#NUM!', '#NUM!'],
   ['#NULL!', '#NULL!'],
+  ['#SPILL!', '#SPILL!'],
+  ['#CALC!', '#CALC!'],
 ]
 
 const IDENT = /[\w.$\\\u00A1-\uFFFF]/
@@ -58,7 +60,7 @@ const isIdent = (ch: string | undefined) => ch !== undefined && IDENT.test(ch)
 
 function row(s: string): number {
   const n = Number(s) - 1
-  return n >= 0 && n <= MAX_ROW ? n : -1
+  return n >= 0 && n <= MAX_REF_ROW ? n : -1
 }
 function col(s: string): number {
   const n = colIndex(s)

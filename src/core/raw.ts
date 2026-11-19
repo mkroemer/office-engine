@@ -2,7 +2,7 @@
  * Byte-faithful XML tree: keeps qualified names, raw attribute text and raw
  * (still-escaped) text, so untouched parts serialize back exactly as read.
  */
-import { MAX_XML_DEPTH, tooDeep } from './xml'
+import { choiceUnderstood, MAX_XML_DEPTH, tooDeep } from './xml'
 
 export interface RNode {
   q: string
@@ -207,17 +207,22 @@ export function textContent(n: RChild): string {
  * Preorder walk mirroring TreeBuilder semantics: mc:Fallback skipped, only the first
  * mc:Choice of an mc:AlternateContent is visited. `visit` returns true to stop descending.
  */
-export function walkOoxml(n: RNode, visit: (node: RNode, parent: RNode, index: number) => boolean | void): void {
+export function walkOoxml(n: RNode, visit: (node: RNode, parent: RNode, index: number) => boolean | void, understood?: ReadonlySet<string>): void {
   const rec = (node: RNode) => {
     let choiceSeen = false
     const isAlt = local(node.q) === 'AlternateContent'
+    // with `understood`, as TreeBuilder: the first choice whose requirements are understood, else the fallback
+    const taken = isAlt && understood ? node.c.find((x) => isNode(x) && local(x.q) === 'Choice' && choiceUnderstood(getAttr(x, 'Requires'), understood)) : undefined
     for (let i = 0; i < node.c.length; i++) {
       const c = node.c[i]
       if (!isNode(c)) continue
       const l = local(c.q)
-      if (l === 'Fallback') continue
+      if (l === 'Fallback') {
+        if (isAlt && understood && !taken) rec(c)
+        continue
+      }
       if (isAlt && l === 'Choice') {
-        if (choiceSeen) continue
+        if (understood ? c !== taken : choiceSeen) continue
         choiceSeen = true
         rec(c)
         continue

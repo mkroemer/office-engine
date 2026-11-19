@@ -102,6 +102,22 @@ describe('docx editing', () => {
     expect(p.marker?.text).toMatch(/^1[.)]$/)
   })
 
+  test('removing bullets refreshes the toolbar without reselection (#19)', async () => {
+    const v = await open()
+    await v.selectText('document')
+    const bullets = v.btn('Bulleted list')
+    const active = v.page.locator('button[aria-label^="Bulleted list"][aria-pressed="true"]')
+    await bullets.click()
+    await active.waitFor()
+    await bullets.click()
+    await active.waitFor({ state: 'hidden' })
+    expect(await bullets.getAttribute('aria-pressed')).toBe('false')
+    const p = (await docxParas((await v.save()).bytes)).find((x) => paraText(x).startsWith('This document'))!
+    expect(p.lst).toBeUndefined()
+    expect(p.marker).toBeUndefined()
+    expect(v.errors).toEqual([])
+  })
+
   test('text and highlight colors', async () => {
     const v = await open()
     await v.selectText('document')
@@ -385,4 +401,73 @@ describe('docx keyboard focus', () => {
     expect((await v.events('dirty')).at(-1)?.dirty).toBe(true)
     expect(v.errors).toEqual([])
   })
+})
+
+describe('docx selection across pages', () => {
+  // pages are virtualized: the page a selection starts on stays mounted while the view scrolls away from it
+  for (const editable of [false, true]) {
+    test(`a selection made upwards over three pages keeps its start (${editable ? 'editing' : 'viewing'})`, async () => {
+      const v = await viewer({ src: 'samples/sample.docx', editable }, { viewport: { width: 1200, height: 700 } })
+      // a document of several pages: a text file of many paragraphs
+      const text = Array.from({ length: 400 }, (_, i) => `Paragraph ${i + 1} of a document long enough to fill a few pages.`).join('\n')
+      await v.chooseFile(() => v.menu('Open…'), { name: 'long.txt', mimeType: 'text/plain', buffer: Buffer.from(text) })
+      await v.page.locator('.de-pages', { hasText: 'Paragraph 1 of' }).waitFor()
+      await v.page.waitForFunction(() => /Page 1 of (?:[5-9]|\d\d) ·/.test(document.querySelector('.de-bar .de-status')?.textContent ?? ''))
+      if (editable) await v.page.locator('.de-ebar').waitFor()
+      const sc = v.page.locator('.de-pages').locator('xpath=..')
+      const scrollTo = async (n: number) => {
+        await sc.evaluate((el, n) => {
+          const pages = el.querySelector<HTMLElement>('.de-pages')!
+          const h = pages.querySelector<HTMLElement>('.de-page')!.offsetHeight + 16
+          el.scrollTop = (n - 1) * h
+        }, n)
+        await v.page.waitForTimeout(250)
+      }
+      await scrollTo(5)
+      // anchor at the end of page 5, the focus is taken upwards page by page (a drag, or Shift+click after scrolling)
+      const extend = (n: number, start: boolean) =>
+        v.page.evaluate(
+          ([n, start]) => {
+            const texts = (el: Element) => {
+              const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+              const out: Text[] = []
+              for (let t = w.nextNode(); t; t = w.nextNode()) if (t.textContent && !t.parentElement!.closest('.de-hf')) out.push(t as Text)
+              return out
+            }
+            const all = texts(document.querySelector(`.de-page[data-page="${n}"]`)!)
+            const s = getSelection()!
+            if (start) {
+              const last = all[all.length - 1]
+              s.setBaseAndExtent(last, last.length, all[0], 0)
+            } else s.extend(all[0], 0)
+          },
+          [n, start] as const,
+        )
+      await extend(5, true)
+      await v.page.waitForTimeout(150)
+      for (const n of [4, 3]) {
+        await scrollTo(n)
+        await extend(n, false)
+        await v.page.waitForTimeout(150)
+      }
+      const state = () =>
+        v.page.evaluate(() => {
+          const s = getSelection()!
+          const page = (n: Node | null) => (n instanceof Element ? n : n?.parentElement)?.closest<HTMLElement>('.de-page')?.dataset.page
+          return { anchor: page(s.anchorNode), focus: page(s.focusNode), mounted: [...document.querySelectorAll<HTMLElement>('.de-page')].map((p) => p.dataset.page) }
+        })
+      expect(await state()).toMatchObject({ anchor: '5', focus: '3' })
+      // back down: page 4 is mounted again inside the range, page 5 is still its end
+      await scrollTo(5)
+      const back = await state()
+      expect(back).toMatchObject({ anchor: '5', focus: '3' })
+      expect(back.mounted).toContain('4')
+      const picked = await v.page.evaluate(() => {
+        const r = getSelection()!.getRangeAt(0)
+        return [4, 5].map((n) => r.intersectsNode(document.querySelector(`.de-page[data-page="${n}"] .de-page-inner > div:not(.de-hf):not(.de-hf-zone)`)!))
+      })
+      expect(picked).toEqual([true, true])
+      expect(v.errors).toEqual([])
+    })
+  }
 })

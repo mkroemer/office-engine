@@ -97,7 +97,7 @@
   /* source editor (Markdown, HTML, diagrams) */
   --de-src-bg: #ffffff;
   --de-src-gutter: #f6f7f8;
-  --de-src-sel: color-mix(in srgb, var(--de-accent) 25%, transparent);
+  --de-src-sel: var(--de-accent-soft);
   --de-src-font: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --de-src-comment: #6a737d;
   --de-src-keyword: #8e3bc7;
@@ -178,7 +178,6 @@
   --de-cm-quote: #fdd663;
   --de-src-bg: #1b1d20;
   --de-src-gutter: #202327;
-  --de-src-sel: color-mix(in srgb, var(--de-accent) 35%, transparent);
   --de-src-comment: #8b949e;
   --de-src-keyword: #d2a8ff;
   --de-src-string: #7ee787;
@@ -189,6 +188,12 @@
   --de-src-tag: #ff7b72;
   --de-src-meta: #e3b341;
   color-scheme: dark;
+}
+
+/* Custom properties accept unsupported functions as raw tokens, so gate the mixed selection colors. */
+@supports (background: color-mix(in srgb, red, transparent)) {
+  .de-root { --de-src-sel: color-mix(in srgb, var(--de-accent) 25%, transparent); }
+  .de-root.de-dark { --de-src-sel: color-mix(in srgb, var(--de-accent) 35%, transparent); }
 }
 
 /* ---------------------------------------------------------------- chrome */
@@ -391,8 +396,8 @@
 .de-tbl-wrap { position: relative; }
 .de-tbl-wrap > .de-tbl { margin: 0 !important; }
 .de-col-resize { position: absolute; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 2; touch-action: none; }
-.de-col-resize:hover { background: color-mix(in srgb, var(--de-accent) 35%, transparent); }
-.de-tbl td.de-cell-sel { box-shadow: inset 0 0 0 9999px color-mix(in srgb, var(--de-accent) 16%, transparent); }
+.de-col-resize:hover { background: var(--de-accent-soft); background: color-mix(in srgb, var(--de-accent) 35%, transparent); }
+.de-tbl td.de-cell-sel { box-shadow: inset 0 0 0 9999px var(--de-accent-soft); box-shadow: inset 0 0 0 9999px color-mix(in srgb, var(--de-accent) 16%, transparent); }
 .de-tbl td {
   vertical-align: top;
   overflow-wrap: break-word;
@@ -472,6 +477,15 @@
   position: absolute;
   overflow: hidden;
 }
+/* XLSX: pictures and charts over the cells; clicks go through to the cell below */
+.de-xl-pic { position: absolute; z-index: 2; object-fit: fill; pointer-events: none; user-select: none; }
+.de-xl-drawing {
+  position: absolute; z-index: 2; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; padding: 6px; overflow: hidden; border: 1px dashed var(--de-border); border-radius: 4px; background: var(--de-chrome); background: color-mix(in srgb, var(--de-chrome) 94%, transparent);
+  color: var(--de-muted); font: 12px/1.3 system-ui, sans-serif; text-align: center; pointer-events: none;
+}
+.de-xl-drawing svg { color: var(--de-accent); }
+.de-xl-drawing strong { color: var(--de-text); font-weight: 600; }
 .de-gl-h,
 .de-gl-v {
   position: absolute;
@@ -677,7 +691,7 @@
   color: var(--de-ink);
 }
 .de-ebar-it { display: inline-flex; align-items: center; flex: none; }
-.de-ebar-morewrap { margin-left: auto; }
+.de-ebar-morewrap { margin-left: auto; flex: none; }
 .de-tb-pop.de-ebar-more {
   left: auto;
   right: 0;
@@ -918,7 +932,9 @@
 ::highlight(de-cm-draft) { background-color: var(--de-cm-on); }
 .de-range {
   position: absolute;
+  background: var(--de-accent-soft);
   background: color-mix(in srgb, var(--de-accent) 10%, transparent);
+  border: 1px solid var(--de-accent);
   border: 1px solid color-mix(in srgb, var(--de-accent) 60%, transparent);
   pointer-events: none;
   z-index: 2;
@@ -941,7 +957,7 @@
 .de-fx-input:focus { background: var(--de-input-bg); box-shadow: inset 0 -2px 0 var(--de-accent); }
 .de-tb-hint { margin-left: 8px; color: var(--de-muted); font-size: 12px; }
 .de-slide-editable [data-sid] { cursor: text; }
-.de-slide-editable [data-sid]:hover { outline: 1px dashed color-mix(in srgb, var(--de-accent) 60%, transparent); }
+.de-slide-editable [data-sid]:hover { outline: 1px dashed var(--de-accent); outline: 1px dashed color-mix(in srgb, var(--de-accent) 60%, transparent); }
 .de-txt-edit { outline: 2px solid var(--de-accent); outline-offset: 0; caret-color: var(--de-page-ink); cursor: text; z-index: 2; }
 .de-gridpick { display: grid; grid-template-columns: repeat(8, 16px); gap: 3px; }
 .de-gridpick button { width: 16px; height: 16px; padding: 0; border: 1px solid var(--de-border); border-radius: 2px; background: var(--de-pop); cursor: pointer; }
@@ -980,7 +996,7 @@
 }
 .de-grip-c { position: absolute; top: 0; width: 6px; cursor: col-resize; z-index: 3; }
 .de-grip-r { position: absolute; left: 0; height: 6px; cursor: row-resize; z-index: 3; }
-.de-grip-c:hover, .de-grip-r:hover { background: color-mix(in srgb, var(--de-accent) 35%, transparent); }
+.de-grip-c:hover, .de-grip-r:hover { background: var(--de-accent-soft); background: color-mix(in srgb, var(--de-accent) 35%, transparent); }
 .de-ctx {
   position: fixed;
   z-index: 50;
@@ -1027,8 +1043,13 @@
 .de-fref-pt { border-style: dashed; }
 .de-cell-hl { z-index: 4; pointer-events: none; color: var(--de-sheet-ink); overflow: hidden; overflow-wrap: break-word; }
 .de-cell-edit { overflow-wrap: break-word; }
+/* the field that has the keyboard while no cell is edited (see XlsxView): there to receive typed / composed / inserted text */
+.de-cell-sink { position: absolute; z-index: 0; padding: 0; margin: 0; border: 0; outline: none; resize: none; overflow: hidden; opacity: 0; pointer-events: none; background: transparent; caret-color: transparent; }
+/* the corner of the selection: dragged to copy it down / right */
+.de-fill-handle { position: absolute; z-index: 4; box-sizing: border-box; width: 8px; height: 8px; border: 1px solid var(--de-page); background: var(--de-accent); cursor: crosshair; }
+.de-fill-preview { position: absolute; z-index: 3; box-sizing: border-box; border: 1px dashed var(--de-sheet-ink); pointer-events: none; }
 .de-cell-edit-fx { background: transparent; color: transparent; caret-color: var(--de-sheet-ink); box-shadow: none; }
-.de-cell-edit-fx::selection { color: transparent; background: color-mix(in srgb, var(--de-accent) 25%, transparent); }
+.de-cell-edit-fx::selection { color: transparent; background: var(--de-accent-soft); background: color-mix(in srgb, var(--de-accent) 25%, transparent); }
 .de-fassist-at { position: absolute; z-index: 30; }
 .de-fassist {
   min-width: 240px;
@@ -1195,7 +1216,7 @@
 }
 .de-dialog input:focus, .de-dialog textarea:focus { border-color: var(--de-accent); box-shadow: inset 0 0 0 1px var(--de-accent); }
 .de-hf-zone { position: absolute; left: 0; right: 0; z-index: 1; cursor: default; }
-.de-hf-zone:hover { background: color-mix(in srgb, var(--de-accent) 5%, transparent); }
+.de-hf-zone:hover { background: var(--de-accent-soft); background: color-mix(in srgb, var(--de-accent) 5%, transparent); }
 .de-hfd { width: 460px; }
 .de-hfd textarea { min-height: 70px; }
 .de-hfd-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
@@ -1258,7 +1279,7 @@
 .de-collab { display: inline-flex; align-items: center; gap: 8px; flex: none; }
 .de-collab-status { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: var(--de-radius-xl); font-size: 12px; color: var(--de-muted); background: var(--de-head); white-space: nowrap; }
 .de-collab-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--de-status-idle); flex: none; }
-.de-collab-live .de-collab-dot { background: var(--de-status-live); box-shadow: 0 0 0 3px color-mix(in srgb, var(--de-status-live) 18%, transparent); }
+.de-collab-live .de-collab-dot { background: var(--de-status-live); box-shadow: 0 0 0 3px var(--de-status-live); box-shadow: 0 0 0 3px color-mix(in srgb, var(--de-status-live) 18%, transparent); }
 .de-collab-live { color: var(--de-ok); }
 .de-collab-connecting .de-collab-dot,
 .de-collab-syncing .de-collab-dot { background: var(--de-status-busy); animation: de-collab-pulse 1s ease-in-out infinite alternate; }
@@ -1267,6 +1288,11 @@
 .de-collab-error .de-collab-dot { background: var(--de-status-error); }
 @keyframes de-collab-pulse { to { opacity: 0.35; } }
 @media (max-width: 640px) { .de-collab-label { display: none; } }
+/* the bar can hold more buttons than a phone is wide: they wrap onto a second row, the title yields */
+@media (max-width: 640px) {
+  .de-bar { flex-wrap: wrap; row-gap: 6px; }
+  .de-title { flex: 1 1 60px; }
+}
 .de-peers { display: inline-flex; align-items: center; }
 .de-peer {
   display: inline-grid; place-items: center; width: 26px; height: 26px; margin-left: -6px; border-radius: 50%;

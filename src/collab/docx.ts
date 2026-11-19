@@ -15,7 +15,7 @@ import type { DocumentClient } from '../core/worker/client'
 import type { Methods } from '../core/worker/protocol'
 import type { DocState, DocxCommit, DocxEditor } from '../react/docx/DocxEditor'
 import { domFromPos } from '../react/edit/input'
-import { plen, runsText, splitRuns, type Pos, type RRun, type Sel } from '../react/edit/rich'
+import { normalize, plen, runsText, splitRuns, type Pos, type RRun, type Sel } from '../react/edit/rich'
 import { watchHost } from './hosts'
 import type { Adapter, ApplyResult } from './session'
 import { applyComment, revertComment, type CommentOp } from './comments'
@@ -187,7 +187,9 @@ export function spliceRuns(runs: Inline[], at: number, del: number, ins: Inline[
   const d = Math.max(0, Math.min(del, n - a))
   const [left, rest] = splitRuns(runs as RRun[], a)
   const [, right] = splitRuns(rest, d)
-  return [...(left as Inline[]), ...ins, ...(right as Inline[])]
+  // alike neighbours join, as a local edit leaves them: a word typed by the other side arrives one character at a time,
+  // and each run left apart would be written as a revision of its own
+  return normalize([...(left as Inline[]), ...ins, ...(right as Inline[])] as RRun[]) as Inline[]
 }
 
 /** `x` (a position in the text before `prior` replaced [at, at+del) by `ins` chars) after it */
@@ -666,8 +668,8 @@ export class DocxCollab implements Adapter<DocxOp> {
   /** remembers the selection (by paragraph id + text) before the model changes */
   private capture() {
     if (this.snap || !this.host) return
-    const focused = !!this.ed.input.readSel()
-    const sel = this.ed.input.sel()
+    const focused = this.ed.input.focused && !!this.ed.input.readSel()
+    const sel = focused ? this.ed.input.sel() : this.ed.input.lastSel
     const a = sel && this.toD(sel.a)
     const f = sel && this.toD(sel.f)
     if (!a || !f) return
@@ -709,6 +711,7 @@ export class DocxCollab implements Adapter<DocxOp> {
     // keep the caret where the user was; never steal focus from other controls
     this.ed.pendingSel = s.focused ? sel : null
     if (!s.focused) this.ed.input.lastSel = sel
+    this.ed.onSelection(sel)
   }
 
   // ---------------------------------------------------------------- presence

@@ -104,7 +104,7 @@ export function trackEdit(before: Paragraph[], next: Paragraph[], pa0: string, s
     if (t.tc?.k === 'del') kept.push(t)
     else if (t.obj) continue
     else if (t.tc?.k === 'ins' && t.tc.author === mark.author) continue
-    else kept.push({ ...t, tc: { ...mark, k: 'del' } })
+    else kept.push({ ...t, tc: { ...mark, k: 'del', ...(t.tc?.k === 'ins' ? { ins: t.tc } : {}) } })
   }
   const ins: TrackMark = { ...mark, k: 'ins' }
 
@@ -142,7 +142,8 @@ export function resolveRuns(runs: Inline[], a: number, b: number, accept: boolea
   const [mid, r] = splitRuns(rest, b - a)
   const kept = (mid as Inline[]).flatMap((x) => {
     if (!x.tc) return [x]
-    const goes = accept ? x.tc.k === 'del' : x.tc.k === 'ins'
+    // (a deletion of someone's insertion goes either way: accepted, the deletion takes it out; rejected, so does the insertion)
+    const goes = accept ? x.tc.k === 'del' : x.tc.k === 'ins' || !!x.tc.ins
     if (goes) return []
     const { tc: _tc, ...plain } = x
     return [plain as Inline]

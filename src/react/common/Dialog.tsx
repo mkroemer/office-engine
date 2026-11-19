@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useStrings } from '../strings'
 import { DefaultDialog, DefaultToast, useHostUI, type DialogAction } from '../ui'
 
@@ -21,9 +21,7 @@ export function PromptDialog({ spec, onClose }: { spec: PromptSpec; onClose: () 
   const t = useStrings()
   const Dialog = useHostUI().Dialog ?? DefaultDialog
   const [v, setV] = useState(spec.initial ?? '')
-  const ref = useRef<HTMLInputElement & HTMLTextAreaElement>(null)
-  useEffect(() => {
-    const el = ref.current
+  const ref = useCallback((el: HTMLInputElement | HTMLTextAreaElement | null) => {
     el?.focus()
     el?.select()
   }, [])
@@ -36,6 +34,7 @@ export function PromptDialog({ spec, onClose }: { spec: PromptSpec; onClose: () 
       ? [
           {
             label: spec.extra.label,
+            extra: true,
             onClick: () => {
               onClose()
               spec.extra!.run()
@@ -44,7 +43,7 @@ export function PromptDialog({ spec, onClose }: { spec: PromptSpec; onClose: () 
         ]
       : []),
     { label: t.common.cancel, onClick: onClose },
-    { label: spec.ok ?? t.common.ok, primary: true, submit: true },
+    { label: spec.ok ?? t.common.ok, primary: true, submit: true, onClick: done },
   ]
   return (
     <Dialog title={spec.title} onClose={onClose} onSubmit={done} actions={actions}>

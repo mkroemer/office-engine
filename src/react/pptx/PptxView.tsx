@@ -6,9 +6,11 @@ import { useFileOps, useViewer, useSelectAll } from '../common/Slots'
 import { slidesToText } from '../file/text'
 import { Status } from '../common/Status'
 import { ZoomControl, type Zoom } from '../common/ZoomControl'
-import { useViewCommands } from '../controller'
+import { useViewCommands, useControllerObserved } from '../controller'
 import { applyPptx, pptxFormat } from '../edit/format'
+import type { Sel } from '../edit/rich'
 import { getSel } from '../edit/input'
+import { plen } from '../edit/rich'
 import { PptxEditor } from './PptxEditor'
 import { PptxToolbar, type AlignTo, type Arrange, type Rotate, type SlideCmd } from './PptxToolbar'
 import { ContextMenu, MOD, type MenuItem } from '../common/ContextMenu'
@@ -177,7 +179,9 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
   const viewer = useViewer()
   const str = useStrings()
   const meta = client.info.pptx as PresentationMeta
+  const editor = useMemo(() => new PptxEditor(client), [client])
   useFileOps({
+    flush: () => editor.flush(),
     printable: async () => {
       const m = client.info.pptx as PresentationMeta
       // hidden flags are known once a slide is parsed: filter on the models
@@ -214,12 +218,11 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
   const [zoom, setZoom] = useState<Zoom>(initialZoom)
   const showThumbs = thumbnails && !viewer.headless && rootSize.w >= 720 && meta.count > 1
   const [, bump] = useForceUpdate()
-  const editor = useMemo(() => new PptxEditor(client), [client])
   const caretAt = useRef<{ x: number; y: number } | null>(null)
   const textRoot = useRef<HTMLDivElement | null>(null)
   const slidesRef = useRef<HTMLDivElement>(null)
   const [selected, setSelected] = useState<{ slide: number; top: number } | null>(null)
-  const [drag, setDrag] = useState<{ slide: number; top: number; mode: DragMode; sx: number; sy: number; box: Box; cur: Box; moved: boolean; sid?: number; px: number; py: number } | null>(null)
+  const [drag, setDrag] = useState<{ slide: number; top: number; mode: DragMode; sx: number; sy: number; box: Box; cur: Box; moved: boolean; sid?: number; cell?: [number, number]; px: number; py: number } | null>(null)
   const [slidesVer, setSlidesVer] = useState(0)
   const [presenting, setPresenting] = useState<number | null>(null)
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
@@ -259,6 +262,7 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
   useEffect(() => {
     editor.onChange = bump
     editor.onDirty = () => viewer.setDirty(true)
+    editor.onCellMove = (d) => moveCell(d)
     editor.onCommitted = (slide, m) => putSlide(client, slide, m)
     editor.shortcut = (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
@@ -276,7 +280,7 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
     if (!viewer.editable) stopEditing()
     return () => editor.end()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewer.editable])
+  }, [editor, viewer.editable])
 
   // keyboard first: slide navigation and shortcuts work without a click (a focused host page control keeps the focus)
   useEffect(() => void claimFocus(scrollRef.current), []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -317,6 +321,7 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
     editor.active && editor.text()
       ? {
           sid: editor.sid,
+          cell: editor.cell,
           text: editor.text()!,
           edit: {
             root: (el) => {
@@ -351,18 +356,39 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
     const sel = editor.pendingSel
     if (sel) {
       editor.pendingSel = null
-      editor.input.restore(sel)
+      const noRefocus = editor.pendingNoRefocus
+      editor.pendingNoRefocus = false
+      editor.input.restore(sel, noRefocus ? 'preserve' : true)
     }
   })
 
   const modelOf = (i: number) => cacheFor(client).models.get(i)
 
-  const beginText = (index: number, sid: number, x: number, y: number) => {
-    const el = modelOf(index)?.els.find((e) => e.t === 'shape' && e.sid === sid)
-    if (!el || el.t !== 'shape' || !el.text) return
-    editor.begin(index, sid, el.text)
+  const beginText = (index: number, sid: number, x: number, y: number, cell?: [number, number]) => {
+    const el = modelOf(index)?.els.find((e) => (cell ? e.t === 'table' : e.t === 'shape') && 'sid' in e && e.sid === sid)
+    const text = el?.t === 'table' ? (cell ? el.rows[cell[0]]?.cells[cell[1]]?.text : undefined) : el?.t === 'shape' ? el.text : undefined
+    if (!el || !text) return
+    editor.begin(index, sid, text, cell)
     caretAt.current = { x, y }
     bump()
+  }
+
+  /** Tab / Shift+Tab in a table cell: the next / previous cell that holds text (no row is added past the last one) */
+  const moveCell = (d: 1 | -1) => {
+    const { slide, sid, cell } = editor
+    const t = modelOf(slide)?.els.find((e) => e.t === 'table' && e.sid === sid)
+    if (!cell || t?.t !== 'table') return
+    const all: [number, number][] = []
+    t.rows.forEach((r, ri) => r.cells.forEach((c, ci) => c.text && !c.hidden && all.push([ri, ci])))
+    const i = all.findIndex((x) => x[0] === cell[0] && x[1] === cell[1])
+    const to = all[i + d]
+    if (!to) return
+    beginText(slide, sid, 0, 0, to)
+    // the caret goes to the end of the cell's text
+    caretAt.current = null
+    const k = editor.paras.length - 1
+    const at = { pa: String(k), o: plen(editor.paras[k].runs) }
+    editor.pendingSel = { a: at, f: at }
   }
 
   const onSlideMouseDown = (index: number, e: React.MouseEvent) => {
@@ -382,7 +408,8 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
     setSelected({ slide: index, top })
     if (!box) return
     const sidEl = t.closest('[data-sid]') as HTMLElement | null
-    setDrag({ slide: index, top, mode: 'move', sx: e.clientX, sy: e.clientY, box, cur: box, moved: false, sid: sidEl ? Number(sidEl.dataset.sid) : undefined, px: e.clientX, py: e.clientY })
+    const cellAt = sidEl?.dataset.cell?.split(',').map(Number)
+    setDrag({ slide: index, top, mode: 'move', sx: e.clientX, sy: e.clientY, box, cur: box, moved: false, sid: sidEl ? Number(sidEl.dataset.sid) : undefined, cell: cellAt?.length === 2 ? [cellAt[0], cellAt[1]] : undefined, px: e.clientX, py: e.clientY })
   }
 
   const runShapes = async (slide: number, ops: ShapeOp[], selectNew = false) => {
@@ -414,7 +441,7 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
       setDrag(null)
       if (d.moved) void runShapes(d.slide, [{ op: 'xfrm', top: d.top, box: d.cur }])
       // a click on text edits it (Esc then selects the whole shape, like PowerPoint)
-      else if (d.mode === 'move' && d.sid !== undefined) beginText(d.slide, d.sid, d.px, d.py)
+      else if (d.mode === 'move' && d.sid !== undefined) beginText(d.slide, d.sid, d.px, d.py, d.cell)
     }
     window.addEventListener('mousemove', move)
     window.addEventListener('mouseup', up, { once: true })
@@ -462,14 +489,26 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
     Object.assign(meta, next)
     resetSlides(client)
     viewer.setDirty(true)
+    // the slide list changes go through the same undo as shape edits
+    setUndoDepth((d) => d + 1)
     setSlidesVer((v) => v + 1)
     if (goTo !== undefined) requestAnimationFrame(() => go(goTo))
   }
 
   const undoShapes = async (redo: boolean) => {
+    // text typed a moment ago is written first: it is the newest edit
+    await editor.flush().catch(() => undefined)
     const r = await client.call('pptx.undo', redo)
     if (!r) return
+    if (r.meta) {
+      // the slide list changed: every slide is read again
+      stopEditing()
+      Object.assign(meta, r.meta)
+      resetSlides(client)
+      setSlidesVer((v) => v + 1)
+    }
     putSlide(client, r.index, r.model)
+    viewer.setDirty(true)
     setUndoDepth((d) => Math.max(0, d + (redo ? 1 : -1)))
     setSelected(null)
     go(r.index)
@@ -601,12 +640,7 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
   const { ctl, headless } = viewer
   // slide titles for the outline, read only while a host reads the controller: from the slides' XML in one call
   // once the first slides are shown, then from each slide model an edit puts in the cache
-  const [observed, setObserved] = useState(() => !!ctl?.observed)
-  useEffect(() => {
-    if (!ctl) return
-    if (ctl.observed) setObserved(true)
-    return ctl.watchObserved(() => setObserved(true))
-  }, [ctl])
+  const observed = useControllerObserved(ctl)
   const [titles, setTitles] = useState<string[]>([])
   useEffect(() => {
     if (!observed) return
@@ -644,7 +678,8 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
   useEffect(() => {
     ctl?.update({ canUndo: viewer.editable && (undoDepth > 0 || editor.active), canRedo: viewer.editable })
   })
-  useViewCommands(ctl, {
+  const publishedSelection = useRef<Sel | null>(null)
+  const publishFormat = useViewCommands(ctl, {
     setZoom,
     goto: (id) => go(Number(id)),
     gotoPage: (n) => go(n - 1),
@@ -652,19 +687,26 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
     redo: () => viewer.editable && (editor.active ? editor.redo() : void undoShapes(true)),
     present: () => setPresenting(current),
     format: (c) => {
-      if (viewer.editable && editor.active) applyPptx(editor, c)
+      const sel = publishedSelection.current
+      if (viewer.editable && editor.active && sel) editor.input.withFormatSelection(sel, () => applyPptx(editor, c))
     },
   })
   // formatting reaches text being edited; a shape that is only selected has none
   useEffect(() => {
     if (!ctl) return
-    if (!viewer.editable) return ctl.update({ format: null })
-    const off = editor.subscribeState((s) => ctl.update({ format: s && pptxFormat(s) }))
+    if (!viewer.editable) return publishFormat(null)
+    const off = editor.subscribeState((s) => {
+      const sel = s && editor.input.formatSelection()
+      publishedSelection.current = sel
+      const current = sel && editor.state(sel)
+      publishFormat(current ? pptxFormat(current) : null)
+    })
     return () => {
       off()
-      ctl.update({ format: null })
+      publishedSelection.current = null
+      publishFormat(null)
     }
-  }, [ctl, editor, viewer.editable])
+  }, [ctl, editor, viewer.editable, publishFormat])
 
   // ---- comments: a thread points at a point of a slide ----
   const cm = useCommentsCtl()
@@ -672,7 +714,7 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
   const commentAt = (i: number, x: number, y: number): PendingComment | null => {
     const s = meta.slides[i]
     if (!s) return null
-    return { quote: `Slide ${i + 1}`, at: { slide: s.path, x: Math.max(0, Math.min(meta.w - 1, x)), y: Math.max(0, Math.min(meta.h - 1, y)) } }
+    return { quote: (cm?.t ?? str).pptx.slideNumber(i + 1, (cm?.t ?? str).locale), at: { slide: s.path, x: Math.max(0, Math.min(meta.w - 1, x)), y: Math.max(0, Math.min(meta.h - 1, y)) } }
   }
   const cmLive = useRef({ selected, current, go })
   cmLive.current = { selected, current, go }
@@ -685,7 +727,7 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
     }
     cm.setHost({
       kind: 'pptx',
-      hint: str.pptx.commentHint,
+      hint: () => cm.t.pptx.commentHint,
       pending: () => {
         const { selected, current } = cmLive.current
         // the selected shape's top right corner, else the slide's top left
@@ -696,7 +738,7 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
         const out: (PlacedThread & { k: number[] })[] = []
         for (const t of threads) {
           const x = slideOf(t)
-          if (x) out.push({ ...t, quote: `Slide ${x.i + 1}`, k: [x.i, x.a.y, x.a.x] })
+          if (x) out.push({ ...t, quote: cm.t.pptx.slideNumber(x.i + 1, cm.t.locale), k: [x.i, x.a.y, x.a.x] })
         }
         return out.sort((a, b) => a.k[0] - b.k[0] || a.k[1] - b.k[1] || a.k[2] - b.k[2])
       },
@@ -868,7 +910,7 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
             {str.pptx.present}
           </button>
         )}
-        <Status text={str.pptx.status(formatCount(str, current + 1), formatCount(str, meta.count))} onStatus={onStatus} />
+        <Status text={str.pptx.status(current + 1, meta.count, str.locale)} onStatus={onStatus} />
         {viewer.editable && (
           <PptxToolbar
             editor={editor}

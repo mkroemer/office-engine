@@ -1,10 +1,10 @@
 /**
- * The viewer's UI texts in English (the default locale). Every other locale has the same keys (`Strings`);
+ * The viewer's default English UI texts. Every other language has the same keys (`Strings`);
  * values are plain strings, or functions where a text takes numbers or names.
  */
 export const en = {
-  /** BCP 47 tag used for numbers and dates (Intl) */
-  locale: 'en-US',
+  /** BCP 47 tag; undefined preserves legacy formatting (browser dates/counts, ASCII measurements). */
+  locale: undefined as string | undefined,
 
   common: {
     ok: 'OK',
@@ -57,7 +57,7 @@ export const en = {
   newWhat: { docx: 'document', xlsx: 'spreadsheet', pptx: 'presentation' },
 
   kind: { docx: 'Word document', xlsx: 'Excel workbook', pptx: 'PowerPoint presentation' },
-  from: { pages: 'Apple Pages document', keynote: 'Apple Keynote presentation', numbers: 'Apple Numbers spreadsheet' },
+  from: { pages: 'Apple Pages document', keynote: 'Apple Keynote presentation', numbers: 'Apple Numbers spreadsheet', visio: 'Microsoft Visio drawing' },
   converted: {
     doc: 'Word 97-2003 document',
     xls: 'Excel 97-2003 workbook',
@@ -123,8 +123,9 @@ export const en = {
     close: 'Close',
     preparingPdf: 'Preparing PDF… choose “Save as PDF” in the print dialog',
     preparing: 'Preparing…',
-    unsupported: (name: string) =>
-      `Cannot open “${name}”: supported files are Word, Excel, PowerPoint (also 97-2003), OpenDocument, RTF, Pages, Keynote, Numbers, CSV, text, Markdown, HTML, SVG, Mermaid, PlantUML and Graphviz (also gzip-compressed: .svgz, .csv.gz)`,
+    /** `what`: what the file is instead, where its first bytes tell (a ZIP archive, an executable, ...) */
+    unsupported: (name: string, what?: string) =>
+      `Cannot open “${name}”${what ? ` (it is ${what})` : ''}: supported files are Word, Excel, PowerPoint (also 97-2003), OpenDocument, RTF, Pages, Keynote, Numbers, Visio, CSV, text, Markdown, HTML, SVG, Mermaid, PlantUML and Graphviz (also gzip-compressed: .svgz, .csv.gz)`,
   },
 
   zoom: {
@@ -211,8 +212,8 @@ export const en = {
   },
 
   docx: {
-    status: (page: string, pages: string, words: string) => `Page ${page} of ${pages} · ${words} words`,
-    statusLoading: (page: string, pages: string) => `Page ${page} of ${pages}+ · loading…`,
+    status: (page: number, pages: number, words: number, locale: string | undefined = undefined) => `Page ${locale ? page.toLocaleString(locale) : page} of ${locale ? pages.toLocaleString(locale) : pages} · ${words.toLocaleString(locale)} ${words === 1 ? 'word' : 'words'}`,
+    statusLoading: (page: number, pages: number, locale: string | undefined = undefined) => `Page ${locale ? page.toLocaleString(locale) : page} of ${locale ? pages.toLocaleString(locale) : pages}+ · loading…`,
     pages: 'Pages',
     words: 'Words',
     characters: 'Characters',
@@ -352,19 +353,27 @@ export const en = {
   },
 
   xlsx: {
-    status: (rows: string, cols: string) => `${rows} rows × ${cols} cols`,
+    clipboardCopyBlocked: 'The browser blocked clipboard access: select fewer rows to copy them',
+    pasteLimit: (max: number, total: number, locale: string | undefined = undefined) => `Only the first ${max.toLocaleString(locale)} of the ${total.toLocaleString(locale)} cells were pasted`,
+    fillLimit: (max: number, locale: string | undefined = undefined) => `The selection has more than ${max.toLocaleString(locale)} cells: select fewer to fill them`,
+    mergedPaste: 'Cannot paste here: the cells would fill merged cells. Unmerge them, or paste into one cell.',
+    /** after a merge that dropped `n` values; `undo` is the Undo shortcut */
+    mergeDropped: (n: number, undo: string) => `Merging keeps only the upper-left value of each merged cell: ${n} other value${n > 1 ? 's were' : ' was'} removed. Undo (${undo}) brings ${n > 1 ? 'them' : 'it'} back.`,
+    /** the cell's input field */
+    cell: 'Cell',
+    status: (rows: number, cols: number, locale: string | undefined = undefined) => `${rows.toLocaleString(locale)} ${rows === 1 ? 'row' : 'rows'} × ${cols.toLocaleString(locale)} ${cols === 1 ? 'col' : 'cols'}`,
     statusLoading: ' · loading…',
-    overLimit: (max: string) => ` · over Excel’s ${max}-row limit: save as CSV`,
+    overLimit: (max: number, locale: string | undefined = undefined) => ` · over Excel’s ${max.toLocaleString(locale)}-row limit: save as CSV`,
     sheets: 'Sheets',
-    hiddenSheets: (n: string) => ` (${n} hidden)`,
+    hiddenSheets: (n: number, locale: string | undefined = undefined) => ` (${n.toLocaleString(locale)} hidden)`,
     currentSheet: 'Current sheet',
     usedRange: 'Used range',
-    usedRangeValue: (rows: string, cols: string) => `${rows} rows × ${cols} columns`,
+    usedRangeValue: (rows: number, cols: number, locale: string | undefined = undefined) => `${rows.toLocaleString(locale)} ${rows === 1 ? 'row' : 'rows'} × ${cols.toLocaleString(locale)} ${cols === 1 ? 'column' : 'columns'}`,
     usedRangeLoading: ' (loading)',
     commentHint: 'Select a cell to comment on.',
     addSheet: 'Add sheet',
     renameSheet: 'Rename',
-    duplicateSheet: 'Duplicate name → new sheet',
+    duplicateSheet: 'Duplicate sheet',
     moveLeft: 'Move left',
     moveRight: 'Move right',
     deleteSheet: 'Delete sheet',
@@ -401,6 +410,9 @@ export const en = {
     decLess: 'Decrease decimal places',
     decMore: 'Increase decimal places',
     numberFormat: (name: string) => `Number format: ${name}`,
+    customFormat: 'Custom format…',
+    customFormatTitle: 'Custom number format',
+    formatCode: 'Format code: #,##0 "đ", ddd dd/mm',
     formats: {
       automatic: 'Automatic',
       text: 'Plain text',
@@ -449,8 +461,25 @@ export const en = {
     freezeSel: 'Freeze up to current cell',
     hideGridlines: 'Hide gridlines',
     showGridlines: 'Show gridlines',
-    printOnlyFirst: (n: string) => `Only the first ${n} rows are included`,
+    printOnlyFirst: (n: number, locale: string | undefined = undefined) => `Only the first ${n.toLocaleString(locale)} rows are included`,
     sheetLoading: 'The sheet is still loading — try again in a moment',
+    drawings: {
+      chart: 'Chart',
+      picture: 'Picture',
+      charts: {
+        column: 'Column chart',
+        bar: 'Bar chart',
+        line: 'Line chart',
+        pie: 'Pie chart',
+        doughnut: 'Doughnut chart',
+        area: 'Area chart',
+        scatter: 'Scatter chart',
+        bubble: 'Bubble chart',
+        radar: 'Radar chart',
+        stock: 'Stock chart',
+        surface: 'Surface chart',
+      },
+    },
   },
 
   /** cell and shape formatting shared by the document, sheet and slide toolbars */
@@ -491,7 +520,7 @@ export const en = {
   },
 
   pptx: {
-    status: (slide: string, count: string) => `Slide ${slide} of ${count}`,
+    status: (slide: number, count: number, locale: string | undefined = undefined) => `Slide ${locale ? slide.toLocaleString(locale) : slide} of ${locale ? count.toLocaleString(locale) : count}`,
     slides: 'Slides',
     slideSize: 'Slide size',
     /** shown in an empty text box while editing */
@@ -537,6 +566,7 @@ export const en = {
       wedgeRoundRectCallout: 'Rounded callout',
     },
     slide: 'Slide',
+    slideNumber: (n: number, locale: string | undefined = undefined) => `Slide ${locale ? n.toLocaleString(locale) : n}`,
     newSlide: 'New slide',
     duplicateSlide: 'Duplicate slide',
     deleteSlide: 'Delete slide',

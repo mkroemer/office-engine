@@ -36,6 +36,37 @@ describe('theme tokens', () => {
   })
 })
 
+describe('color-mix compatibility', () => {
+  test('mixed source selection tokens are gated by feature support', () => {
+    const gated = css.match(/@supports \(background: color-mix\(in srgb, red, transparent\)\) \{\n([\s\S]*?)\n\}/)
+    expect(gated).not.toBeNull()
+    expect(gated![1]).toContain('.de-root { --de-src-sel: color-mix(in srgb, var(--de-accent) 25%, transparent); }')
+    expect(gated![1]).toContain('.de-root.de-dark { --de-src-sel: color-mix(in srgb, var(--de-accent) 35%, transparent); }')
+    const withoutSupport = css.replace(gated![0], '')
+    // Duplicate custom properties alone would still accept the unsupported function as raw tokens.
+    expect(withoutSupport).not.toMatch(/--de-[\w-]+:\s*color-mix\(/)
+    expect(block('.de-root')).toContain('--de-src-sel: var(--de-accent-soft);')
+    expect(css).toContain('.de-src-input::selection { background: var(--de-src-sel); }')
+  })
+
+  test('each mixed property has an immediately preceding non-mixed fallback', () => {
+    let checked = 0
+    for (const body of css.split(/[{}]/)) {
+      const declarations = body.split(';').map((s) => s.trim()).filter(Boolean)
+      for (const [i, declaration] of declarations.entries()) {
+        const mixed = declaration.match(/^([a-z-]+):\s*.*color-mix\(/)
+        if (!mixed || mixed[1].startsWith('--')) continue
+        const fallback = declarations[i - 1] ?? ''
+        expect(fallback.startsWith(`${mixed[1]}:`)).toBe(true)
+        expect(fallback).not.toContain('color-mix(')
+        expect(fallback).toContain('var(--de-')
+        checked++
+      }
+    }
+    expect(checked).toBeGreaterThan(0)
+  })
+})
+
 describe('themeStyle', () => {
   const theme = {
     mode: 'auto' as const,

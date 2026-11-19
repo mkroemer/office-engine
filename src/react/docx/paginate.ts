@@ -1,4 +1,15 @@
-import type { Block } from '../../core/docx/types'
+import type { Block, DocxMeta, HFKind } from '../../core/docx/types'
+
+/**
+ * The header and footer a page shows (`index`: 0-based) and the editable kind each is: the first page's when "different
+ * first page" is on, else the even pages' when the file has different odd / even ones, else the default. An even page
+ * without an even part shows none, as in Word.
+ */
+export function pageHF(meta: DocxMeta | undefined, index: number): { header?: Block[]; footer?: Block[]; hk: HFKind; fk: HFKind } {
+  if (index === 0 && meta?.titlePg) return { header: meta.firstHeader, footer: meta.firstFooter, hk: 'firstHeader', fk: 'firstFooter' }
+  if (meta?.evenOdd && index % 2 === 1) return { header: meta.evenHeader, footer: meta.evenFooter, hk: 'header', fk: 'footer' }
+  return { header: meta?.header, footer: meta?.footer, hk: 'header', fk: 'footer' }
+}
 
 /** the blocks [start, end) of a page and the height they take */
 export interface PageSlice {

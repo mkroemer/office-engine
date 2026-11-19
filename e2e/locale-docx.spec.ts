@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'bun:test'
-import { de } from '../src/react/strings'
+import { de } from '../src/locales/de'
 import { useBrowser, viewer } from './harness'
 
 useBrowser()
 
 describe('locale: DOCX', () => {
   test('status, toolbar and page setup in German', async () => {
-    const v = await viewer({ src: 'samples/sample.docx', locale: 'de', editable: true })
+    const v = await viewer({ src: 'samples/sample.docx', locale: 'de-DE', editable: true })
     await v.page.locator('.de-ebar').first().waitFor()
     expect(await v.status()).toMatch(/Seite 1 von \d+/)
     expect(await v.btn('Fett').count()).toBe(1)

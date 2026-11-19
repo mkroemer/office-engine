@@ -1,18 +1,22 @@
 /** XLSX collaboration operations (shared by the main-thread adapter and the worker) + their transforms. */
-import type { CellInput, FindOptions, FmtPatch, Range, SheetOp } from '../core/xlsx/types'
+import { renameSheetInFormula, shiftFormula } from '../core/xlsx/formula'
+import type { CellInput, ClipCell, FindOptions, FmtPatch, Range, SheetOp } from '../core/xlsx/types'
 import type { CommentOp } from './comments'
 
 /** sheets are addressed by part path: indexes move when sheets are added / reordered */
 export type PBookOp =
   | { op: 'add'; name?: string; after?: string }
-  | { op: 'rename'; path: string; name: string }
+  /** `was`: the name it had where the rename was made (formulas typed meanwhile elsewhere still say it) */
+  | { op: 'rename'; path: string; name: string; was?: string }
   | { op: 'delete'; path: string }
   | { op: 'move'; path: string; to: number }
+  | { op: 'duplicate'; path: string }
 
 export type XOp =
   | { t: 'set'; id: string; sheet: string; cells: CellInput[] }
   | { t: 'fmt'; id: string; sheet: string; range: Range; patch: FmtPatch }
-  | { t: 'sheet'; id: string; sheet: string; op: SheetOp }
+  /** `name`: the sheet's name where the operation was made, for rows / columns inserted or deleted (formulas typed meanwhile elsewhere read it by that name) */
+  | { t: 'sheet'; id: string; sheet: string; op: SheetOp; name?: string }
   | { t: 'replace'; id: string; sheet: string; query: string; by: string; opts?: FindOptions; at?: { r: number; c: number } }
   | { t: 'book'; id: string; op: PBookOp }
   /** sets the cells changed by op `target` back to their state before (`prev`) or after (`next`) it */
@@ -68,9 +72,18 @@ function shiftSheetOp(op: SheetOp, axis: 'row' | 'col', at: number, n: number): 
     }
     case 'merge':
     case 'unmerge':
+    case 'clear':
     case 'fill': {
       const range = shiftRange(op.range, axis, at, n)
       return range ? { ...op, range } : null
+    }
+    case 'paste': {
+      // the cells go where their top left cell went (they keep their shape)
+      const r = axis === 'row' ? shiftIdx(op.range.r0, at, n) : op.range.r0
+      const c = axis === 'col' ? shiftIdx(op.range.c0, at, n) : op.range.c0
+      if (r === null || c === null) return null
+      if (r === op.range.r0 && c === op.range.c0) return op
+      return { ...op, range: { r0: r, c0: c, r1: r + (op.range.r1 - op.range.r0), c1: c + (op.range.c1 - op.range.c0) } }
     }
     case 'sort': {
       const range = shiftRange(op.range, axis, at, n)
@@ -96,17 +109,60 @@ function shiftSheetOp(op: SheetOp, axis: 'row' | 'col', at: number, n: number): 
   }
 }
 
+/**
+ * The formulas an operation carries (typed ones, pasted ones), each rewritten by `fn`: what was typed while rows
+ * moved or a sheet was renamed elsewhere reads the cells meant, where they are and as they are called now.
+ */
+function mapFormulas(op: XOp, fn: (f: string) => string): XOp {
+  if (op.t === 'set') {
+    let changed = false
+    const cells = op.cells.map((c) => {
+      if (c.input.length < 2 || c.input[0] !== '=') return c
+      const f = fn(c.input.slice(1))
+      if ('=' + f === c.input) return c
+      changed = true
+      return { ...c, input: '=' + f }
+    })
+    return changed ? { ...op, cells } : op
+  }
+  if (op.t === 'sheet' && op.op.op === 'paste') {
+    let changed = false
+    const cells = op.op.cells.map((row) =>
+      row.map((cell): ClipCell => {
+        if (!cell || cell[3] === undefined) return cell
+        const f = fn(cell[3])
+        if (f === cell[3]) return cell
+        changed = true
+        return [cell[0], cell[1], cell[2], f]
+      }),
+    )
+    return changed ? { ...op, op: { ...op.op, cells } } : op
+  }
+  return op
+}
+
 /** `op` adjusted to apply after `prior` (deterministic) */
 export function transformX(op: XOp, prior: XOp): XOp | null {
   if (op.t === 'comment') return transformComment(op, prior)
   if (prior.t === 'book') {
     if (prior.op.op === 'delete' && 'sheet' in op && op.sheet === prior.op.path) return null
+    if (prior.op.op === 'rename' && prior.op.was !== undefined) {
+      const { was, name } = prior.op
+      return mapFormulas(op, (f) => renameSheetInFormula(f, was, name))
+    }
     return op
   }
-  if (prior.t !== 'sheet' || !STRUCTURAL.has(prior.op.op) || !('sheet' in op) || op.sheet !== prior.sheet) return op
+  if (prior.t !== 'sheet' || !STRUCTURAL.has(prior.op.op) || !('sheet' in op)) return op
   const p = prior.op as { op: string; at: number; n: number }
   const axis = p.op.endsWith('Rows') ? 'row' : 'col'
   const n = p.op.startsWith('insert') ? p.n : -p.n
+  if (op.sheet !== prior.sheet) {
+    // on another sheet: its formulas that read the sheet by name follow the rows / columns that moved there
+    const name = prior.name
+    return name === undefined ? op : mapFormulas(op, (f) => shiftFormula(f, { sheet: name, formulaSheet: '\u0000', axis, at: p.at, delta: n }))
+  }
+  // on the sheet itself: the references without a sheet too
+  op = mapFormulas(op, (f) => shiftFormula(f, prior.name === undefined ? { axis, at: p.at, delta: n } : { sheet: prior.name, formulaSheet: prior.name, axis, at: p.at, delta: n }))
   switch (op.t) {
     case 'set': {
       const cells: CellInput[] = []
@@ -154,6 +210,9 @@ const ALL: Range = { r0: 0, c0: 0, r1: Number.MAX_SAFE_INTEGER, c1: Number.MAX_S
 /** a cell edit that enters text with line breaks: the cell is set to wrap (derived style) and its row grows */
 const multiline = (op: XOp) => op.t === 'set' && op.cells.some((c) => c.input.includes('\n'))
 
+/** a cell edit that may give its cell a number format (derived style): a date or a percentage typed into a cell without one */
+const formats = (op: XOp) => op.t === 'set' && op.cells.some((c) => /^\s*[=+@-]|[$€£¥₫₩₹₽₱฿%]|^\s*\d{1,3}(,\d{3})+|^\s*\d{1,4}[-/]\d{1,2}[-/]\d{1,4}/.test(c.input))
+
 export function footprint(op: XOp): { sheet: string; range: Range } | null {
   switch (op.t) {
     case 'set': {
@@ -198,7 +257,7 @@ export function conflictsX(pending: XOp[], remote: XOp[]): boolean {
   if (remote.some((o) => o.t === 'comment' && cids.has(o.cid))) return true
   if (pending.some((o) => o.t === 'revert' || isStructural(o))) return true
   // derived styles are appended to one table: keep its order identical everywhere
-  const styles = (o: XOp) => (o.t === 'fmt' && o.patch.xf === undefined && !o.patch.clear) || multiline(o)
+  const styles = (o: XOp) => (o.t === 'fmt' && o.patch.xf === undefined && !o.patch.clear) || multiline(o) || formats(o)
   if (pending.some(styles) && remote.some(styles)) return true
   const fp = remote.map(footprint)
   return pending.some((p) => {

@@ -5,7 +5,7 @@ useBrowser()
 
 describe('locale: XLSX', () => {
   test('status, toolbar and sheet tab menu in German', async () => {
-    const v = await viewer({ src: 'samples/sample.xlsx', locale: 'de', editable: true })
+    const v = await viewer({ src: 'samples/sample.xlsx', locale: 'de-DE', editable: true })
     await v.page.locator('.de-ebar').first().waitFor()
     expect(await v.status()).toMatch(/Zeilen × \d+ Spalten/)
     expect(await v.btn('Fett').count()).toBe(1)

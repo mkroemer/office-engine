@@ -5,7 +5,7 @@ import type { PptxEditor, PptxFormat } from '../pptx/PptxEditor'
 import { fontName } from './Toolbar'
 
 // The editors' formatting states as the controller's TextFormat, and its commands as editor calls: one formatting
-// API for a host's toolbar, whichever kind of document is open.
+// API for a host's toolbar, whichever kind of document is open. The controller validates each command before dispatch.
 
 const ALIGNS = ['left', 'center', 'right', 'justify'] as const
 const alignOf = (a: string | undefined): TextFormat['align'] => ALIGNS.find((x) => x === a)
@@ -23,8 +23,8 @@ export function applyDocx(ed: DocxEditor, c: FormatCommand) {
   else if (c.op === 'color') ed.setColor(c.color)
   else if (c.op === 'highlight') ed.setHighlight(c.color)
   else if (c.op === 'align') ed.setPara({ align: c.align }, { align: c.align })
-  else if (c.op === 'list') ed.toggleList(c.list)
-  else ed.clearFormat()
+  else if (c.op === 'list') ed.setList(c.list)
+  else if (c.op === 'clear') ed.clearFormat()
 }
 
 export function pptxFormat(s: PptxFormat): TextFormat {
@@ -38,8 +38,8 @@ export function applyPptx(ed: PptxEditor, c: FormatCommand) {
   else if (c.op === 'color') ed.setColor(c.color)
   else if (c.op === 'highlight') ed.setHighlight(c.color)
   else if (c.op === 'align') ed.setAlign(c.align)
-  else if (c.op === 'list') ed.toggleBullet(c.list)
-  else ed.clearFormat()
+  else if (c.op === 'list') ed.setList(c.list)
+  else if (c.op === 'clear') ed.clearFormat()
 }
 
 /** a CSS font size (px number or 'pt' string) in points */

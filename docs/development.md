@@ -11,6 +11,7 @@ bun run build:packages  # packages/*/dist: the standalone SDK packages (@p10node
 python3 -m venv .venv && .venv/bin/pip install python-docx openpyxl python-pptx Pillow
 .venv/bin/python scripts/fixtures.py --large   # generate samples + heavy files (--large-deck: only the deck the browser tests need)
 bun scripts/iwork-samples.ts                   # sample.pages / .key / .numbers (built by test/iwork-builder.ts)
+bun scripts/visio-samples.ts                   # sample.vsdx (built by test/visio-builder.ts)
 bun scripts/legacy-samples/doc.ts              # .doc / .ppt / .rtf test fixtures and samples (also ppt.ts, rtf.ts; .xls / .odt / .ods / .odp from the *.py scripts: see scripts/legacy-samples/*.md)
 bun run screenshots  # README screenshots -> docs/screenshots/ (headless Chromium)
 bun run gifs         # README GIFs (300k-row sheet opening, collaboration) -> docs/screenshots/*.gif (headless Chromium + ffmpeg)
@@ -32,6 +33,7 @@ DocViewer ─ useDocument ─ DocumentClient ⇄ RPC ⇄ Engine
 src/core     parsers, DOM-free (runs in worker / Bun)
   legacy     .doc / .xls / .ppt (compound file reader + converters), .rtf, OpenDocument → DOCX / XLSX / PPTX
   iwork      Pages / Keynote / Numbers → DOCX / PPTX / XLSX
+  visio      Visio drawings (.vsdx) → PPTX
 src/react    view components
 src/embed.ts mount() + <office-viewer>
 src/collab   real-time collaboration (hub, session, per-format adapters)
@@ -69,6 +71,29 @@ One-time setup: **Settings → Pages → Source: GitHub Actions**. Build locally
 "Share live" needs a collaboration hub; the static demo has none, so pass one: `?collab=https://your-hub.example`.
 
 ## Release
+
+### Pending compatibility notes: themes and icons
+
+Carry these notes into the next release's versioned notes when its version is chosen; leave already released notes unchanged.
+
+- `Theme` now means `ThemeMode | ThemeOptions`. Hosts that need only the mode union (`'light' | 'dark' | 'auto'`)
+  should use `ThemeMode` instead of `Theme` for their own state, parameters and records.
+- `FileMenuItem.icon` now accepts `IconName` rather than any string. Annotate variables holding icon names as
+  `IconName` to prevent widening to `string`; keep using the existing icon rendering API.
+- `ICON_NAMES` exposes the supported icon names as stable public keys. New keys may be added; existing keys must
+  not be renamed as an internal cleanup.
+- CSS declarations using `color-mix()` have token-based fallbacks for visible selection, hover and connection states.
+  This does not imply full support for older browsers.
+
+```ts
+import type { FileMenuItem, IconName, ThemeMode } from '@p10node/office-engine'
+
+const mode: ThemeMode = 'auto'
+const icon: IconName = 'save'
+const item: FileMenuItem = { label: 'Save a copy', icon, onClick: saveCopy }
+```
+
+### Release process
 
 CI (`.github/workflows/ci.yml`) runs typecheck, tests, the library and SDK package builds and `npm pack --dry-run` of each package, and the browser tests, on every push to `main` and every PR.
 

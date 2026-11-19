@@ -1,5 +1,6 @@
 import type { DocKind } from '../opc'
 import { isWebImage } from '../opc'
+import { pictureUrl } from '../svgfile'
 import type { DocSource } from '../source'
 import type { Events, Evt, Methods, OpenParams, OpenResult, Req, Res } from './protocol'
 import { Engine } from './engine'
@@ -127,7 +128,7 @@ export class DocumentClient {
   mediaUrl(path: string): Promise<string> {
     let p = this.urls.get(path)
     if (!p) {
-      p = this.call('part', path).then((blob) => URL.createObjectURL(blob))
+      p = this.call('part', path).then(pictureUrl)
       this.urls.set(path, p)
     }
     return p

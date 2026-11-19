@@ -67,7 +67,7 @@ export interface CommentHost {
   /** shows thread `id`'s place */
   reveal(id: string): void
   /** what to do to comment, when `pending()` finds nothing */
-  hint: string
+  hint: () => string
 }
 
 export interface CommentsState {
@@ -89,7 +89,14 @@ export class CommentsCtl {
   opts: CommentOptions = {}
   me: CommentUser = { name: 'Me' }
   /** texts of the notices */
-  t: Strings = en
+  private texts: Strings = en
+  get t(): Strings { return this.texts }
+  set t(value: Strings) {
+    if (value === this.texts) return
+    this.texts = value
+    // Quotes may contain translated locations; keep the host (and its navigation sequence) intact.
+    this.placedCache = null
+  }
   canComment = false
   loaded = false
   private subs = new Set<() => void>()
@@ -190,7 +197,7 @@ export class CommentsCtl {
     if (!this.canComment || !this.host) return false
     const draft = at ?? this.host.pending()
     if (!draft) {
-      this.set({ open: true, draft: null, notice: this.host.hint })
+      this.set({ open: true, draft: null, notice: this.host.hint() })
       return false
     }
     if (draft.existing) {

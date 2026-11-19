@@ -34,6 +34,8 @@ export interface FileMenuItem {
 
 export interface FileActionsOptions {
   kind: DocKind | undefined
+  /** extension of the Office file when it is not the plain one of its kind (".xlsm", ".dotx"…) */
+  ext?: string
   /** file name without extension */
   base: string
   /** New / Open (replace the document) */
@@ -98,7 +100,7 @@ export function useFileActions(o: FileActionsOptions): FileActions {
   section(fileItems)
   if (o.canDownload && kind) {
     section([
-      { value: 'original', label: t.kind[kind], icon: 'save', hint: EXT[kind], head: t.file.downloadAs },
+      { value: 'original', label: t.kind[kind], icon: 'save', hint: o.ext || EXT[kind], head: t.file.downloadAs },
       { value: 'pdf', label: t.file.pdf, icon: 'pdf', hint: '.pdf' },
       ...(o.picture
         ? [{ value: 'picture', label: o.picture.label, icon: 'image', hint: o.picture.ext } as const]
@@ -114,27 +116,37 @@ export function useFileActions(o: FileActionsOptions): FileActions {
 
   const exec = async (action: string) => {
     const c = opts.current
-    if (action.startsWith('new:')) return c.create(action.slice(4) as DocKind)
-    if (action.startsWith('extra:')) return c.extra[Number(action.slice(6))]?.onClick()
+    if (action.startsWith('new:')) {
+      const kind = action.slice(4)
+      if (c.canOpen && (kind === 'docx' || kind === 'xlsx' || kind === 'pptx')) c.create(kind)
+      return
+    }
+    if (action.startsWith('extra:')) {
+      const item = c.extra[Number(action.slice(6))]
+      if (item && !item.disabled) item.onClick()
+      return
+    }
     switch (action) {
       case 'open': {
+        if (!c.canOpen) return
         const [file] = await pickFiles(OPEN_ACCEPT, false)
-        if (file) c.open(file)
+        if (file && opts.current.canOpen) opts.current.open(file)
         return
       }
       case 'rename':
-        return c.rename?.()
+        return c.kind ? c.rename?.() : undefined
       case 'details':
-        return c.details?.()
+        return c.kind ? c.details?.() : undefined
       case 'close':
         return c.close?.()
       case 'save':
-        return c.save()
+        return c.kind && c.canSave ? c.save() : undefined
     }
     const ops = c.ops.current
     if (action === 'import') {
+      if (!c.canImport || c.kind !== 'xlsx') return
       const [file] = await pickFiles('.csv,.tsv,.tab,.txt', false)
-      if (!file) return
+      if (!file || !opts.current.canImport) return
       if (!ops?.importText) throw new Error(t.common.stillLoading)
       await ops.importText(file, file.name.replace(/\.[^.]+$/, '').slice(0, 31) || 'Imported')
       return
@@ -143,6 +155,7 @@ export function useFileActions(o: FileActionsOptions): FileActions {
     if (action === 'original') return c.downloadOriginal()
     if (action === 'picture') return c.picture?.download()
     if (!ops) throw new Error(t.common.stillLoading)
+    await ops.flush?.()
     if (action.startsWith('text:')) {
       const f = TEXT_FORMATS[c.kind].find((x) => 'text:' + x.id === action)
       if (!f) return
@@ -153,8 +166,8 @@ export function useFileActions(o: FileActionsOptions): FileActions {
       c.notify(action === 'pdf' ? t.file.preparingPdf : t.file.preparing)
       const p = await ops.printable()
       if (p.notice) c.notify(p.notice)
-      if (action === 'html') download(await exportHtml(p, c.base), c.base + '.html')
-      else await printDocument(p, c.base)
+      if (action === 'html') download(await exportHtml(p, c.base, t), c.base + '.html')
+      else await printDocument(p, c.base, t)
     }
   }
 

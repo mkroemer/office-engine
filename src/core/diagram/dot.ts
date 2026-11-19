@@ -7,7 +7,14 @@ import { GraphBuilder, renderGraph, type Dir, type GEdge, type GNode, type Graph
 import { color, DiagramError, labelText } from './svg'
 import { dict } from '../dict'
 
-type Tok = { t: 'id' | 'str' | 'html' | 'p'; v: string }
+type Tok = { t: 'id' | 'str' | 'html' | 'p'; v: string; pos: number }
+
+/** a syntax error, with the 1-based line of the character at `pos` */
+function dotError(src: string, pos: number, what: string): DiagramError {
+  let line = 1
+  for (let k = src.indexOf('\n'); k >= 0 && k < pos; k = src.indexOf('\n', k + 1)) line++
+  return new DiagramError(`Graphviz DOT, line ${line}: ${what}`)
+}
 
 function tokenize(src: string): Tok[] {
   const out: Tok[] = []
@@ -36,11 +43,13 @@ function tokenize(src: string): Tok[] {
     }
     if (c === '/' && src[i + 1] === '*') {
       const e = src.indexOf('*/', i + 2)
-      i = e < 0 ? n : e + 2
+      if (e < 0) throw dotError(src, i, 'unterminated comment')
+      i = e + 2
       continue
     }
     if (c === '"') {
       let v = ''
+      const at = i
       i++
       while (i < n && src[i] !== '"') {
         if (src[i] === '\\' && src[i + 1] === '"') {
@@ -49,6 +58,7 @@ function tokenize(src: string): Tok[] {
         } else if (src[i] === '\\' && src[i + 1] === '\n') i += 2
         else v += src[i++]
       }
+      if (i >= n) throw dotError(src, at, 'unterminated string')
       i++
       // "a" + "b"
       const prev = out[out.length - 1]
@@ -56,7 +66,7 @@ function tokenize(src: string): Tok[] {
       if (prev?.t === 'p' && prev.v === '+' && plus?.t === 'str') {
         out.pop()
         plus.v += v
-      } else out.push({ t: 'str', v })
+      } else out.push({ t: 'str', v, pos: at })
       continue
     }
     if (c === '<') {
@@ -66,26 +76,24 @@ function tokenize(src: string): Tok[] {
         if (src[i] === '<') depth++
         else if (src[i] === '>' && --depth === 0) break
       }
-      out.push({ t: 'html', v: src.slice(s + 1, i) })
+      if (i >= n) throw dotError(src, s, 'unterminated <…> label')
+      out.push({ t: 'html', v: src.slice(s + 1, i), pos: s })
       i++
       continue
     }
     if (c === '-' && (src[i + 1] === '>' || src[i + 1] === '-')) {
-      out.push({ t: 'p', v: src.slice(i, i + 2) })
+      out.push({ t: 'p', v: src.slice(i, i + 2), pos: i })
       i += 2
       continue
     }
     if ('{}[]=;,:+'.includes(c)) {
-      out.push({ t: 'p', v: c })
+      out.push({ t: 'p', v: c, pos: i })
       i++
       continue
     }
     const m = /^(-?(?:\.\d+|\d+(?:\.\d*)?)|[A-Za-z_\u0080-￿][\w\u0080-￿]*)/.exec(src.slice(i, i + 256))
-    if (!m) {
-      i++
-      continue
-    }
-    out.push({ t: 'id', v: m[0] })
+    if (!m) throw dotError(src, i, `unexpected “${c}”`)
+    out.push({ t: 'id', v: m[0], pos: i })
     i += m[0].length
   }
   return out
@@ -192,16 +200,15 @@ export function parseDot(src: string): Graph[] {
   }
   const kw = (v: string) => peek()?.t === 'id' && peek().v.toLowerCase() === v
   const graphs: Graph[] = []
+  const err = (t: Tok | undefined, what: string) => dotError(src, t?.pos ?? src.length, what)
   while (p < toks.length) {
-    if (kw('strict')) p++
-    if (!kw('graph') && !kw('digraph')) {
-      p++
-      continue
-    }
+    const strict = kw('strict')
+    if (strict) p++
+    if (!kw('graph') && !kw('digraph')) throw err(peek(), `“graph” or “digraph” expected, found “${peek()?.v ?? 'end of text'}”`)
     const directed = peek().v.toLowerCase() === 'digraph'
     p++
     const name = peek()?.t !== 'p' ? toks[p++].v : ''
-    if (!eat('{')) throw new DiagramError('Graphviz: “{” expected after the graph name')
+    if (!eat('{')) throw err(peek(), '“{” expected after the graph name')
     const b = new GraphBuilder('TB', 'ellipse')
     const nodeAttrs = new Map<string, Record<string, string>>()
     const edges: { e: GEdge; attrs: Record<string, string> }[] = []
@@ -213,15 +220,20 @@ export function parseDot(src: string): Graph[] {
     const attrList = (): Record<string, string> => {
       const a: Record<string, string> = {}
       while (eat('[')) {
+        const open = toks[p - 1]
         while (p < toks.length && !isP(']')) {
           const k = toks[p++]
-          if (k.t === 'p') continue
+          if (k.t === 'p') {
+            if (k.v === '}' || k.v === '{' || k.v === '[' || k.v === '->') throw err(k, `“]” expected, found “${k.v}”`)
+            continue
+          }
           if (eat('=')) {
             const v = toks[p++]
-            if (v) a[k.v.toLowerCase()] = v.t === 'html' ? '<' + v.v + '>' : v.v
+            if (!v || v.t === 'p') throw err(v ?? k, `a value expected after “${k.v} =”`)
+            a[k.v.toLowerCase()] = v.t === 'html' ? '<' + v.v + '>' : v.v
           } else a[k.v.toLowerCase()] = 'true'
         }
-        eat(']')
+        if (!eat(']')) throw err(open, '“[” is never closed (“]” expected)')
       }
       return a
     }
@@ -261,12 +273,11 @@ export function parseDot(src: string): Graph[] {
         for (;;) {
           if (kw('subgraph') || isP('{')) ends.push([...subgraph(scope)])
           else if (peek() && peek().t !== 'p') ends.push([nodeRef(scope)])
-          else {
+          else throw ends.length ? err(peek(-1), `a node or subgraph expected after “${peek(-1)?.v}”`) : err(peek(), `unexpected “${peek()?.v ?? 'end of text'}”`)
+          if (isP('->') || isP('--')) {
+            if (isP('->') !== directed) throw err(peek(), `“${peek().v}” in ${directed ? 'a digraph (use “->”)' : 'an undirected graph (use “--”)'}`)
             p++
-            break
-          }
-          if (isP('->') || isP('--')) p++
-          else break
+          } else break
         }
         const a = attrList()
         if (ends.length === 1) {
@@ -297,16 +308,18 @@ export function parseDot(src: string): Graph[] {
         scope.cluster = cid
       }
       if (eat('{')) {
+        const open = toks[p - 1]
         stmts(scope)
-        eat('}')
+        if (!eat('}')) throw err(open, '“{” is never closed (“}” expected)')
       }
       if (scope.rank && /^(same|min|max|source|sink)$/.test(scope.rank) && scope.members.size > 1) same.push([...scope.members])
       for (const m of scope.members) parent.members.add(m)
       return scope.members
     }
     const root: Scope = { node: {}, edge: {}, members: new Set() }
+    const open = toks[p - 1]
     stmts(root)
-    eat('}')
+    if (!eat('}')) throw err(open, '“{” is never closed (“}” expected)')
 
     // attributes → model
     const dir: Dir = ({ LR: 'LR', RL: 'RL', BT: 'BT', TB: 'TB' } as Record<string, Dir>)[(graphAttrs.rankdir ?? 'TB').toUpperCase()] ?? 'TB'
@@ -327,7 +340,25 @@ export function parseDot(src: string): Graph[] {
       if (style.includes('invis')) st.stroke = st.fill = 'none'
       c.style = st
     }
-    for (const { e, attrs } of edges) b.g.edges.push(applyEdge(e, attrs, directed))
+    // strict: at most one edge between two nodes (undirected: in either order); later attributes win
+    const seen = new Map<string, { e: GEdge; attrs: Record<string, string> }>()
+    const kept: { e: GEdge; attrs: Record<string, string> }[] = []
+    for (const x of edges) {
+      if (!strict) {
+        kept.push(x)
+        continue
+      }
+      const key = directed || x.e.from <= x.e.to ? `${x.e.from}\0${x.e.to}` : `${x.e.to}\0${x.e.from}`
+      const old = seen.get(key)
+      if (old) Object.assign(old.attrs, x.attrs)
+      else {
+        // own copy: a chain shares one attribute object between its edges
+        const own = { e: x.e, attrs: { ...x.attrs } }
+        seen.set(key, own)
+        kept.push(own)
+      }
+    }
+    for (const { e, attrs } of kept) b.g.edges.push(applyEdge(e, attrs, directed))
     b.g.sameRank = same
     graphs.push(b.g)
   }

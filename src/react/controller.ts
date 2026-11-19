@@ -5,7 +5,8 @@
  * store), state replaced as a whole on every change (`rev` counts them). The viewer and its mounted view publish their
  * state and register the commands they can run; a command with nobody to run it does nothing.
  */
-import { useEffect, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useSyncExternalStore } from 'react'
+import { formatCommand } from './edit/format-values'
 import type { DocKind } from '../core/opc'
 import { stepZoom, type Zoom } from './common/ZoomControl'
 import { useLatest } from './common/hooks'
@@ -65,7 +66,7 @@ export interface TextFormat {
   /** text highlight; in a spreadsheet, the cell's fill */
   highlight?: string
   align?: 'left' | 'center' | 'right' | 'justify'
-  /** the paragraph's list; undefined where there are no lists (cells) */
+  /** the paragraph's list; null for no list, undefined where unsupported (cells). Mixed selections are not aggregated. */
   list?: 'bullet' | 'number' | null
 }
 
@@ -73,11 +74,14 @@ export interface TextFormat {
 export type FormatCommand =
   | { op: 'toggle'; mark: 'bold' | 'italic' | 'underline' | 'strike' }
   | { op: 'font'; name: string }
+  /** 1–400 points, rounded to half points; invalid sizes do nothing */
   | { op: 'size'; pt: number }
+  /** Opaque #rgb, #rrggbb or #rrggbbff; null removes the color. Other CSS colors do nothing. */
   | { op: 'color'; color: string | null }
   | { op: 'highlight'; color: string | null }
   | { op: 'align'; align: 'left' | 'center' | 'right' | 'justify' }
-  | { op: 'list'; list: 'bullet' | 'number' }
+  /** Sets every selected paragraph to this kind; null explicitly removes lists. Repeating is idempotent. */
+  | { op: 'list'; list: 'bullet' | 'number' | null }
   | { op: 'clear' }
 
 /** the editors' names for the marks */
@@ -102,6 +106,19 @@ export interface ViewerCommands {
   toggleComments(open?: boolean): void
 }
 
+type ViewState = Pick<ViewerState, 'canUndo' | 'canRedo' | 'zoom' | 'page' | 'outline' | 'status' | 'format'>
+type ViewerPublication = Omit<ViewerState, keyof ViewState | 'rev'>
+
+/** Internal, document-scoped publication and command registration. Never part of the host API. */
+export interface ViewController {
+  activate(): () => void
+  update(state: Partial<ViewState>): void
+  attachView(commands: ViewCommands): () => void
+  publishFormat(commands: ViewCommands, format: TextFormat | null): void
+  readonly observed: boolean
+  watchObserved(fn: () => void): () => void
+}
+
 /** the view's part of the state, cleared when a view goes */
 const VIEW_STATE = { canUndo: false, canRedo: false, zoom: null, page: null, outline: null, status: '', format: null } as const
 
@@ -117,19 +134,25 @@ function same(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b)
 }
 
-export class ViewerController {
+const controllerBrand: unique symbol = Symbol('ViewerController')
+
+export class InternalViewerController {
+  readonly [controllerBrand] = true as const
   private state: ViewerState = EMPTY
   private subs = new Set<() => void>()
   private watchers = new Set<() => void>()
   private view: ViewCommands | null = null
   private viewer: ViewerCommands | null = null
+  private owner: object | null = null
+  private viewOwner: object | null = null
 
   subscribe = (fn: () => void) => {
     const first = this.subs.size === 0
-    this.subs.add(fn)
+    const listener = () => fn()
+    this.subs.add(listener)
     if (first) for (const w of this.watchers) w()
     return () => {
-      this.subs.delete(fn)
+      if (this.subs.delete(listener) && this.subs.size === 0) for (const w of this.watchers) w()
     }
   }
 
@@ -138,7 +161,7 @@ export class ViewerController {
     return this.subs.size > 0
   }
 
-  /** calls `fn` when the first subscriber arrives */
+  /** calls `fn` when observation starts or stops */
   watchObserved(fn: () => void): () => void {
     this.watchers.add(fn)
     return () => {
@@ -150,66 +173,68 @@ export class ViewerController {
 
   // ---------------------------------------------------------------- commands
 
-  setEditing(on: boolean) {
+  setEditing = (on: boolean) => {
     this.viewer?.setEditing(on)
   }
 
   /** builds the edited file and hands it to `onSave` (or downloads it) */
-  save(): Promise<void> {
+  save = (): Promise<void> => {
     return this.viewer?.save() ?? Promise.resolve()
   }
 
-  undo() {
+  undo = () => {
     this.view?.undo?.()
   }
 
-  redo() {
+  redo = () => {
     this.view?.redo?.()
   }
 
-  setZoom(z: Zoom) {
-    this.view?.setZoom?.(z)
+  setZoom = (z: Zoom) => {
+    if (z === 'fit') this.view?.setZoom?.(z)
+    else if (Number.isFinite(z)) this.view?.setZoom?.(Math.min(3, Math.max(0.25, z)))
   }
 
-  zoomIn() {
+  zoomIn = () => {
     this.zoomStep(1)
   }
 
-  zoomOut() {
+  zoomOut = () => {
     this.zoomStep(-1)
   }
 
   /** shows an outline entry: scrolls to a heading, shows a sheet or a slide */
-  goto(id: string) {
+  goto = (id: string) => {
     this.view?.goto?.(id)
   }
 
   /** scrolls to a page or slide, from 1 */
-  gotoPage(n: number) {
+  gotoPage = (n: number) => {
     this.view?.gotoPage?.(n)
   }
 
   /** a presentation as a slideshow, from the slide in view */
-  present() {
+  present = () => {
     this.view?.present?.()
   }
 
   /** formats the selection while editing: `format({ op: 'toggle', mark: 'bold' })`, `format({ op: 'size', pt: 14 })` */
-  format(cmd: FormatCommand) {
-    this.view?.format?.(cmd)
+  format = (cmd: FormatCommand) => {
+    const command = formatCommand(cmd)
+    if (command) this.view?.format?.(command)
   }
 
-  print() {
+  print = () => {
     this.fileAction('print')
   }
 
   /** a File menu action by its id: 'pdf', 'html', 'text:md', 'details', 'rename'… (see FileMenu) */
-  fileAction(id: string) {
+  fileAction = (id: string) => {
     this.viewer?.fileAction(id)
   }
 
   /** the comments panel open (true), closed (false) or the other way round */
-  toggleComments(open?: boolean) {
+  toggleComments = (open?: boolean) => {
     this.viewer?.toggleComments(open)
   }
 
@@ -222,7 +247,7 @@ export class ViewerController {
   // ---------------------------------------------------------------- published by the viewer and its view
 
   /** @internal the state changed: only what differs counts as a change */
-  update(p: Partial<Omit<ViewerState, 'rev'>>) {
+  private update(p: Partial<Omit<ViewerState, 'rev'>>) {
     let changed = false
     for (const k of Object.keys(p) as (keyof typeof p)[]) {
       if (!same(this.state[k], p[k])) {
@@ -235,20 +260,85 @@ export class ViewerController {
     for (const fn of this.subs) fn()
   }
 
-  /** @internal the mounted view's commands; null when it goes (its state is cleared) */
-  attachView(c: ViewCommands | null) {
-    this.view = c
-    if (!c) this.update(VIEW_STATE)
-  }
-
-  /** @internal the viewer's commands; null when it goes (its state is cleared) */
-  attachViewer(c: ViewerCommands | null) {
-    this.viewer = c
-    if (!c) this.update(VIEWER_STATE)
+  /** A viewer claims ownership when it mounts, before any async document can finish loading.
+   * A later document attach/update can only use that claim; it cannot take ownership back.
+   * Each document also gets a separate publication scope, invalidated on replacement.
+   */
+  createBinding() {
+    const controller = this
+    const owner = {}
+    const owns = () => this.owner === owner
+    return {
+      attachViewer: (commands: ViewerCommands) => {
+        this.owner = owner
+        this.viewer = commands
+        this.viewOwner = null
+        this.view = null
+        this.update({ ...VIEWER_STATE, ...VIEW_STATE })
+        return () => {
+          if (!owns() || this.viewer !== commands) return
+          this.owner = this.viewOwner = null
+          this.viewer = this.view = null
+          this.update({ ...VIEWER_STATE, ...VIEW_STATE })
+        }
+      },
+      update: (state: Partial<ViewerPublication>) => {
+        if (owns()) this.update(state)
+      },
+      createView: (): ViewController => {
+        const viewOwner = {}
+        const current = () => owns() && this.viewOwner === viewOwner
+        return {
+          activate: () => {
+            if (!owns()) return () => {}
+            this.viewOwner = viewOwner
+            this.view = null
+            this.update(VIEW_STATE)
+            return () => {
+              if (!current()) return
+              this.viewOwner = null
+              this.view = null
+              this.update(VIEW_STATE)
+            }
+          },
+          update: (state) => { if (current()) this.update(state) },
+          attachView: (commands) => {
+            if (!current()) return () => {}
+            this.view = commands
+            return () => {
+              if (!current() || this.view !== commands) return
+              this.view = null
+            }
+          },
+          publishFormat: (commands, format) => { if (current() && this.view === commands) this.update({ format }) },
+          get observed() { return controller.observed },
+          watchObserved: (fn) => this.watchObserved(fn),
+        }
+      },
+    }
   }
 }
 
-export const createViewerController = () => new ViewerController()
+/** Host API; publishing and lifecycle methods belong to the engine. */
+export type ViewerController = { readonly [controllerBrand]: true } & Pick<InternalViewerController,
+  'subscribe' | 'snapshot' | 'setEditing' | 'save' | 'undo' | 'redo' | 'setZoom' | 'zoomIn' | 'zoomOut' |
+  'goto' | 'gotoPage' | 'present' | 'format' | 'print' | 'fileAction' | 'toggleComments'>
+
+export const createViewerController = (): ViewerController => new InternalViewerController()
+/** @internal controllers supplied to viewers originate from createViewerController(). */
+export const internalController = (ctl: ViewerController): InternalViewerController => {
+  if (!(ctl instanceof InternalViewerController)) throw new TypeError('DocViewer controller must be created by createViewerController()')
+  return ctl
+}
+
+/** @internal follows both subscription transitions, including a replacement controller. */
+export function useControllerObserved(ctl: ViewController | null): boolean {
+  return useSyncExternalStore(
+    (fn) => ctl?.watchObserved(fn) ?? (() => {}),
+    () => !!ctl?.observed,
+    () => false,
+  )
+}
 
 /** The controller's state, rendering again whenever it changes: for a host's own controls in React. */
 export function useViewerState(ctl: ViewerController): ViewerState {
@@ -256,12 +346,13 @@ export function useViewerState(ctl: ViewerController): ViewerState {
 }
 
 /** Registers a view's commands (the latest closures each render) while it is mounted. */
-export function useViewCommands(ctl: ViewerController | null, commands: ViewCommands) {
+export function useViewCommands(ctl: ViewController | null, commands: ViewCommands) {
   const latest = useLatest(commands)
-  useEffect(() => {
-    if (!ctl) return
+  const registration = useMemo(() => {
     const call = <K extends keyof ViewCommands>(k: K) => ((...a: unknown[]) => (latest.current[k] as ((...x: unknown[]) => void) | undefined)?.(...a)) as ViewCommands[K]
-    ctl.attachView({ setZoom: call('setZoom'), goto: call('goto'), gotoPage: call('gotoPage'), undo: call('undo'), redo: call('redo'), present: call('present'), format: call('format') })
-    return () => ctl.attachView(null)
+    const view = { setZoom: call('setZoom'), goto: call('goto'), gotoPage: call('gotoPage'), undo: call('undo'), redo: call('redo'), present: call('present'), format: call('format') }
+    return { view, publishFormat: (format: TextFormat | null) => ctl?.publishFormat(view, format) }
   }, [ctl, latest])
+  useEffect(() => ctl?.attachView(registration.view), [ctl, registration])
+  return registration.publishFormat
 }

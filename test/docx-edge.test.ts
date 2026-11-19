@@ -206,10 +206,11 @@ describe('tracking edge cases', () => {
     const lan: TrackMark = { k: 'ins', author: 'Lan' }
     const b = P([T('x'), T('NEW', lan), T('old', { k: 'del', author: 'Lan' }), T('y')])
     const n = P(deleteRange(b.runs as RRun[], 0, 7) as Inline[])
-    // "x" and Lan's insertion become my deletion (the reviewer still sees them), Lan's deletion stays hers
+    // "x" and Lan's insertion become my deletion (the reviewer still sees them; the insertion stays under it), Lan's deletion stays hers
     const r = trackEdit([b], [n], '0', at(0), { a: { pa: '0', o: 0 }, f: { pa: '0', o: 7 } }, ME)
-    expect(show(r.next[0])).toBe('[-xNEW][-old]y')
-    expect(r.next[0].runs.filter((x) => x.t === 'text' && x.tc).map((x) => (x as { tc: TrackMark }).tc.author)).toEqual(['Vy', 'Lan'])
+    expect(show(r.next[0])).toBe('[-x][-NEW][-old]y')
+    expect(r.next[0].runs.filter((x) => x.t === 'text' && x.tc).map((x) => (x as { tc: TrackMark }).tc.author)).toEqual(['Vy', 'Vy', 'Lan'])
+    expect((r.next[0].runs[1] as { tc: TrackMark }).tc.ins?.author).toBe('Lan')
   })
 
   test('pictures removed while tracking go for real, the text around them is tracked', () => {

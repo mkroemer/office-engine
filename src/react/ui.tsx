@@ -42,6 +42,7 @@ export interface SelectProps<T extends string | number = string | number> {
   placeholder?: string
   /** fixed trigger content (menus); null = icon only */
   label?: ReactNode
+  /** Icon name, rendered by the host with `<Icon name={icon} />` (unlike Button's resolved node). */
   icon?: IconName
   width?: number
   menuWidth?: number
@@ -55,9 +56,11 @@ export interface SelectProps<T extends string | number = string | number> {
 export interface DialogAction {
   label: string
   onClick?: () => void
+  /** an auxiliary action, placed at the start of the built-in dialog's action row */
+  extra?: boolean
   /** the main action: styled as such; with `submit`, also what Enter does */
   primary?: boolean
-  /** submits the dialog's form (`onSubmit`) */
+  /** submits the dialog's form (`onSubmit`); hosts with an external footer can call `onClick` instead */
   submit?: boolean
   autoFocus?: boolean
 }
@@ -91,7 +94,11 @@ const UIContext = createContext<Partial<UIComponents>>({})
 /** Replaces UI components for everything below it; an outer provider's components stay for those left out. */
 export function UIComponentsProvider({ components, children }: { components?: Partial<UIComponents>; children?: ReactNode }) {
   const outer = useContext(UIContext)
-  const value = useMemo(() => (components ? { ...outer, ...components } : outer), [outer, components])
+  const value = useMemo(() => {
+    if (!components) return outer
+    const defined = Object.fromEntries(Object.entries(components).filter(([, component]) => component !== undefined))
+    return { ...outer, ...defined }
+  }, [outer, components])
   return <UIContext.Provider value={value}>{children}</UIContext.Provider>
 }
 
@@ -121,9 +128,9 @@ export function DefaultDialog(props: DialogProps) {
           <button
             key={i}
             type={a.submit ? 'submit' : 'button'}
-            className={a.primary ? 'de-btn de-btn-primary' : 'de-btn'}
+            className={'de-btn' + (a.primary ? ' de-btn-primary' : '') + (a.extra ? ' de-dialog-extra' : '')}
             autoFocus={a.autoFocus}
-            onClick={a.onClick}
+            onClick={a.submit && props.onSubmit ? undefined : a.onClick}
           >
             {a.label}
           </button>

@@ -99,6 +99,40 @@ export function A(min: number, max: number, fn: EagerFn): FnDef {
   return { kind: 'eager', min, max, scalarArgs: false, fn }
 }
 
+/**
+ * A function over ranges that also takes single values (the criterion of COUNTIF, the rank of LARGE, the value
+ * VLOOKUP looks up): given an array where it takes one (`single` says which arguments), it computes once per
+ * element and gives an array. `SUM(COUNTIF(r,{"x","y"}))` counts both, `SUMPRODUCT(1/COUNTIF(r,r))` each cell of r.
+ * A range there is taken whole too, unless the formula's own cell picks one of it (the top level).
+ */
+export function lift(single: (i: number, n: number) => boolean, fn: EagerFn): EagerFn {
+  return (args, ev, top) => {
+    let h = 1
+    let w = 1
+    let any = false
+    const data = args.map((a, i): Value[][] | null => {
+      if (!single(i, args.length)) return null
+      if (a instanceof ArrayV ? a.h * a.w <= 1 : !(a instanceof RangeV) || top || a.h * a.w <= 1) return null
+      const d = ev.toArray(a)
+      any = true
+      h = Math.max(h, d.length)
+      w = Math.max(w, d[0]?.length ?? 0)
+      return d
+    })
+    if (!any) return fn(args, ev, top)
+    const out: Value[][] = []
+    for (let i = 0; i < h; i++) {
+      const row: Value[] = []
+      for (let j = 0; j < w; j++) {
+        const one = args.map((a, k) => (data[k] ? pick(data[k], i, j) : a))
+        row.push(guard(() => ev.scalar(fn(one, ev, top))))
+      }
+      out.push(row)
+    }
+    return new ArrayV(out)
+  }
+}
+
 /** Lazy function (receives ASTs). */
 export function L(min: number, max: number, fn: LazyFn): FnDef {
   return { kind: 'lazy', min, max, fn }

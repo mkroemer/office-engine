@@ -8,23 +8,25 @@ import { claimFocus, lowerIndex, useForceUpdate, useIsoLayoutEffect, useScroll, 
 import { useFileOps, useSelectAll, useViewer } from '../common/Slots'
 import { Status } from '../common/Status'
 import { ZoomControl, type Zoom } from '../common/ZoomControl'
-import { useViewCommands } from '../controller'
+import { useViewCommands, useControllerObserved } from '../controller'
 import { applyDocx, docxFormat } from '../edit/format'
 import { ContextMenu, MOD, type MenuItem } from '../common/ContextMenu'
 import { PromptDialog, Toast, type PromptSpec } from '../common/Dialog'
-import { domFromPos, getSel, opInsert, posFromDom } from '../edit/input'
+import { domFromPos, getSel, opInsert, posFromDom, selPoints } from '../edit/input'
 import { download, Icon, pickFiles } from '../edit/Toolbar'
-import { runsText, type RRun } from '../edit/rich'
+import { runsText, type RRun, type Sel } from '../edit/rich'
 import { DocxEditor, type CommentRange, type DocState, type FormatState } from './DocxEditor'
 import { markCss, useCommentsCtl, useCommentsState, type CommentHost, type PlacedThread } from '../comments/Comments'
 import { COMMENT_KEYS } from '../comments/CommentsPanel'
 import { DocxToolbar, styleChoices, type ImageActions } from './DocxToolbar'
 import { FindBar, type Match } from './FindBar'
+import { findAll } from './find'
 import { HeaderFooterDialog } from './HeaderFooterDialog'
 import { PageSetupDialog } from './PageSetupDialog'
-import { docxToHtml, docxToMarkdown, docxToText, pictureData } from '../file/text'
+import { mergeSource } from '../../core/plainmerge'
+import { docxBodyHtml, docxToHtml, docxToMarkdown, docxToText, pictureData } from '../file/text'
 import { BlockView, contextual, type RenderCtx } from './render'
-import { paginate, type PageSlice } from './paginate'
+import { pageHF, paginate, type PageSlice } from './paginate'
 import { formatCount, formatNumber, useStrings } from '../strings'
 
 const PX = 4 / 3
@@ -90,6 +92,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   const [scrollRef, size] = useSize<HTMLDivElement>()
   const scroll = useScroll(scrollRef)
   const pagesRef = useRef<HTMLDivElement>(null)
+  const [domSel, setDomSel] = useState<number[]>([])
   const editor = useMemo(() => new DocxEditor(client, st, bump), [client, st, bump])
   const colResize = useCallback((bi: number, cols: number[]) => editor.setColumnWidths(bi, cols), [editor])
   const isEditing = viewer.editable && !!done && !done.error
@@ -217,9 +220,12 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   const first = tops.length ? lowerIndex(tops, scroll.y - pageH * z) : 0
   const last = tops.length ? lowerIndex(tops, scroll.y + size.h + 200) : -1
   const pageCount = complete ? pages.length : 0
-  // keep the page holding the caret mounted so the DOM selection survives scrolling
-  const caretBi = isEditing && editor.input.lastSel ? Number(editor.input.lastSel.f.pa.split('.')[0]) : -1
-  const caretPage = caretBi >= 0 ? pages.findIndex((p) => caretBi >= p.start && caretBi < p.end) : -1
+  // Both ends of the selection stay mounted, so the DOM selection survives scrolling. A removed page moves its end of
+  // the range to the pages container, and a page mounted again there lands after that point: outside a range that ends on it.
+  const pinned = new Set<number>(domSel)
+  const lastSel = isEditing ? editor.input.lastSel : null
+  const caretBi = lastSel ? Number(lastSel.f.pa.split('.')[0]) : -1
+  for (const bi of lastSel ? [Number(lastSel.a.pa.split('.')[0]), caretBi] : []) pinned.add(pages.findIndex((p) => bi >= p.start && bi < p.end))
 
   editor.contentW = contentW
   editor.defaultFont = meta?.font
@@ -243,13 +249,30 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   const status = done?.error
     ? str.common.error(done.error)
     : complete
-      ? str.docx.status(formatCount(str, cur), formatCount(str, pages.length), formatCount(str, words))
-      : str.docx.statusLoading(formatCount(str, cur), formatCount(str, pages.length))
+      ? str.docx.status(cur, pages.length, words, str.locale)
+      : str.docx.statusLoading(cur, pages.length, str.locale)
+
+  // the pages holding the ends of a ranged DOM selection (viewing has no model selection to tell them)
+  useEffect(() => {
+    const pageOf = (root: HTMLElement, n: Node | null) => {
+      const el = n && root.contains(n) ? (n instanceof Element ? n : n.parentElement)?.closest<HTMLElement>('.de-page') : null
+      return el ? Number(el.dataset.page) - 1 : -1
+    }
+    const onSel = () => {
+      const root = pagesRef.current
+      const s = root && selPoints(root)
+      const ranged = !!s && (s.anchorNode !== s.focusNode || s.anchorOffset !== s.focusOffset)
+      const next = root && ranged ? [pageOf(root, s.anchorNode), pageOf(root, s.focusNode)].filter((i) => i >= 0) : []
+      setDomSel((cur) => (next.length === cur.length && next.every((x, i) => x === cur[i]) ? cur : next))
+    }
+    document.addEventListener('selectionchange', onSel)
+    return () => document.removeEventListener('selectionchange', onSel)
+  }, [])
 
   // ---- editing wiring ----
   useEffect(() => {
     const el = pagesRef.current
-    if (!isEditing || !el) return
+    if (!isEditing || !el) { editor.input.clearSelection(); return }
     editor.input.attach(el)
     editor.onDirty = () => viewer.setDirty(true)
     return () => editor.input.detach()
@@ -313,8 +336,14 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
 
   useIsoLayoutEffect(() => {
     const sel = editor.pendingSel
-    if (!sel || !pagesRef.current) return
-    if (!editor.input.restore(sel)) {
+    if (!sel || !pagesRef.current) {
+      // a paragraph that moved to another page took the caret with it: it goes back to where it was
+      if (isEditing) editor.input.repair()
+      return
+    }
+    const noRefocus = editor.pendingNoRefocus
+    editor.pendingNoRefocus = false
+    if (!editor.input.restore(sel, noRefocus ? 'preserve' : true)) {
       // caret paragraph not rendered (scrolled away): bring its page into view, retry next render
       const bi = Number(sel.f.pa.split('.')[0])
       const pi = pages.findIndex((p) => bi >= p.start && bi < p.end)
@@ -323,6 +352,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
       return
     }
     editor.pendingSel = null
+    if (noRefocus) return
     // keep the caret visible
     const ds = getSel(pagesRef.current)
     const range = ds?.rangeCount ? ds.getRangeAt(0) : null
@@ -337,12 +367,11 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
 
   // ---- find ----
   const matches = useMemo<Match[]>(() => {
-    const q = find.q.toLowerCase()
+    const q = find.q
     if (!find.open || !q) return []
     const out: Match[] = []
     const scan = (p: Paragraph, pa: string, bi: number) => {
-      const t = runsText(p.runs as RRun[]).toLowerCase()
-      for (let i = t.indexOf(q); i >= 0 && out.length < 5000; i = t.indexOf(q, i + q.length)) out.push({ pa, a: i, b: i + q.length, bi })
+      for (const [a, b] of findAll(runsText(p.runs as RRun[]), q, 5000 - out.length)) out.push({ pa, a, b, bi })
     }
     st.blocks.forEach((b, bi) => {
       if (editable(b)) scan(b, String(bi), bi)
@@ -418,17 +447,26 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
       return {
         size: `${page.w}pt ${page.h}pt`,
         margin: '0',
-        node: pages.map((p, i) => (
-          <div key={i} className="de-print-page" style={{ width: `${page.w}pt`, height: `${page.h}pt` }}>
-            <PageView index={i} count={pages.length} slice={p} blocks={st.blocks} meta={meta} page={page} top={0} left={0} height={pageH} zoom={1} client={client} docStyle={docStyle} editing={false} />
-          </div>
-        )),
+        node: pages.map((p, i) => {
+          // a page whose content is taller than the sheet (a table row taller than a page) is as tall as it is, and the
+          // browser cuts it into sheets: nothing is clipped at the sheet's edge
+          const h = Math.max(pageH, (page.mt + page.mb) * PX + p.used)
+          const tall = h > pageH
+          return (
+            <div key={i} className={tall ? 'de-print-page de-print-tall' : 'de-print-page'} style={{ width: `${page.w}pt`, height: tall ? `${h}px` : `${page.h}pt` }}>
+              <PageView index={i} count={pages.length} slice={p} blocks={st.blocks} meta={meta} page={page} top={0} left={0} height={h} zoom={1} client={client} docStyle={docStyle} editing={false} />
+            </div>
+          )
+        }),
       }
     },
-    text: async (format) => {
+    text: async (format, base) => {
       if (!done) throw new Error(str.common.stillLoading)
       if (format === 'txt') return docxToText(st.blocks)
       const images = await pictureData(st.blocks, (t) => client.call('part', t) as Promise<Blob>)
+      // a Markdown / HTML file edited here: what was not edited stays as the file has it
+      const kept = base === undefined || (format !== 'html' && format !== 'md') ? null : mergeSource(base, format === 'html' ? 'html' : 'markdown', st.blocks, (bs) => (format === 'html' ? docxBodyHtml(bs, images) : docxToMarkdown(bs, images)))
+      if (kept !== null) return kept
       return format === 'html' ? docxToHtml(st.blocks, { title: (client.name ?? '').replace(/\.[^.]+$/, ''), images }) : docxToMarkdown(st.blocks, images)
     },
     stats: () => {
@@ -455,14 +493,16 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
 
   // ---- dialogs / clipboard ----
   const askLink = () => {
-    const cur = editor.state()?.link
+    // the selection now: the dialog takes the focus
+    const at = editor.input.sel()
+    const cur = editor.state(at)?.link
     setPrompt({
       title: cur ? str.edit.editLink : str.edit.link,
       placeholder: str.edit.linkPlaceholder,
       initial: cur,
       ok: str.common.apply,
-      onOk: (v) => void editor.setLink(v.trim() || null),
-      extra: cur ? { label: str.common.remove, run: () => void editor.setLink(null) } : undefined,
+      onOk: (v) => void editor.setLink(v.trim() || null, at).catch((e: Error) => setToast(e.message)),
+      extra: cur ? { label: str.common.remove, run: () => void editor.setLink(null, at) } : undefined,
     })
   }
   const askAlt = () => {
@@ -513,11 +553,9 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     download: !viewer.canDownload
       ? undefined
       : () => {
-          const el = imgEl()
-          if (!el?.src || !img) return
-          void fetch(el.src)
-            .then((r) => r.blob())
-            .then((b) => download(b, img.target.split('/').pop() ?? 'image'))
+          if (!img) return
+          // from the file, not from the page: an SVG is shown from a data: URL, which a host's content policy may not let be fetched
+          void (client.call('part', img.target) as Promise<Blob>).then((b) => download(b, img.target.split('/').pop() ?? 'image'))
         },
   }
 
@@ -683,7 +721,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     if (!cm) return
     const host: CommentHost = {
       kind: 'docx',
-      hint: str.docx.commentHint,
+      hint: () => cm.t.docx.commentHint,
       pending: () => {
         const r = editor.commentRange()
         return r ? { quote: r.quote, range: r } : null
@@ -756,12 +794,13 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   // ---- controller: zoom, page, headings, undo ----
   const { ctl, headless } = viewer
   // the headings for the controller: read again once the document stops changing, not on every keystroke
+  const observed = useControllerObserved(ctl)
   const [ctlHeadings, setCtlHeadings] = useState<{ bi: number; lvl: number; text: string }[]>([])
   useEffect(() => {
-    if (!ctl) return
+    if (!observed) return
     const id = setTimeout(() => setCtlHeadings(outlineOf(st.blocks, titleId)), 150)
     return () => clearTimeout(id)
-  }, [ctl, version, titleId, st])
+  }, [observed, version, titleId, st])
   const ctlActive = ctlHeadings.reduce((acc, h, i) => (h.bi <= atBlock ? i : acc), -1)
   useEffect(() => {
     ctl?.update({ zoom: { value: zoom, effective: z } })
@@ -782,7 +821,8 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
       editor.onHistory = undefined
     }
   }, [ctl, editor, isEditing])
-  useViewCommands(ctl, {
+  const publishedSelection = useRef<Sel | null>(null)
+  const publishFormat = useViewCommands(ctl, {
     setZoom,
     goto: (id) => gotoBlock(Number(id)),
     gotoPage: (n) => {
@@ -797,18 +837,25 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
       if (isEditing) editor.redo()
     },
     format: (c) => {
-      if (isEditing) applyDocx(editor, c)
+      const sel = publishedSelection.current
+      if (isEditing && sel) editor.input.withFormatSelection(sel, () => applyDocx(editor, c))
     },
   })
   useEffect(() => {
     if (!ctl) return
-    if (!isEditing) return ctl.update({ format: null })
-    const off = editor.subscribeState((s) => ctl.update({ format: s && docxFormat(s) }))
+    if (!isEditing) return publishFormat(null)
+    const off = editor.subscribeState((s) => {
+      const sel = s && editor.input.formatSelection()
+      publishedSelection.current = sel
+      const current = sel && editor.state(sel)
+      publishFormat(current ? docxFormat(current) : null)
+    })
     return () => {
       off()
-      ctl.update({ format: null })
+      publishedSelection.current = null
+      publishFormat(null)
     }
-  }, [ctl, editor, isEditing])
+  }, [ctl, editor, isEditing, publishFormat])
 
   return (
     <div style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex' }}>
@@ -866,7 +913,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
           }}
         >
           {pages.map((p, i) =>
-            (i < first || i > last) && i !== caretPage ? null : (
+            (i < first || i > last) && !pinned.has(i) ? null : (
               <PageView
                 key={i}
                 index={i}
@@ -997,11 +1044,8 @@ function PageView({ index, count, slice, blocks, meta, page, top, left, height, 
     [client, index, count, editing, colResize, str],
   )
   const hfCtx = useMemo<RenderCtx>(() => ({ ...ctx, editable: false }), [ctx])
-  const first = index === 0 && meta?.titlePg
-  const header = first ? meta?.firstHeader : meta?.header
-  const footer = first ? meta?.firstFooter : meta?.footer
-  const hk: HFKind = first ? 'firstHeader' : 'header'
-  const fk: HFKind = first ? 'firstFooter' : 'footer'
+  // the first page's, the even pages' (when the file has different odd and even ones) or the default
+  const { header, footer, hk, fk } = pageHF(meta ?? undefined, index)
   const items = []
   for (let i = slice.start; i < slice.end; i++) {
     const b = blocks[i]

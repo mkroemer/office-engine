@@ -9,6 +9,8 @@
     <div id="mounted" style="height: 420px"></div>
     <script type="module">
       import { mount } from '../../src/embed.ts'
+      import { de } from '../../src/locales/de.ts'
+      window.__german = de
       window.__wcEvents = []
       const wc = document.getElementById('wc')
       wc.addEventListener('load', (e) => window.__wcEvents.push(e.detail))

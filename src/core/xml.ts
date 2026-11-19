@@ -43,15 +43,34 @@ export const MAX_XML_DEPTH = 1024
 
 export const tooDeep = () => new Error(`XML nested deeper than ${MAX_XML_DEPTH} elements`)
 
+/** characters an unfinished tag may run to before the file is refused (a tag is held whole: its attributes are read together) */
+const MAX_XML_TAG = 16 * 1024 * 1024
+
 export class SaxParser {
+  /** what of the last chunk waits for the next one: the start of a token, a few characters at most */
   private buf = ''
   private depth = 0
   private skipDepth = -1
   private relPrefixes = new Set<string>(['r'])
+  /**
+   * Inside a comment, a processing instruction, a declaration or a CDATA section that ends in a later chunk: what
+   * ends it. Its content is passed on (or dropped) chunk by chunk, never held: a comment of 300 MB costs nothing.
+   */
+  private until = ''
+  private cdata = false
+  /**
+   * A tag that ends in a later chunk: its pieces so far, joined when the end comes (so it is read once, however many
+   * chunks it spans), their length, and the quote its end is looked for inside.
+   */
+  private tag: string[] | null = null
+  private tagLen = 0
+  private tagQuote = 0
+  private tagQuoted = false
 
   /**
    * @param raw optional tap receiving every consumed source segment verbatim (tags, text, comments…),
-   *   called right before the matching handler event. Used for byte-preserving rewrites.
+   *   called right before the matching handler event. Used for byte-preserving rewrites. A long text or comment
+   *   comes in several segments.
    */
   constructor(
     private h: SaxHandler,
@@ -59,28 +78,110 @@ export class SaxParser {
   ) {}
 
   write(chunk: string): void {
-    this.buf = this.buf.length ? this.buf + chunk : chunk
-    this.run(false)
+    if (!chunk) return
+    if (this.tag) {
+      // only the new characters are looked at, for the end of the tag
+      if (this.tagEnd(chunk) < 0) {
+        this.tag.push(chunk)
+        this.tagLen += chunk.length
+        if (this.tagLen > MAX_XML_TAG) throw new Error(`XML tag longer than ${MAX_XML_TAG >> 20} MB`)
+        return
+      }
+      chunk = this.tag.join('') + chunk
+      this.tag = null
+    } else if (this.buf) chunk = this.buf + chunk
+    this.buf = ''
+    this.run(chunk, false)
   }
 
   end(): void {
-    this.run(true)
+    const s = this.buf
     this.buf = ''
+    this.run(s, true)
+    this.buf = ''
+    this.until = ''
+    this.cdata = false
+    this.tag = null
   }
 
-  private run(final: boolean) {
-    const s = this.buf
+  /** index of the `>` that ends the unfinished tag in `chunk`, -1 when it is not there (the quote state moves on) */
+  private tagEnd(chunk: string): number {
+    if (!this.tagQuoted) return chunk.indexOf('>')
+    let q = this.tagQuote
+    for (let j = 0; j < chunk.length; j++) {
+      const cc = chunk.charCodeAt(j)
+      if (q !== 0) {
+        if (cc === q) q = 0
+      } else if (cc === 34 || cc === 39) q = cc
+      else if (cc === 62) return j
+    }
+    this.tagQuote = q
+    return -1
+  }
+
+  /** the tag starting at `lt` does not end in `s`: it is held until it does */
+  private holdTag(s: string, lt: number, quote: number, quoted: boolean) {
+    this.tag = [s.substring(lt)]
+    this.tagLen = s.length - lt
+    this.tagQuote = quote
+    this.tagQuoted = quoted
+    if (this.tagLen > MAX_XML_TAG) throw new Error(`XML tag longer than ${MAX_XML_TAG >> 20} MB`)
+  }
+
+  /**
+   * The comment / processing instruction / declaration / CDATA section opened at `lt` (its opening `open` characters
+   * long) does not end in `s`: what is there of it is passed on, less the characters its end may start with.
+   */
+  private enter(s: string, lt: number, open: number, until: string, cdata: boolean) {
+    const n = s.length
+    const keep = Math.min(n - lt - open, until.length - 1)
+    this.raw?.(s.substring(lt, n - keep))
+    if (cdata && this.skipDepth < 0 && n - keep > lt + open) this.h.text(s.substring(lt + open, n - keep))
+    this.buf = s.substring(n - keep)
+    this.until = until
+    this.cdata = cdata
+  }
+
+  private run(s: string, final: boolean) {
     const n = s.length
     let i = 0
+    if (this.until) {
+      const until = this.until
+      const e = s.indexOf(until)
+      const cdata = this.cdata
+      if (e < 0) {
+        // not yet: on with it, less the characters its end may start with
+        const keep = final ? 0 : Math.min(n, until.length - 1)
+        if (n > keep) {
+          const seg = s.substring(0, n - keep)
+          this.raw?.(seg)
+          if (cdata && this.skipDepth < 0) this.h.text(seg)
+        }
+        this.buf = s.substring(n - keep)
+        return
+      }
+      this.raw?.(s.substring(0, e + until.length))
+      if (cdata && this.skipDepth < 0 && e > 0) this.h.text(s.substring(0, e))
+      this.until = ''
+      this.cdata = false
+      i = e + until.length
+    }
     while (i < n) {
       const lt = s.indexOf('<', i)
       if (lt < 0) {
-        if (final) {
-          const seg = s.substring(i)
+        // Text is passed on as it comes (a run of it is not held until its end: it may be the whole file), less a
+        // character reference that may be cut by the end of the chunk.
+        let cut = n
+        if (!final) {
+          const amp = s.lastIndexOf('&')
+          if (amp >= i && amp >= n - 16 && s.indexOf(';', amp) < 0) cut = amp
+        }
+        if (cut > i) {
+          const seg = s.substring(i, cut)
           this.raw?.(seg)
           this.onText(seg)
-          i = n
         }
+        i = cut
         break
       }
       if (lt > i) {
@@ -93,7 +194,11 @@ export class SaxParser {
       const c = s.charCodeAt(lt + 1)
       if (c === 47) {
         const gt = s.indexOf('>', lt + 2)
-        if (gt < 0) break
+        if (gt < 0) {
+          if (!final) this.holdTag(s, lt, 0, false)
+          i = n
+          break
+        }
         this.raw?.(s.substring(lt, gt + 1))
         this.onClose(s.substring(lt + 2, gt))
         i = gt + 1
@@ -101,7 +206,10 @@ export class SaxParser {
       }
       if (c === 63) {
         const e = s.indexOf('?>', lt + 2)
-        if (e < 0) break
+        if (e < 0) {
+          if (!final) this.enter(s, lt, 2, '?>', false)
+          return
+        }
         this.raw?.(s.substring(lt, e + 2))
         i = e + 2
         continue
@@ -110,21 +218,30 @@ export class SaxParser {
         if (n - lt < 9 && !final) break
         if (s.startsWith('<!--', lt)) {
           const e = s.indexOf('-->', lt + 4)
-          if (e < 0) break
+          if (e < 0) {
+            if (!final) this.enter(s, lt, 4, '-->', false)
+            return
+          }
           this.raw?.(s.substring(lt, e + 3))
           i = e + 3
           continue
         }
         if (s.startsWith('<![CDATA[', lt)) {
           const e = s.indexOf(']]>', lt + 9)
-          if (e < 0) break
+          if (e < 0) {
+            if (!final) this.enter(s, lt, 9, ']]>', true)
+            return
+          }
           this.raw?.(s.substring(lt, e + 3))
           if (this.skipDepth < 0) this.h.text(s.substring(lt + 9, e))
           i = e + 3
           continue
         }
         const e = s.indexOf('>', lt + 2)
-        if (e < 0) break
+        if (e < 0) {
+          if (!final) this.enter(s, lt, 2, '>', false)
+          return
+        }
         this.raw?.(s.substring(lt, e + 1))
         i = e + 1
         continue
@@ -141,7 +258,11 @@ export class SaxParser {
           break
         }
       }
-      if (gt < 0) break
+      if (gt < 0) {
+        if (!final) this.holdTag(s, lt, q, true)
+        i = n
+        break
+      }
       this.raw?.(s.substring(lt, gt + 1))
       this.onOpen(s, lt + 1, gt)
       i = gt + 1
@@ -235,18 +356,74 @@ export interface StreamParseOptions {
   onChunk?: (bytes: number) => void | Promise<void>
 }
 
+/**
+ * How a part is encoded: the byte order mark, else the first bytes of "<?" as UTF-16 (XML 1.0 appendix F), else a
+ * single-byte encoding the declaration names, else UTF-8. The common case costs two comparisons.
+ */
+export function xmlEncoding(b: Uint8Array): string {
+  const a = b[0]
+  const c = b[1]
+  if (a === 0xff && c === 0xfe) return 'utf-16le'
+  if (a === 0xfe && c === 0xff) return 'utf-16be'
+  if (a === 0x3c && c === 0) return 'utf-16le'
+  if (a === 0 && c === 0x3c) return 'utf-16be'
+  if (a !== 0x3c || c !== 0x3f) return 'utf-8'
+  let head = ''
+  for (let i = 0; i < b.length && i < 200 && b[i] !== 0x3e; i++) head += String.fromCharCode(b[i])
+  const label = /encoding\s*=\s*["']([A-Za-z][\w.:-]*)["']/.exec(head)?.[1].toLowerCase()
+  // the bytes are 8-bit here: a "UTF-16" declaration over them is wrong, and UTF-8 is what they are
+  if (!label || label === 'utf-8' || label === 'utf8' || label.startsWith('utf-1') || label.startsWith('utf-3')) return 'utf-8'
+  try {
+    new TextDecoder(label)
+    return label
+  } catch {
+    return 'utf-8'
+  }
+}
+
+/** the text of a part: any encoding XML allows (the byte order mark is dropped) */
+export function decodeXml(b: Uint8Array): string {
+  return new TextDecoder(xmlEncoding(b)).decode(b)
+}
+
+/** a part written out as UTF-8 must not declare another encoding */
+export function utf8Declaration(xml: string): string {
+  if (xml.charCodeAt(0) !== 0x3c || xml.charCodeAt(1) !== 0x3f) return xml
+  return xml.replace(/^(<\?xml[^>]*?\bencoding\s*=\s*)(["'])(?!utf-8\2)[^"']*\2/i, '$1$2UTF-8$2')
+}
+
 export async function parseXmlStream(stream: ReadableStream<Uint8Array>, h: SaxHandler, opts: StreamParseOptions = {}): Promise<void> {
   const reader = stream.getReader()
-  const dec = new TextDecoder()
+  let dec: TextDecoder | undefined
+  // the start of the part, held until there is enough of it to tell the encoding
+  let head: Uint8Array | undefined
   const p = new SaxParser(h, opts.raw)
   try {
     for (;;) {
       if (opts.signal?.aborted) throw new AbortedError()
       const { done, value } = await reader.read()
       if (done) break
-      p.write(dec.decode(value, { stream: true }))
+      let chunk = value
+      if (!dec) {
+        if (head) {
+          const all = new Uint8Array(head.length + value.length)
+          all.set(head)
+          all.set(value, head.length)
+          chunk = all
+        }
+        if (chunk.length < 200) {
+          head = chunk
+          if (opts.onChunk) await opts.onChunk(value.length)
+          continue
+        }
+        head = undefined
+        dec = new TextDecoder(xmlEncoding(chunk))
+      }
+      p.write(dec.decode(chunk, { stream: true }))
       if (opts.onChunk) await opts.onChunk(value.length)
     }
+    if (!dec) dec = new TextDecoder(xmlEncoding(head ?? new Uint8Array(0)))
+    if (head) p.write(dec.decode(head, { stream: true }))
     p.write(dec.decode())
     p.end()
   } catch (e) {
@@ -276,9 +453,24 @@ export interface TreeBuilderOptions {
   onShallowOpen?: (name: string, attrs: Attrs, depth: number) => void
   /** Element local names whose subtree is dropped. */
   skip?: Set<string>
+  /**
+   * Namespace prefixes a reader understands: an mc:Choice is taken only when everything it `Requires` is in the set,
+   * else the mc:Fallback is (content the reader cannot model stays out of the tree, and its source with it).
+   * Unset: the first mc:Choice always wins.
+   */
+  understood?: ReadonlySet<string>
 }
 
-/** Builds XEl trees; resolves mc:AlternateContent by taking the first mc:Choice. */
+/** What a docx reader models of the markup Word 365 hides in mc:Choice: drawings, shapes, groups, newer drawing / run extensions. */
+export const DOCX_UNDERSTOOD: ReadonlySet<string> = new Set(['wps', 'wpg', 'wpc', 'wpi', 'wp14', 'w14', 'w15', 'a14', 'a16'])
+
+/** whether every namespace an mc:Choice `Requires` (space separated prefixes) is understood */
+export function choiceUnderstood(requires: string | undefined, understood: ReadonlySet<string>): boolean {
+  const names = (requires ?? '').split(/\s+/).filter(Boolean)
+  return names.length > 0 && names.every((x) => understood.has(x))
+}
+
+/** Builds XEl trees; resolves mc:AlternateContent by taking the first mc:Choice (see `understood`). */
 export class TreeBuilder implements SaxHandler {
   root: XEl | null = null
   private stack: Frame[] = []
@@ -289,15 +481,27 @@ export class TreeBuilder implements SaxHandler {
   constructor(private o: TreeBuilderOptions = {}) {}
 
   open(name: string, a: Attrs): boolean | void {
-    if (name === 'Fallback' || this.o.skip?.has(name)) return true
+    if (this.o.skip?.has(name)) return true
+    if (name === 'Fallback') {
+      // the fallback stands in when no choice was understood
+      if (this.o.understood && this.alt.length && !this.alt[this.alt.length - 1]) {
+        this.alt[this.alt.length - 1] = true
+        this.stack.push(TRANSPARENT)
+        return
+      }
+      return true
+    }
     if (name === 'AlternateContent') {
+      // the element holding it is marked: what the reader does not model of it must still be kept
+      const holder = this.parents[this.parents.length - 1]
+      if (holder && this.o.understood) holder.a['#mc'] = '1'
       this.alt.push(false)
       this.stack.push(TRANSPARENT)
       return
     }
     if (name === 'Choice' && this.alt.length) {
       const top = this.alt.length - 1
-      if (this.alt[top]) return true
+      if (this.alt[top] || (this.o.understood && !choiceUnderstood(a.Requires, this.o.understood))) return true
       this.alt[top] = true
       this.stack.push(TRANSPARENT)
       return
@@ -336,8 +540,8 @@ export class TreeBuilder implements SaxHandler {
   }
 }
 
-export function parseXml(xml: string, skip?: Set<string>): XEl {
-  const tb = new TreeBuilder({ skip })
+export function parseXml(xml: string, skip?: Set<string>, understood?: ReadonlySet<string>): XEl {
+  const tb = new TreeBuilder({ skip, understood })
   const p = new SaxParser(tb)
   p.write(xml)
   p.end()

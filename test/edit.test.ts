@@ -4,7 +4,7 @@ import { paraSpec } from '../src/core/docx/spec'
 import type { Block, EditResult, Paragraph, StyleSetResult } from '../src/core/docx/types'
 import { ZipArchive } from '../src/core/zip'
 import { BlobSource } from '../src/core/source'
-import { rebuildZip } from '../src/core/zipwrite'
+import { rebuildZip, writeZip } from '../src/core/zipwrite'
 
 const S = (n: string) => `${import.meta.dir}/../playground/public/samples/${n}`
 const file = (n: string) => Bun.file(S(n)) as unknown as Blob
@@ -680,5 +680,89 @@ describe('xlsx state survives save/reopen exactly (collaboration snapshots)', ()
     const saved = await ZipArchive.open(new BlobSource((await re.engine.call('save', [])) as Blob))
     const xfs = new TextDecoder().decode(await saved.bytes('xl/styles.xml')).match(/<cellXfs[^>]*count="(\d+)"/)?.[1]
     expect(Number(xfs)).toBe(before)
+  })
+})
+
+const XML = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+const NS_MAIN = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+const REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+
+/** the smallest workbook: one sheet and no styles part (what a host creates as a blank spreadsheet), plus `extra` parts */
+function bareXlsx(sheetData = '<sheetData/>', extra: Record<string, string> = {}): Promise<Blob> {
+  return writeZip(
+    new Map(
+      Object.entries({
+        '[Content_Types].xml': `${XML}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`,
+        '_rels/.rels': `${XML}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL_NS}/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
+        'xl/workbook.xml': `${XML}<workbook xmlns="${NS_MAIN}" xmlns:r="${REL_NS}"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+        'xl/_rels/workbook.xml.rels': `${XML}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL_NS}/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`,
+        'xl/worksheets/sheet1.xml': `${XML}<worksheet xmlns="${NS_MAIN}">${sheetData}</worksheet>`,
+        ...extra,
+      }),
+    ),
+  )
+}
+
+/** how often the workbook names a styles part, and the content type the package gives `xl/styles.xml` */
+async function stylesLink(file: Blob) {
+  const rels = await partText(file, 'xl/_rels/workbook.xml.rels')
+  const types = await partText(file, '[Content_Types].xml')
+  return {
+    rels: rels.match(/<Relationship [^>]*relationships\/styles"[^>]*>/g) ?? [],
+    type: /<Override PartName="\/xl\/styles\.xml" ContentType="([^"]+)"/.exec(types)?.[1],
+  }
+}
+
+describe('xlsx workbook without a styles part', () => {
+  test('formatting it survives save / reopen: the saved workbook names the styles part it got', async () => {
+    const { engine } = await openXlsx(await bareXlsx())
+    await engine.call('xlsx.set', [0, [{ r: 0, c: 0, input: 'Title' }]])
+    await engine.call('xlsx.format', [0, { r0: 0, c0: 0, r1: 0, c1: 0 }, { b: true, fill: '#d9d9d9', valign: 'center' }])
+    const saved = (await engine.call('save', [])) as Blob
+    const link = await stylesLink(saved)
+    expect(link.rels.length).toBe(1)
+    expect(link.rels[0]).toContain('Target="styles.xml"')
+    expect(link.type).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml')
+
+    const re = await openXlsx(saved)
+    const a1 = await re.cell(0, 0)
+    expect(a1[1]).toBe('Title')
+    expect(re.info.xlsx!.styles[a1[2]]).toMatchObject({ fontWeight: 700, background: '#d9d9d9', alignItems: 'center' })
+
+    // saved again (and after another edit): still named once
+    await engine.call('xlsx.format', [0, { r0: 1, c0: 0, r1: 1, c1: 0 }, { i: true }])
+    expect((await stylesLink((await engine.call('save', [])) as Blob)).rels.length).toBe(1)
+    await re.engine.call('xlsx.set', [0, [{ r: 2, c: 0, input: 'more' }]])
+    expect((await stylesLink((await re.engine.call('save', [])) as Blob)).rels.length).toBe(1)
+  })
+
+  test('an edit without formatting adds no styles part', async () => {
+    const { engine } = await openXlsx(await bareXlsx())
+    await engine.call('xlsx.set', [0, [{ r: 0, c: 0, input: 'plain' }]])
+    const saved = (await engine.call('save', [])) as Blob
+    expect((await ZipArchive.open(new BlobSource(saved))).has('xl/styles.xml')).toBe(false)
+    expect((await stylesLink(saved)).rels.length).toBe(0)
+  })
+
+  test('a styles part no relationship names (a file saved before 0.14.2) is read, and named by the next save', async () => {
+    const styles = `${XML}<styleSheet xmlns="${NS_MAIN}"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="13"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFD9D9D9"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/></cellXfs></styleSheet>`
+    const orphan = await bareXlsx('<sheetData><row r="1"><c r="A1" s="1" t="inlineStr"><is><t>Title</t></is></c></row></sheetData>', { 'xl/styles.xml': styles })
+    expect((await stylesLink(orphan)).rels.length).toBe(0)
+
+    const { engine, info, cell } = await openXlsx(orphan)
+    expect(info.xlsx!.styles.length).toBe(2)
+    const a1 = await cell(0, 0)
+    expect(info.xlsx!.styles[a1[2]]).toMatchObject({ fontWeight: 700, fontSize: '13pt', background: '#d9d9d9' })
+
+    // an edit, then a save: the part is named, and is what it was
+    await engine.call('xlsx.set', [0, [{ r: 1, c: 0, input: 'next' }]])
+    const saved = (await engine.call('save', [])) as Blob
+    const link = await stylesLink(saved)
+    expect(link.rels.length).toBe(1)
+    expect(link.type).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml')
+    expect(await partText(saved, 'xl/styles.xml')).toBe(styles)
+    const re = await openXlsx(saved)
+    expect(re.info.xlsx!.styles[(await re.cell(0, 0))[2]]).toMatchObject({ fontWeight: 700, background: '#d9d9d9' })
+    expect((await re.cell(1, 0))[1]).toBe('next')
   })
 })

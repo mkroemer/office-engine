@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { rebuildZip } from '../src/core/zipwrite'
-import { SAMPLES, useBrowser, viewer } from './harness'
+import { SAMPLES, useBrowser, viewer, fromB64, xlsxSheet, docxParas, paraText, runsOf } from './harness'
 
 useBrowser()
 
@@ -47,6 +47,40 @@ describe('real-time collaboration', () => {
     expect(await b.shown('J10')).toBe('from Ann')
     await b.typeCell('J11', '=LEN(J10)')
     await a.page.waitForFunction(() => [...document.querySelectorAll('.de-cell')].some((c) => (c as HTMLElement).innerText === '8'), null, { timeout: 20_000 })
+  })
+
+  test('controller history follows collaboration across rename and save/reopen', async () => {
+    const id = await room('sample.xlsx')
+    const v = await viewer({ src: `${HTTP}/rooms/${id}/file?seq=0`, name: 'shared.xlsx', collab: `ws://localhost:${PORT}/collab`, room: id, user: 'Ann', editable: true, controller: true, onSave: true })
+    await v.page.locator('.de-collab-live').waitFor()
+    await v.typeCell('J12', 'before rename')
+    await v.page.waitForFunction(() => window.__ctl.snapshot().canUndo)
+    await v.page.locator('.de-tab[role=tab]').first().dblclick()
+    await v.page.locator('.de-tab-input').fill('Renamed')
+    await v.page.keyboard.press('Enter')
+    await v.page.waitForFunction(() => window.__ctl.snapshot().outline?.items[0].title === 'Renamed')
+    expect(await v.page.evaluate(() => window.__ctl.snapshot().canUndo)).toBe(false)
+    // Verify Ctrl+Z and the controller agree on the actual document, rather than just flags.
+    await v.page.locator('.de-grid').focus()
+    await v.page.keyboard.press('Control+z')
+    await v.page.evaluate(() => window.__ctl.save())
+    let saved = await v.waitEvent('save')
+    expect((await xlsxSheet(fromB64(saved.b64 as string))).cell('J12')).toBe('before rename')
+    await v.typeCell('J12', 'after rename')
+    await v.page.waitForFunction(() => window.__ctl.snapshot().canUndo)
+    await v.page.evaluate(() => window.__ctl.undo())
+    await v.page.waitForFunction(() => window.__ctl.snapshot().canRedo && !window.__ctl.snapshot().canUndo)
+    await v.page.evaluate(() => window.__ctl.save())
+    saved = await v.waitEvent('save', 2)
+    expect((await xlsxSheet(fromB64(saved.b64 as string))).cell('J12')).toBe('before rename')
+    await v.page.evaluate(() => window.__ctl.redo())
+    await v.page.waitForFunction(() => window.__ctl.snapshot().canUndo && !window.__ctl.snapshot().canRedo)
+    await v.page.evaluate(() => window.__ctl.save())
+    saved = await v.waitEvent('save', 3)
+    const reopened = await xlsxSheet(fromB64(saved.b64 as string))
+    expect(reopened.names[0]).toBe('Renamed')
+    expect(reopened.cell('J12')).toBe('after rename')
+    expect(v.errors).toEqual([])
   })
 
   test('a newcomer opens the latest snapshot and only replays later edits', async () => {
@@ -148,3 +182,65 @@ describe('docx: a built-in style the document lacks', () => {
     expect(v.errors).toEqual([])
   })
 })
+
+
+for (const control of ['input', 'button'] as const) {
+  test(`docx: focused host ${control} keeps its formatting target across peer structure and text edits`, async () => {
+    const id = await room('sample.docx')
+    const joinDoc = (user: string) => viewer({ src: `${HTTP}/rooms/${id}/file?seq=0`, name: 'shared.docx', collab: `ws://localhost:${PORT}/collab`, room: id, user, base: 0, editable: true, controller: true, onSave: true })
+    const a = await joinDoc('Ann')
+    const b = await joinDoc('Bob')
+    for (const v of [a, b]) await v.page.locator('.de-collab-live').waitFor({ timeout: 20_000 })
+    await b.page.evaluate(() => {
+      const input = document.createElement('input')
+      input.id = 'collab-format-input'; input.style.cssText = 'position:fixed;top:30px;left:0;z-index:999999'
+      document.body.append(input)
+      for (const [i, command] of [
+        { op: 'toggle', mark: 'underline' }, { op: 'size', pt: 31 }, { op: 'color', color: '#00aa00' },
+      ].entries()) {
+        const button = document.createElement('button')
+        button.id = `collab-format-${i}`; button.textContent = String(i)
+        button.style.cssText = `position:fixed;top:0;left:${i * 60}px;z-index:999999`
+        button.onclick = () => window.__ctl.format(command as any)
+        document.body.append(button)
+      }
+    })
+    await b.selectText('document')
+    const commands = [{ op: 'toggle', mark: 'underline' }, { op: 'size', pt: 31 }, { op: 'color', color: '#00aa00' }]
+    const apply = async (i: number) => {
+      if (control === 'input') {
+        await b.page.locator('#collab-format-input').click()
+        await b.page.evaluate((command) => window.__ctl.format(command as any), commands[i])
+      } else if (i === 2) {
+        await b.page.locator(`#collab-format-${i}`).focus()
+        await b.page.keyboard.press('Enter')
+      } else await b.page.locator(`#collab-format-${i}`).click()
+      await b.page.waitForTimeout(200)
+    }
+    await apply(0)
+    await a.selectText('Quarterly Report', 'start')
+    await a.page.keyboard.type('Peer prefix')
+    await a.page.keyboard.press('Enter')
+    await b.page.waitForFunction(() => document.querySelector('.de-pages')?.textContent?.includes('Peer prefix'))
+    await b.page.waitForTimeout(300)
+    expect(await b.page.evaluate(() => window.__ctl.snapshot().format?.underline)).toBe(true)
+    await apply(1)
+    await a.selectText('This', 'start')
+    await a.page.keyboard.type('Zq')
+    await b.page.waitForFunction(() => document.querySelector('.de-pages')?.textContent?.includes('ZqThis document'))
+    await b.page.waitForTimeout(300)
+    await apply(2)
+    expect(await b.page.evaluate(() => window.__ctl.snapshot().format)).toMatchObject({ underline: true, size: 31, color: '#00aa00' })
+    await a.page.waitForTimeout(500)
+    for (const v of [a, b]) {
+      await v.page.evaluate(() => window.__ctl.save())
+      const bytes = fromB64((await v.waitEvent('save')).b64 as string)
+      const p = (await docxParas(bytes)).find((p) => paraText(p).startsWith('ZqThis document'))!
+      const run = runsOf(p).find((r) => r.text === 'document')!
+      expect(run.s.u).toBe('single')
+      expect(run.s.sz).toBe(31)
+      expect(run.s.color).toMatch(/00aa00/i)
+      expect(v.errors).toEqual([])
+    }
+  })
+}

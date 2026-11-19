@@ -34,6 +34,12 @@ export interface RichHost<P extends RichPara = RichPara> {
   backspaceAtStart?(pa: string, p: P): boolean
   /** Tab inside a paragraph (e.g. indent list); true when handled */
   tab?(sel: Sel, shift: boolean): boolean
+  /** Enter in an empty paragraph (e.g. leave a list); true when handled */
+  enterAtEmpty?(pa: string, p: P): boolean
+  /** ArrowRight / ArrowLeft with a caret that may have to leave a container (a table); true when handled */
+  arrow?(sel: Sel, dir: 1 | -1): boolean
+  /** copy / cut: puts the selection on the clipboard from the model; true when handled (the browser's own copy is skipped) */
+  copy?(sel: Sel, data: DataTransfer, cut: boolean): boolean
   undo(): void
   redo(): void
   toggle?(key: 'b' | 'i' | 'u'): void
@@ -51,6 +57,8 @@ export interface RichHost<P extends RichPara = RichPara> {
   /** deletes a range that spans other blocks (tables): applies the change and returns the caret, or null when unsupported */
   deleteAcross?(s: Pos, e: Pos): Pos | null
 }
+
+const NAV = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'])
 
 export function ordered(host: RichHost, s: Sel): [Pos, Pos] {
   const c = host.cmp(s.a.pa, s.f.pa)
@@ -163,6 +171,8 @@ export function opEnter(host: RichHost, sel: Sel) {
   })() : planDelete(host, sel)
   if (!plan) return
   const p = plan.paras[0]
+  // Enter in an empty paragraph of a list ends the list (Word, Docs)
+  if (collapsed(sel) && !plen(p.runs) && host.enterAtEmpty?.(sel.a.pa, p)) return
   const [l, r] = splitRuns(p.runs, plan.at.o)
   const [a, b] = host.split(p, l, r, plan.at.o >= plen(p.runs))
   host.replace(plan.pas, [a, b], caret({ pa: shiftPa(plan.at.pa, 1), o: 0 }), { label: 'enter' })
@@ -317,7 +327,8 @@ interface SelPoints {
   focusOffset: number
 }
 
-function selPoints(root: HTMLElement): SelPoints | null {
+/** both ends of the selection, as nodes inside the shadow root containing `root` when there is one */
+export function selPoints(root: HTMLElement): SelPoints | null {
   const rn = root.getRootNode()
   const s = getSel(root)
   if (!s) return null
@@ -337,20 +348,45 @@ export class RichInput {
   private composing: Sel | null = null
   private justComposed = ''
   private raf = 0
-  lastSel: Sel | null = null
+  private last: Sel | null = null
+  /** the last selection known; assigning it makes it the selection (what an edit asked for no longer holds) */
+  get lastSel(): Sel | null {
+    return this.last
+  }
+  set lastSel(sel: Sel | null) {
+    this.last = sel
+    this.expected = null
+  }
+  /** A live formatting target remains valid while a focused host control owns DOM focus. */
+  private formatTarget: Sel | null = null
+  private attachedRoot: HTMLElement | null = null
+  private commandSelection: Sel | null = null
+  formatting = false
   /** select all: the model selection covers every paragraph, the DOM one only what is rendered */
   private override: { model: Sel; dom: Sel } | null = null
+  /**
+   * The caret an edit asked for, until the DOM shows it: the next key press can come before the view is rebuilt, and
+   * the DOM caret is then still where the edit was made (typing without a pause across a paragraph break).
+   */
+  private expected: Sel | null = null
+  /** where the DOM selection last was in a paragraph: a view update that removes this node leaves the caret on the page element */
+  private seen: Node | null = null
 
   constructor(private host: RichHost) {}
 
   attach(root: HTMLElement) {
     if (this.root === root) return
     this.detach()
+    if (this.attachedRoot !== root) this.clearSelection()
+    this.attachedRoot = root
     this.root = root
     root.addEventListener('beforeinput', this.onBeforeInput)
     root.addEventListener('compositionstart', this.onCompStart)
     root.addEventListener('compositionend', this.onCompEnd)
     root.addEventListener('keydown', this.onKeyDown)
+    root.addEventListener('mousedown', this.onMouseDown)
+    root.addEventListener('copy', this.onCopy)
+    root.addEventListener('cut', this.onCopy)
     document.addEventListener('selectionchange', this.onSelChange)
   }
 
@@ -361,11 +397,29 @@ export class RichInput {
     r.removeEventListener('compositionstart', this.onCompStart)
     r.removeEventListener('compositionend', this.onCompEnd)
     r.removeEventListener('keydown', this.onKeyDown)
+    r.removeEventListener('mousedown', this.onMouseDown)
+    r.removeEventListener('copy', this.onCopy)
+    r.removeEventListener('cut', this.onCopy)
     document.removeEventListener('selectionchange', this.onSelChange)
     cancelAnimationFrame(this.raf)
     this.raf = 0 // or the next selection change waits forever for a frame that was cancelled
     this.root = null
+    this.expected = null
+    this.seen = null
+  }
+
+  clearSelection() {
     this.override = null
+    this.formatTarget = null
+    this.lastSel = null
+    this.expected = null
+    this.seen = null
+  }
+
+  get focused() {
+    const root = this.root
+    const active = (root?.getRootNode() as Document | ShadowRoot | undefined)?.activeElement
+    return !!root && (active === root || !!active && root.contains(active))
   }
 
   get isComposing() {
@@ -379,12 +433,75 @@ export class RichInput {
     if (!root.contains(s.anchorNode) || !root.contains(s.focusNode)) return null
     const a = posFromDom(root, s.anchorNode, s.anchorOffset)
     const f = posFromDom(root, s.focusNode, s.focusOffset)
+    if (a && f) this.seen = s.anchorNode
     return a && f ? { a, f } : null
+  }
+
+  /** the caret an edit asked for, which key presses go by until the view shows it (see `expected`) */
+  expect(sel: Sel) {
+    this.expected = sel
+  }
+
+  /** where the caret is going to be: the one an edit asked for, else the last known */
+  get caret(): Sel | null {
+    return this.expected ?? this.last
+  }
+
+  /** the selection a key press acts on */
+  private live(): Sel | null {
+    return this.commandSelection ?? this.override?.model ?? this.expected ?? this.sel()
+  }
+
+  /**
+   * After the view was rebuilt: a caret whose paragraph was removed from the DOM (it moved to another page) sits on the
+   * page element, outside every paragraph. Puts it back at the last known place.
+   */
+  repair(): boolean {
+    const root = this.root
+    const seen = this.seen
+    if (!root || this.composing || this.override || !seen || seen.isConnected || !this.lastSel) return false
+    const s = selPoints(root)
+    if (!s?.anchorNode || !root.contains(s.anchorNode) || this.readSel()) return false
+    this.seen = null
+    return this.restore(this.lastSel, false)
   }
 
   /** current selection, falling back to the last known one (e.g. after focusing a toolbar control) */
   sel(): Sel | null {
-    return this.override?.model ?? this.readSel() ?? this.lastSel
+    return this.commandSelection ?? this.override?.model ?? this.readSel() ?? this.lastSel
+  }
+
+  /** Keep a logical target for any focused host element, including keyboard-operated buttons and menus. */
+  private activeHost(): Element | null {
+    const root = this.root
+    if (!root) return null
+    let active = root.ownerDocument.activeElement
+    while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement
+    if (!active || root.contains(active)) return null
+    // A focusable page wrapper is background, including ancestors outside a web component's shadow root.
+    let scope: Node = root
+    for (;;) {
+      if (active.contains(scope)) return null
+      const tree = scope.getRootNode()
+      if (!(tree instanceof ShadowRoot)) return active
+      scope = tree.host
+    }
+  }
+
+  /** Use the exact published logical target for one command, without affecting later undo/navigation. */
+  withFormatSelection(sel: Sel, apply: () => void) {
+    this.commandSelection = sel
+    this.formatting = true
+    this.lastSel = sel
+    try { apply() } finally {
+      this.commandSelection = null
+      this.formatting = false
+    }
+  }
+
+  formatSelection(): Sel | null {
+    const sel = this.activeHost() ? (this.formatTarget && this.lastSel) : (this.override?.model ?? this.readSel())
+    return sel && this.host.para(sel.a.pa) && this.host.para(sel.f.pa) ? sel : null
   }
 
   /**
@@ -410,18 +527,24 @@ export class RichInput {
   }
 
   /** Applies a model selection to the DOM; false when its paragraph isn't rendered. */
-  restore(sel: Sel | null, focus = true): boolean {
+  restore(sel: Sel | null, focus: boolean | 'preserve' = this.formatting ? 'preserve' : true): boolean {
     const root = this.root
     if (!root || !sel) return false
+    const active = (root.getRootNode() as Document | ShadowRoot).activeElement
+    if (focus === 'preserve' && active !== root && !root.contains(active)) {
+      this.lastSel = sel
+      return true
+    }
     this.override = null
     const a = domFromPos(root, sel.a)
     const f = domFromPos(root, sel.f)
     if (!a || !f) {
-      this.lastSel = sel
+      // not in the DOM (its page is not shown): the DOM caret is somewhere else, and key presses go by this one
+      this.last = sel
+      this.expected = sel
       return false
     }
-    const active = (root.getRootNode() as Document | ShadowRoot).activeElement
-    if (focus && active !== root && !root.contains(active)) root.focus({ preventScroll: true })
+    if (focus === true && active !== root && !root.contains(active)) root.focus({ preventScroll: true })
     const s = getSel(root)
     try {
       s?.setBaseAndExtent(a[0], a[1], f[0], f[1])
@@ -429,6 +552,8 @@ export class RichInput {
       /* node vanished */
     }
     this.lastSel = sel
+    this.expected = null
+    this.formatTarget = sel
     return true
   }
 
@@ -445,7 +570,7 @@ export class RichInput {
     if (t === 'deleteCompositionText' || t === 'insertFromComposition') {
       if (e.cancelable) e.preventDefault()
       if (t === 'insertFromComposition' && e.data && e.data !== this.justComposed) {
-        const sel = this.sel()
+        const sel = this.live()
         if (sel) opInsert(this.host, sel, e.data, { remount: true })
       }
       this.justComposed = ''
@@ -453,7 +578,7 @@ export class RichInput {
     }
     e.preventDefault()
     const target = this.rangeSel(e.getTargetRanges?.()[0])
-    const sel = this.sel()
+    const sel = this.live()
     if (!sel) return
     const h = this.host
     switch (t) {
@@ -519,7 +644,7 @@ export class RichInput {
   }
 
   private onCompStart = () => {
-    this.composing = this.sel()
+    this.composing = this.live()
   }
 
   private onCompEnd = (e: CompositionEvent) => {
@@ -563,28 +688,51 @@ export class RichInput {
         return
       }
     }
+    if (NAV.has(e.key)) this.expected = null
+    if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft') && !mod && !e.shiftKey && !e.altKey) {
+      const sel = this.live()
+      if (sel && collapsed(sel) && this.host.arrow?.(sel, e.key === 'ArrowRight' ? 1 : -1)) e.preventDefault()
+      return
+    }
     if (e.key === 'Tab' && !mod) {
       e.preventDefault()
-      const sel = this.sel()
+      const sel = this.live()
       if (!sel) return
       if (!this.host.tab?.(sel, e.shiftKey) && !e.shiftKey) opInsert(this.host, sel, '\t')
     }
+  }
+
+  /** a click moves the caret: what an edit asked for no longer holds */
+  private onMouseDown = () => {
+    this.expected = null
+  }
+
+  private onCopy = (e: ClipboardEvent) => {
+    const sel = this.live()
+    if (!e.clipboardData || !sel || collapsed(sel)) return
+    if (this.host.copy?.(sel, e.clipboardData, e.type === 'cut')) e.preventDefault()
   }
 
   private onSelChange = () => {
     if (this.raf) return
     this.raf = requestAnimationFrame(() => {
       this.raf = 0
-      const s = this.readSel()
+      const dom = this.readSel()
+      const control = this.activeHost()
       const ov = this.override
+      const active = (this.root?.getRootNode() as Document | ShadowRoot | undefined)?.activeElement
       // select all stays until the selection moves somewhere else (losing it to a re-render keeps it, like lastSel)
-      if (ov && s && !sameSel(s, ov.dom)) this.override = null
-      else if (ov) {
+      if (ov && ((control && !!this.formatTarget) || (dom ? sameSel(dom, ov.dom) : this.root === active))) {
+        this.formatTarget = ov.model
         this.host.onSelection?.(ov.model)
         return
       }
-      if (s) this.lastSel = s
-      this.host.onSelection?.(s)
+      this.override = null
+      const s = control ? this.formatSelection() : dom
+      if (s && this.expected && sameSel(s, this.expected)) this.expected = null
+      if (s && !this.expected) this.lastSel = s
+      this.formatTarget = this.expected ?? s
+      this.host.onSelection?.(this.expected ?? s)
     })
   }
 }

@@ -3,21 +3,25 @@
  *   ?src=samples/sample.docx&editable=1&allowSave=0&onSave=1&items=1&close=1&collab=ws://…&room=r
  *   comments: &me=Ann&meId=u1 (author), &people=1 (mentions: Ann, Bob Stone, Cid), &comments=0 (hidden), &cmOpen=1
  *   &icons=1: every icon from a host resolver, as `<svg data-host-icon={name}>`
- *   texts: &locale=de, &fileLabel=… (a partial `strings` override of the File menu's label)
+ *   texts: &locale=de-DE opts into the explicitly imported German table, &fileLabel=… overrides the File label
  *   &components=1: the host's own Button, Separator, Dialog and Toast (`data-host-*` markers)
  *   &headless=1: the document alone; the viewer is driven through window.__ctl (its controller) either way
  *   &chrome=1: the host-placed controls (ZoomBar, StatusText, FormatBar, OutlineList, SheetTabs) in `#host-chrome`
  */
-import { useState } from 'react'
+import { StrictMode, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { createViewerController, DocViewer, FormatBar, OutlineList, SheetTabs, StatusText, useThemeRoot, ZoomBar, type DocViewerProps, type FileMenuItem, type UIComponents, type ViewerController } from '../../src'
+import { createViewerController, useViewerState, DocViewer, FormatBar, OutlineList, SheetTabs, StatusText, useThemeRoot, ZoomBar, type DocViewerProps, type FileMenuItem, type UIComponents, type ViewerController } from '../../src'
+import { de } from '../../src/locales/de'
 
 type Ev = { type: string; [k: string]: unknown }
 declare global {
   interface Window {
     __events: Ev[]
     __setProps: (p: Partial<DocViewerProps>) => void
+    __setLanguage: (language: 'en' | 'de-DE') => void
+    __german: typeof de
     __ctl: ViewerController
+    __overlap: (phase: number, props?: Partial<DocViewerProps>) => void
   }
 }
 window.__events = []
@@ -28,6 +32,7 @@ const log = (e: Ev) => window.__events.push(e)
 
 const q = new URLSearchParams(location.search)
 const flag = (k: string) => (q.has(k) ? q.get(k) !== '0' : undefined)
+const texts = q.get('locale') === 'de-DE' || q.get('locale') === 'de' ? de : undefined
 
 async function b64(blob: Blob) {
   const bytes = new Uint8Array(await blob.arrayBuffer())
@@ -44,7 +49,7 @@ const items: FileMenuItem[] = [
 // plain host components: no engine classes, so nothing of the engine's CSS styles them
 const components: Partial<UIComponents> = {
   Button: (p) => (
-    <button type="button" data-host-button="" data-active={p.active || undefined} title={p.title} aria-label={p.title} aria-expanded={p.expanded} disabled={p.disabled} onMouseDown={p.onMouseDown} onClick={p.onClick}>
+    <button type="button" data-host-button="" data-active={p.active || undefined} title={p.title} aria-label={p.title} aria-expanded={p.expanded} disabled={p.disabled} onMouseDown={p.onMouseDown} onClick={p.onClick} style={p.iconName === 'more' ? { width: 140 } : undefined}>
       {p.icon}
       {p.label}
       {p.children}
@@ -53,7 +58,7 @@ const components: Partial<UIComponents> = {
   Separator: () => <i data-host-sep="" />,
   Dialog: (p) => {
     const actions = p.actions.map((a, i) => (
-      <button key={i} type={a.submit ? 'submit' : 'button'} data-primary={a.primary || undefined} autoFocus={a.autoFocus} onClick={a.onClick}>
+      <button key={i} type={a.submit ? 'submit' : 'button'} data-primary={a.primary || undefined} autoFocus={a.autoFocus} onClick={a.submit && p.onSubmit ? undefined : a.onClick}>
         {a.label}
       </button>
     ))
@@ -99,10 +104,10 @@ const initial: DocViewerProps = {
   captureSelectAll: flag('captureSelectAll'),
   theme: (q.get('theme') as DocViewerProps['theme']) ?? undefined,
   injectStyles: flag('injectStyles'),
-  locale: (q.get('locale') as DocViewerProps['locale']) ?? undefined,
-  strings: q.has('fileLabel') ? { file: { menu: q.get('fileLabel')! } } : undefined,
+  locale: (texts ? undefined : q.get('locale') as DocViewerProps['locale']) ?? undefined,
+  strings: q.has('fileLabel') ? { ...texts, file: { ...(texts?.file ?? {}), menu: q.get('fileLabel')! } } : texts,
   headless: flag('headless'),
-  controller: window.__ctl,
+  controller: flag('controller') ? window.__ctl : undefined,
   onSave: q.has('onSave') ? async (blob, name) => void log({ type: 'save', name, b64: await b64(blob) }) : undefined,
   onDirtyChange: (dirty) => log({ type: 'dirty', dirty }),
   onRename: (name) => log({ type: 'rename', name }),
@@ -130,16 +135,36 @@ const initial: DocViewerProps = {
   collab: q.get('collab') ? { transport: q.get('collab')!, room: q.get('room') ?? 'e2e', base: Number(q.get('base')) || 0, user: { name: q.get('user') ?? 'Tester' } } : undefined,
 }
 
+function RenderingHost({ props }: { props: DocViewerProps }) {
+  const f = useViewerState(window.__ctl).format
+  return <><input aria-label="React host size" type="number" disabled={!f} defaultValue="" onChange={(e) => window.__ctl.format({ op: 'size', pt: e.currentTarget.valueAsNumber })} />
+    <DocViewer {...props} onSave={async (blob, name) => { log({ type: 'save', name, b64: await b64(blob) }) }} /></>
+}
+
 function App() {
   const [props, setProps] = useState(initial)
+  const [phase, setPhase] = useState(0)
+  const [nextProps, setNextProps] = useState<Partial<DocViewerProps>>({})
+  window.__overlap = (phase, next) => {
+    if (next) setNextProps(next)
+    setPhase(phase)
+  }
   window.__setProps = (p) => setProps((cur) => ({ ...cur, ...p }))
-  if (!q.has('chrome')) return <DocViewer {...props} />
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
-      <HostChrome />
-      <DocViewer {...props} style={{ flex: 1, minHeight: 0 }} />
-    </div>
-  )
+  window.__setLanguage = (language) => setProps((cur) => ({ ...cur, strings: language === 'de-DE' ? de : undefined }))
+  const { undo, redo } = window.__ctl
+  if (q.has('renderHost')) return <RenderingHost props={props} />
+  if (q.has('chrome'))
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+        <HostChrome />
+        <DocViewer {...props} style={{ flex: 1, minHeight: 0 }} />
+      </div>
+    )
+  return <>
+    {q.has('hostControls') && <div><button onClick={undo}>Host undo</button><button onClick={redo}>Host redo</button><button onMouseDown={(e) => e.preventDefault()} onClick={() => window.__ctl.goto(window.__ctl.snapshot().outline!.items[1].id)}>Host second sheet</button></div>}
+    {phase < 2 && <DocViewer key="old" {...props} />}
+    {phase > 0 && phase < 3 && <DocViewer key="new" {...props} {...nextProps} />}
+  </>
 }
 
 function HostChrome() {
@@ -160,4 +185,4 @@ function HostChrome() {
   )
 }
 
-createRoot(document.getElementById('root')!).render(<App />)
+createRoot(document.getElementById('root')!).render(q.has('strict') ? <StrictMode><App /></StrictMode> : <App />)

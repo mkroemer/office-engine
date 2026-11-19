@@ -5,7 +5,7 @@ import { EditorBar } from '../common/Slots'
 import { Btn, ColorBtn, Dropdown, fontName, fontOptions, GridPicker, Icon, Menu, pickFiles, Pop, Select, Sep, SizeBox, type DropOption, type IconName } from '../edit/Toolbar'
 import type { BorderPreset } from './tables'
 import type { DocxEditor, FormatState } from './DocxEditor'
-import { en, formatNumber, useStrings, type Strings } from '../strings'
+import { formatNumber, useStrings, type Strings } from '../strings'
 
 const HIGHLIGHTS = ['#ffff00', '#00ff00', '#00ffff', '#ff00ff', '#0000ff', '#ff0000', '#000080', '#008080', '#008000', '#800080', '#800000', '#808000', '#808080', '#c0c0c0', '#000000']
 
@@ -65,7 +65,7 @@ const SYMBOLS = [
 ]
 
 /** the paragraph styles offered: the built-in ones first (in the document or not: `@kind` then), then the document's other quick styles */
-export function styleChoices(styles: StyleInfo[], t: Strings = en) {
+export function styleChoices(styles: StyleInfo[], t: Strings) {
   const out: { value: string; label: string; k?: CanonStyle; s?: StyleInfo; look?: CSSProperties; sep: boolean }[] = CANON.map(({ k, look }, i) => {
     const s = styles.find((x) => x.canon === k)
     return { value: s?.id ?? `@${k}`, label: t.docx.styles[k], k, s, look, sep: i === 1 }
