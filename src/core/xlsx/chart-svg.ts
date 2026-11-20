@@ -418,7 +418,7 @@ const isStacked = (g: ChartGroup) => g.grouping === 'stacked' || g.grouping === 
 const xValued = (g: ChartGroup) => g.type === 'scatter' || g.type === 'bubble'
 
 /** the extent of a group's values on its value axis (sums when stacked, 0…1 when 100%) */
-function extent(g: ChartGroup): [number, number] {
+function extent(g: ChartGroup, blanks: ChartModel['blanks'] = 'gap'): [number, number] {
   if (g.grouping === 'percentStacked') {
     const neg = g.series.some((s) => s.values.some((v) => v !== null && v < 0))
     return [neg ? -1 : 0, 1]
@@ -440,7 +440,9 @@ function extent(g: ChartGroup): [number, number] {
     }
     return [lo, hi]
   }
-  const all = g.series.flatMap((s) => (isStacked(g) ? cumulative(g, s) : s.values)).filter((v): v is number => v !== null)
+  // lines and scatter plot an empty cell as zero where the chart says so: the axis takes it in too
+  const zero = blanks === 'zero' && (g.type === 'line' || g.type === 'scatter')
+  const all = g.series.flatMap((s) => (isStacked(g) ? cumulative(g, s) : s.values)).map((v) => (v === null && zero ? 0 : v)).filter((v): v is number => v !== null)
   if (!all.length) return [0, 1]
   const lo = lowest(all)
   const hi = highest(all)
@@ -546,7 +548,7 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
   for (const id of valIds) {
     const a = axis(id)
     const on = groups.filter((g) => g.axIds[1] === id)
-    const ext = on.map(extent)
+    const ext = on.map((g) => extent(g, m.blanks))
     const lo = lowest(ext.map((e) => e[0]))
     const hi = highest(ext.map((e) => e[1]))
     const pct = on.some((g) => g.grouping === 'percentStacked')

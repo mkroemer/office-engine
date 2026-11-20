@@ -468,4 +468,23 @@ describe('xlsx charts: axis formats, labels at the edge, empty cells, date axes,
     expect(new Set(atMax).size).toBe(1)
     expect(atMax[0]).toBeLessThan(Math.min(...atZero))
   })
+
+  test('a range given in full keeps its empty cells at the end as points', async () => {
+    // B2:B6 reaches two rows past the filled ones
+    const plot = `<c:lineChart><c:grouping val="standard"/>${ser(0, 'B', numRef('Data!$B$2:$B$6', [1, 1, 1, 1, 1]))}<c:axId val="1"/><c:axId val="2"/></c:lineChart>${AXES}`
+    const { model } = await modelOf(await withChart(plot))
+    expect(model!.groups[0].series[0].values).toEqual([10, 20, 15, null, null])
+  })
+
+  test('empty cells shown as zero are inside the axis range', async () => {
+    const { model } = await modelOf(await withChart(LINE()))
+    model!.groups[0].series[0].values = [90, null, 100]
+    model!.blanks = 'zero'
+    const svg = renderChart(model!, 400, 260)
+    // the axis reaches down to the zero, and the line's three points are all inside the plot
+    expect(svg).toContain('>0<')
+    const plot = /<clipPath id="de-plot"><rect x="[\d.]+" y="([\d.]+)" width="[\d.]+" height="([\d.]+)"/.exec(svg)!
+    const bottom = Number(plot[1]) + Number(plot[2])
+    expect(linePoints(svg).every((p) => p.y <= bottom)).toBe(true)
+  })
 })

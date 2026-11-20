@@ -131,7 +131,12 @@ export function workbookReader(wb: XlsxWorkbook, self: number): RangeReader {
       await wb.settled()
       const d = wb.sheetsData.get(s)
       if (!d || d.error) return null
-      const [r0, c0, r1, c1] = 'r' in r ? [r.r, r.c, r.r, r.c] : [r.r0, r.c0, Math.min(r.r1, Math.max(r.r0, d.maxRow)), Math.min(r.c1, Math.max(r.c0, d.maxCol))]
+      // a whole column or row (A:A, 2:2) is read as far as the sheet is filled; a range given in full keeps its size, so its
+      // empty cells at the end stay points and line up with categories read from elsewhere
+      const [r0, c0, r1, c1] =
+        'r' in r
+          ? [r.r, r.c, r.r, r.c]
+          : [r.r0, r.c0, r.r1 >= MAX_ROWS - 1 ? Math.min(r.r1, Math.max(r.r0, d.maxRow)) : r.r1, r.c1 >= MAX_COL - 1 ? Math.min(r.c1, Math.max(r.c0, d.maxCol)) : r.c1]
       if ((r1 - r0 + 1) * (c1 - c0 + 1) > MAX_POINTS) return null
       await wb.ensure(d, r0, r1)
       const hiddenCols = new Set<number>()
