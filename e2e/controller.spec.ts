@@ -303,7 +303,8 @@ describe('controller and headless mode', () => {
     const saved = await v.waitEvent('save')
     const paras = (await docxParas(fromB64(saved.b64 as string))).filter((p) => paraText(p).startsWith('Line '))
     expect(paras).toHaveLength(151)
-    expect(paras.every((p) => runsOf(p).every((r) => r.s.b))).toBe(true)
+    const notBold = paras.filter((p) => !runsOf(p).every((r) => r.s.b)).map((p) => JSON.stringify(runsOf(p).map((r) => [r.text, r.s.b ?? null])))
+    expect(notBold).toEqual([])
     expect(v.errors).toEqual([])
   })
 
