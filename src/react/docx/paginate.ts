@@ -162,6 +162,19 @@ export function paginate(blocks: Block[], heights: WeakMap<Block, number>, count
       continue
     }
     if (b.t === 'p' && b.pb && cur.end > cur.start) newPage(i, 0)
+    // most blocks fit whole: placed without working out where they could be cut (thousands of pages, every update)
+    const bh = heights.get(b) ?? 0
+    const free = !(b.t === 'p' && b.ps.keepNext && i >= loose)
+    // (its lines are looked at only when the space after it may not fit)
+    const bys = free && bh > avail - y + EPS && b.t === 'p' ? lines?.get(b)?.ys : undefined
+    const bInk = !bys || bys.length < 2 ? bh : bys[bys.length - 1]
+    if (free && bInk <= avail - y + EPS) {
+      cur.end = i + 1
+      cur.to = undefined
+      y += bh
+      ink = y - (bh - bInk)
+      continue
+    }
     const s = shape(b)
     const { h, ys, n, headH, inkEnd } = s
     const pieceH = (k: number, j: number) => (k > 0 ? headH - ys[k] : 0) + (j === n ? h : ys[j])

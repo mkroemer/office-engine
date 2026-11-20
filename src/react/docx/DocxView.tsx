@@ -166,11 +166,33 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     st.frontier = 0
   }
   const total = st.blocks.length
-  const laid = useMemo(
-    () => paginate(st.blocks, st.heights, Math.min(st.frontier, total), availPx, cols, (meta?.final && meta.sectKind) || 'nextPage', st.lines),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [version, availPx, total, cols, meta?.final, meta?.sectKind],
-  )
+  // measured first: edited blocks
+  const queue: { b: Block; i: number; starts?: boolean }[] = []
+  const queued = new Set<Block>()
+  const enqueue = (b: Block, i: number, starts?: boolean) => {
+    if (queued.has(b)) return
+    queued.add(b)
+    queue.push({ b, i, starts })
+  }
+  for (const b of st.dirty) {
+    if (queue.length >= 50) break
+    const i = st.blocks.indexOf(b)
+    if (i < 0) st.dirty.delete(b)
+    else enqueue(b, i, true)
+  }
+  const edited = queue.length
+  // A few edited blocks (typing) are measured again before this render is painted, and the pages cut again then (see
+  // the measure effect): until that, the pages stay as they were cut. Else they are cut again on every update.
+  const soon = edited > 0 && edited <= 10
+  const cut = useRef<{ version: number; key: string; total: number; pages: PageSlice[] } | null>(null)
+  const cutKey = `${availPx}|${cols}|${meta?.final}|${meta?.sectKind}`
+  const c0 = cut.current
+  let laid: PageSlice[]
+  if (c0 && c0.key === cutKey && c0.total === total && (c0.version === version || soon)) laid = c0.pages
+  else {
+    laid = paginate(st.blocks, st.heights, Math.min(st.frontier, total), availPx, cols, (meta?.final && meta.sectKind) || 'nextPage', st.lines)
+    cut.current = { version, key: cutKey, total, pages: laid }
+  }
   // while an input method composes, the pages stay as they are: a paragraph cut elsewhere would be rebuilt under it
   const frozen = useRef<{ pages: PageSlice[]; total: number } | null>(null)
   const composing = isEditing && editor.input.isComposing
@@ -229,22 +251,8 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     : ''
   const lastCuts = useRef(selCuts)
 
-  // measured first: edited blocks, then the paragraphs a page shown ends in (where their lines start is read), then the
-  // not-yet-measured tail (time-sliced)
-  const queue: { b: Block; i: number; starts?: boolean }[] = []
-  const queued = new Set<Block>()
-  const enqueue = (b: Block, i: number, starts?: boolean) => {
-    if (queued.has(b)) return
-    queued.add(b)
-    queue.push({ b, i, starts })
-  }
-  for (const b of st.dirty) {
-    if (queue.length >= 50) break
-    const i = st.blocks.indexOf(b)
-    if (i < 0) st.dirty.delete(b)
-    else enqueue(b, i, true)
-  }
-  const edited = queue.length
+  // then the paragraphs a page shown ends in (where their lines start is read), then the not-yet-measured tail
+  // (time-sliced)
   /** the paragraphs page `pi` cuts whose line starts are not read yet */
   const unread = (pi: number, out: Map<Block, number>) => {
     for (const c of pages[pi] ? columnsOf(pages[pi]) : []) {
@@ -301,7 +309,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     }
     // a page shown waits for these, and a few edited blocks (typing) are laid out again before anything is painted: no
     // page shows them where they were (the caret is put back once, after that)
-    if (shownUnread.size || (edited > 0 && edited <= 10)) {
+    if (shownUnread.size || soon) {
       relayout.current = true
       return void save()
     }

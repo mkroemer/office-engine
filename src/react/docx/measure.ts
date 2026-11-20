@@ -32,6 +32,13 @@ export function tableLines(el: HTMLElement, t: Table): Lines | undefined {
   return { ys, head: head < t.rows.length ? head : 0, keep: keep.size ? [...keep] : undefined }
 }
 
+/**
+ * The one range measuring uses. Every live Range is updated by the browser on each DOM removal: one per paragraph
+ * measured, waiting for the garbage collector, would make removing the measured blocks slower and slower.
+ */
+let shared: Range | null = null
+const theRange = () => (shared ??= document.createRange())
+
 /** inline boxes measured as a whole (pictures, text boxes, list markers), not by the text inside them */
 const ATOMIC = 'img, .de-tbox, .de-ph, .de-img-missing, .de-marker'
 
@@ -56,7 +63,7 @@ export function paraLines(el: HTMLElement): Lines {
       cur.b = Math.max(cur.b, b)
     } else lines.push({ t, b })
   }
-  const range = document.createRange()
+  const range = theRange()
   const walk = (n: Node) => {
     for (let c = n.firstChild; c; c = c.nextSibling) {
       if (c.nodeType === 3) {
@@ -97,7 +104,7 @@ export function lineStarts(el: HTMLElement, ys: number[]): number[] | undefined 
   }
   if (!runs.length) return undefined
   const len = runs[runs.length - 1].o + runs[runs.length - 1].n
-  const range = document.createRange()
+  const range = theRange()
   const runAt = (o: number) => {
     let lo = 0
     let hi = runs.length - 1
