@@ -140,6 +140,30 @@ async function deliver(pending: ReturnType<typeof holdEdits>, i: number) {
   await Bun.sleep(1)
 }
 
+/** the editor's input on a stand-in for the page, so that composition events can be sent to it */
+function attachInput(ed: DocxEditor) {
+  const on = new Map<string, (e: unknown) => void>()
+  const g = globalThis as Record<string, unknown>
+  const doc = g.document
+  g.document = { addEventListener() {}, removeEventListener() {} }
+  try {
+    ed.input.attach({
+      addEventListener: (type: string, fn: (e: unknown) => void) => on.set(type, fn),
+      removeEventListener() {},
+      contains: () => false,
+      querySelectorAll: () => [],
+      getRootNode: () => ({}),
+      ownerDocument: { getSelection: () => null },
+    } as unknown as HTMLElement)
+  } finally {
+    g.document = doc
+  }
+  return {
+    start: () => on.get('compositionstart')!({}),
+    end: (data: string) => on.get('compositionend')!({ data }),
+  }
+}
+
 /** text, list kind and marker of every paragraph (table cells too), in document order */
 function lists(blocks: Block[]) {
   const out: string[] = []
@@ -241,5 +265,41 @@ describe('DOCX conversion answers that cross other edits (#26, #29)', () => {
       process.off('unhandledRejection', onUnhandled)
       logged.mockRestore()
     }
+  })
+})
+
+describe('DOCX conversion answers during an IME composition (#28)', () => {
+  test('an answer that comes during an IME composition is applied when it ends (#28)', async () => {
+    const { client, ed, st, states } = await editor()
+    const ime = attachInput(ed)
+    const hire = paraAt(st, 'Hire the platform team')
+    const ship = paraAt(st, 'Ship the viewer engine')
+    const apac = paraAt(st, 'Expand to APAC')
+    const intro = paraAt(st, 'This document')
+    expect([ship, apac].map((pa) => ed.para(pa)?.marker?.text)).toEqual(['2.', '3.'])
+    const pending = holdEdits(client)
+    ed.input.lastSel = at(hire, 0, 4)
+    // the item leaves the list: the ones after it count from 1
+    ed.toggleList('number')
+    // a composition starts in another paragraph before the answer comes
+    ed.input.lastSel = at(intro)
+    ime.start()
+    const count = states.length
+    await deliver(pending, 0)
+    expect(ed.input.isComposing).toBe(true)
+    // nothing rebuilt under the composition, nothing published
+    expect(ed.para(hire)?.lst).toBe('number')
+    expect(states).toHaveLength(count)
+    ime.end('ă')
+    expect(runsText(ed.para(intro)!.runs as RRun[])).toStartWith('ăThis')
+    expect(ed.para(hire)?.lst).toBeUndefined()
+    expect(ed.para(hire)?.marker).toBeUndefined()
+    expect([ship, apac].map((pa) => ed.para(pa)?.marker?.text)).toEqual(['1.', '2.'])
+    // the composed text, then the answer applied at its end
+    expect(states).toHaveLength(count + 2)
+    expect(states.at(-1)).toEqual({ state: ed.state(ed.input.sel()), busy: true })
+    await deliver(pending, 1)
+    await settle(ed)
+    expect(lists(st.blocks)).toEqual(lists((await editor(await client.call('save'))).st.blocks))
   })
 })

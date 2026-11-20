@@ -228,6 +228,8 @@ export class DocxEditor implements RichHost<Paragraph> {
    */
   private writes = 0
   private writtenIn = new Map<number, number>()
+  /** answers that came during an IME composition, applied when it ends */
+  private held: { res: EditResult; seq: number }[] = []
   onState?: (s: FormatState | null) => void
   /** image selection changed (overlay with resize handles) */
   onImage?: (img: FormatState['img'] | null) => void
@@ -707,7 +709,11 @@ export class DocxEditor implements RichHost<Paragraph> {
 
   /** applies the answer to write `seq`; true when something changed */
   private applyResult(res: EditResult, seq: number): boolean {
-    if (this.input.isComposing) return false
+    // never rebuild paragraphs under an IME composition: the answer waits for its end (composed)
+    if (this.input.isComposing) {
+      this.held.push({ res, seq })
+      return false
+    }
     // written again since: the paragraph stays `stale`, so that write asked for the conversion too and its answer is the one applied
     const again = (pid: number) => (this.writtenIn.get(pid) ?? 0) > seq
     let touched = false
@@ -751,6 +757,13 @@ export class DocxEditor implements RichHost<Paragraph> {
     if (sel && !this.pendingSel && (rebuilt.has(sel.a.pa) || rebuilt.has(sel.f.pa))) this.pendingSel = sel
     this.changed()
     return true
+  }
+
+  /** an IME composition ended (its text is in): the answers that came meanwhile are applied, the toolbar told */
+  composed() {
+    let applied = false
+    for (const { res, seq } of this.held.splice(0)) applied = this.applyResult(res, seq) || applied
+    if (applied) this.emitState(this.input.sel())
   }
 
   // ---------------------------------------------------------------- history
