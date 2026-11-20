@@ -848,6 +848,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     },
     format: (c) => {
       const sel = publishedSelection.current
+      console.error('DBG ctl.format', JSON.stringify(sel))
       if (isEditing && sel) editor.input.withFormatSelection(sel, () => applyDocx(editor, c))
     },
   })

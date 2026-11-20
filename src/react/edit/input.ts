@@ -367,6 +367,7 @@ export class RichInput {
   private override: { model: Sel; dom: Sel } | null = null
   /** a click or a key (other than select-all itself) since the last select-all */
   private userMoved = true
+  dbg = false
   /**
    * The caret an edit asked for, until the DOM shows it: the next key press can come before the view is rebuilt, and
    * the DOM caret is then still where the edit was made (typing without a pause across a paragraph break).
@@ -420,6 +421,7 @@ export class RichInput {
   }
 
   clearSelection() {
+    if (this.dbg) console.error('DBG clearSelection')
     this.override = null
     this.formatTarget = null
     this.lastSel = null
@@ -513,6 +515,7 @@ export class RichInput {
   formatSelection(): Sel | null {
     // a select-all covers the whole document, though only the rendered paragraphs are selected in the DOM (and lastSel)
     const sel = this.activeHost() ? (this.override?.model ?? (this.formatTarget && this.lastSel)) : (this.override?.model ?? this.readSel())
+    if (this.dbg) console.error('DBG formatSelection', !!this.activeHost(), !!this.override, JSON.stringify(sel))
     return sel && this.host.para(sel.a.pa) && this.host.para(sel.f.pa) ? sel : null
   }
 
@@ -535,6 +538,8 @@ export class RichInput {
     this.restore(dom)
     this.override = { model: all, dom: this.readSel() ?? dom }
     this.userMoved = false
+    this.dbg = true
+    console.error('DBG selectAll', JSON.stringify(all), JSON.stringify(this.override.dom))
     this.host.onSelection?.(all)
     return true
   }
@@ -561,6 +566,7 @@ export class RichInput {
       this.lastSel = sel
       return true
     }
+    if (this.dbg && this.override) console.error('DBG restore clears', JSON.stringify(sel), new Error().stack?.split('\n').slice(2, 6).join(' | '))
     this.override = null
     const a = domFromPos(root, sel.a)
     const f = domFromPos(root, sel.f)
@@ -756,6 +762,7 @@ export class RichInput {
         this.host.onSelection?.(ov.model)
         return
       }
+      if (this.dbg) console.error('DBG selchange', !!ov, !!control, this.userMoved, JSON.stringify(dom))
       this.override = null
       const s = control ? this.formatSelection() : dom
       if (s && this.expected && sameSel(s, this.expected)) this.expected = null
