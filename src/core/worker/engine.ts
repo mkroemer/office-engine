@@ -192,28 +192,28 @@ export class Engine {
         return
       }
       case 'xlsx.set':
-        return this.xed().setCells(args[0] as number, args[1] as CellInput[])
+        return this.withHistory(this.xed().setCells(args[0] as number, args[1] as CellInput[]))
       case 'xlsx.copy':
         return this.xed().copy(args[0] as number, args[1] as Range)
       case 'xlsx.region':
         return this.xed().region(args[0] as number, args[1] as Range)
       case 'xlsx.format':
-        return this.xed().format(args[0] as number, args[1] as Range, args[2] as FmtPatch)
+        return this.withHistory(this.xed().format(args[0] as number, args[1] as Range, args[2] as FmtPatch))
       case 'xlsx.sheetOp':
-        return this.xed().sheetOp(args[0] as number, args[1] as SheetOp)
+        return this.withHistory(this.xed().sheetOp(args[0] as number, args[1] as SheetOp))
       case 'xlsx.replace':
-        return this.xed().replace(args[0] as number, args[1] as string, args[2] as string, args[3] as FindOptions, args[4] as { r: number; c: number } | undefined)
+        return this.withHistory(this.xed().replace(args[0] as number, args[1] as string, args[2] as string, args[3] as FindOptions, args[4] as { r: number; c: number } | undefined))
       case 'xlsx.bookOp':
-        return this.xed().bookOp(args[0] as BookOp)
+        return this.withHistory(this.xed().bookOp(args[0] as BookOp))
       case 'xlsx.import': {
         const p = (args[2] ?? {}) as { name?: string; sep?: string; residentCells?: number; pageRows?: number; encoding?: string }
         const source = await ungzipped(await openSource(args[1] as DocSource, { signal: this.abort.signal }))
-        return this.xed().importText(args[0] as number, { source, sep: p.sep, budget: p.residentCells, pageRows: p.pageRows, encoding: p.encoding, onWarning: (text) => this.emit('warning', { text }) }, p.name)
+        return this.withHistory(await this.xed().importText(args[0] as number, { source, sep: p.sep, budget: p.residentCells, pageRows: p.pageRows, encoding: p.encoding, onWarning: (text) => this.emit('warning', { text }) }, p.name))
       }
       case 'xlsx.undo':
-        return this.xed().undo()
+        return this.withHistory(this.xed().undo())
       case 'xlsx.redo':
-        return this.xed().redo()
+        return this.withHistory(this.xed().redo())
       case 'collab.xlsx.apply':
         return this.xc().apply(args[0] as XOp)
       case 'collab.xlsx.revert':
@@ -269,6 +269,13 @@ export class Engine {
 
   private xed(): XlsxEditor {
     return (this.xlsxEd ??= new XlsxEditor(this.need(this.xlsx)))
+  }
+
+  /** an edit's result with the undo / redo steps the workbook holds after it */
+  private async withHistory<T>(edit: T | Promise<T>): Promise<T> {
+    const res = await edit
+    if (res && typeof res === 'object') (res as { history?: { undo: number; redo: number } }).history = this.xed().history
+    return res
   }
 
   private async save(): Promise<Blob> {
