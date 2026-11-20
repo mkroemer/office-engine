@@ -508,7 +508,8 @@ export class RichInput {
   }
 
   formatSelection(): Sel | null {
-    const sel = this.activeHost() ? (this.formatTarget && this.lastSel) : (this.override?.model ?? this.readSel())
+    // a select-all covers the whole document, though only the rendered paragraphs are selected in the DOM (and lastSel)
+    const sel = this.activeHost() ? (this.override?.model ?? (this.formatTarget && this.lastSel)) : (this.override?.model ?? this.readSel())
     return sel && this.host.para(sel.a.pa) && this.host.para(sel.f.pa) ? sel : null
   }
 

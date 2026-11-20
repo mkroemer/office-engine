@@ -642,13 +642,21 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
   // once the first slides are shown, then from each slide model an edit puts in the cache
   const observed = useControllerObserved(ctl)
   const [titles, setTitles] = useState<string[]>([])
+  // titles edited while the scan reads the file: newer than what it reads, so they win over its answer
+  const editedDuringScan = useRef(new Map<number, string>())
   useEffect(() => {
     if (!observed) return
     let live = true
     const timer = setTimeout(() => {
+      editedDuringScan.current.clear()
       client
         .call('pptx.titles')
-        .then((t) => live && setTitles(t))
+        .then((t) => {
+          if (!live) return
+          const merged = [...t]
+          for (const [i, title] of editedDuringScan.current) if (i < merged.length) merged[i] = title
+          setTitles(merged)
+        })
         .catch(() => {})
     }, 800)
     return () => {
@@ -659,7 +667,10 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
   useEffect(() => {
     if (!observed) return
     const edits = cacheFor(client).edits
-    const on = (i: number, m: SlideModel) => setTitles((t) => (t[i] === (m.title ?? '') ? t : Object.assign([...t], { [i]: m.title ?? '' })))
+    const on = (i: number, m: SlideModel) => {
+      editedDuringScan.current.set(i, m.title ?? '')
+      setTitles((t) => (t[i] === (m.title ?? '') ? t : Object.assign([...t], { [i]: m.title ?? '' })))
+    }
     edits.add(on)
     return () => {
       edits.delete(on)

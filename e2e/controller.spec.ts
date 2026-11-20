@@ -276,6 +276,26 @@ describe('controller and headless mode', () => {
     expect(v.errors).toEqual([])
   })
 
+  test('docx: select all, then a host control: formatting reaches the whole document, not only the pages shown', async () => {
+    const v = await viewer({ controller: true, src: 'samples/sample.docx', headless: true, editable: true, onSave: true, hostControls: true })
+    const { page } = v
+    await until(v, 's.editing')
+    await v.selectText('Quarterly Report', 'end')
+    await page.keyboard.press('ControlOrMeta+a')
+    await page.waitForTimeout(150)
+    // the host's control takes the focus, as a click on it would
+    await page.getByRole('button', { name: 'Host undo', exact: true }).focus()
+    await page.waitForTimeout(150)
+    await page.evaluate(() => window.__ctl.format({ op: 'toggle', mark: 'bold' }))
+    await until(v, 's.format.bold')
+    await page.evaluate(() => window.__ctl.save())
+    const saved = await v.waitEvent('save')
+    const paras = (await docxParas(fromB64(saved.b64 as string))).filter((p) => paraText(p).trim())
+    // the last paragraph is pages away from the first: it is bold too
+    expect(runsOf(paras.at(-1)!).every((r) => r.s.b)).toBe(true)
+    expect(v.errors).toEqual([])
+  })
+
   test("xlsx: the active cell's format through the controller", async () => {
     const v = await viewer({ controller: true, src: 'samples/sample.xlsx', editable: true, onSave: true, headless: true })
     const { page } = v
