@@ -1200,7 +1200,9 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
       const res = await p
       store.applied(res, meta)
       const h = store.history
-      if (res) {
+      // the worker's own count where it gives one: an edit that changed nothing records no step
+      if (res?.history) store.history = res.history
+      else if (res) {
         if (kind === 'edit') store.history = { undo: h.undo + 1, redo: 0 }
         else if (kind === 'undo') store.history = { undo: Math.max(0, h.undo - 1), redo: h.redo + 1 }
         else store.history = { undo: h.undo + 1, redo: Math.max(0, h.redo - 1) }
@@ -1616,14 +1618,16 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
 
   const activeCss = (styles[styleOf(sel.ar, sel.ac)] ?? {}) as Record<string, string | number>
   // whole columns / rows / the sheet: the format goes to them, down to the last row, not only to the cells there are
-  const fmt = (patch: FmtPatch) =>
-    fmtAt(sel.whole === 'all' ? { r0: 0, c0: 0, r1: MAX_ROW, c1: MAX_COL } : sel.whole === 'col' ? { ...rect, r0: 0, r1: MAX_ROW } : sel.whole === 'row' ? { ...rect, c0: 0, c1: MAX_COL } : rect, patch)
-  const fmtAt = (range: Range, patch: FmtPatch) => {
+  const fmtRange = (): Range =>
+    sel.whole === 'all' ? { r0: 0, c0: 0, r1: MAX_ROW, c1: MAX_COL } : sel.whole === 'col' ? { ...rect, r0: 0, r1: MAX_ROW } : sel.whole === 'row' ? { ...rect, c0: 0, c1: MAX_COL } : rect
+  const fmt = (patch: FmtPatch) => fmtAt(fmtRange(), patch)
+  /** `focus`: the grid takes the focus back (the built-in toolbar); a host's control keeps it */
+  const fmtAt = (range: Range, patch: FmtPatch, focus = true) => {
     const done = run(client.call('xlsx.format', sheet, range, patch))
     // Wrap text shows all of the text: the rows grow; a number format shows its numbers: the columns widen
     if (patch.wrap) void done.then(() => fitRows(range, false))
     if (patch.numFmt !== undefined) void done.then(() => widen(range))
-    focusGrid()
+    if (focus) focusGrid()
   }
   const toggle = (k: 'b' | 'i' | 'u' | 'strike') => {
     const on = cellFmt[k === 'b' ? 'bold' : k === 'i' ? 'italic' : k === 'u' ? 'underline' : 'strike']
@@ -1639,7 +1643,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
       redo: () => editable && redo(),
       format: (c) => {
         const patch = editable && cellPatch(c, cellFmt)
-        if (patch) void run(client.call('xlsx.format', sheet, rect, patch))
+        if (patch) fmtAt(fmtRange(), patch, false)
       },
     }
     const h = store.history

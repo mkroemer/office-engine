@@ -302,6 +302,22 @@ describe('controller and headless mode', () => {
     expect(v.errors).toEqual([])
   })
 
+  test('xlsx: a column selected by its header is formatted whole through the controller, as by the toolbar', async () => {
+    const v = await viewer({ controller: true, src: 'samples/sample.xlsx', editable: true, headless: true })
+    const { page } = v
+    await page.locator('.de-grid').waitFor()
+    await page.locator('.de-head-c[data-col="12"]').click()
+    await until(v, 's.format')
+    await page.evaluate(() => window.__ctl.format({ op: 'highlight', color: '#ffff00' }))
+    await page.waitForTimeout(400)
+    // a cell of the column past the cells in use has the column's format; the next column has not
+    await v.clickCell('M20')
+    await until(v, "s.format && /255, 255, 0|ffff00/i.test(s.format.highlight ?? '')")
+    await v.clickCell('L20')
+    await until(v, "s.format && !/255, 255, 0|ffff00/i.test(s.format.highlight ?? '')")
+    expect(v.errors).toEqual([])
+  })
+
   test('xlsx: the sheets as the outline, no tabs of its own', async () => {
     const v = await viewer({ controller: true, src: 'samples/sample.xlsx', headless: true })
     const { page } = v
