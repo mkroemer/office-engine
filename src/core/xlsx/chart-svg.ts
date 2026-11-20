@@ -63,11 +63,17 @@ export function niceScale(lo: number, hi: number, opts: { min?: number; max?: nu
   if (!Number.isFinite(lo) || !Number.isFinite(hi)) (lo = 0), (hi = 1)
   if (lo > hi) [lo, hi] = [hi, lo]
   if (opts.zero !== false) {
-    if (lo > 0 && lo < (hi * 5) / 6) lo = 0
-    if (hi < 0 && hi > (lo * 5) / 6) hi = 0
+    // values all alike keep zero in view too, so bars of them have a height
+    if (lo > 0 && (lo < (hi * 5) / 6 || lo === hi)) lo = 0
+    if (hi < 0 && (hi > (lo * 5) / 6 || lo === hi)) hi = 0
   }
   if (opts.min !== undefined) lo = opts.min
   if (opts.max !== undefined) hi = opts.max
+  // one bound fixed past all the values: the other one moves to give the axis a span
+  if (hi < lo) {
+    if (opts.max === undefined) hi = lo
+    else if (opts.min === undefined) lo = hi
+  }
   if (lo === hi) hi = lo === 0 ? 1 : lo + Math.abs(lo) * 0.1
   const want = Math.max(2, opts.ticks ?? 6)
   let step = opts.major

@@ -487,4 +487,29 @@ describe('xlsx charts: axis formats, labels at the edge, empty cells, date axes,
     const bottom = Number(plot[1]) + Number(plot[2])
     expect(linePoints(svg).every((p) => p.y <= bottom)).toBe(true)
   })
+
+  test('values all alike keep zero in view; a bound fixed past the values still gives the axis a span', () => {
+    expect(niceScale(10, 10)).toMatchObject({ min: 0 })
+    const above = niceScale(4, 20, { min: 30 })
+    expect(above.min).toBe(30)
+    expect(above.max).toBeGreaterThan(30)
+    expect(above.ticks.length).toBeGreaterThan(1)
+    const below = niceScale(4, 20, { max: 2 })
+    expect(below.max).toBe(2)
+    expect(below.min).toBeLessThan(2)
+  })
+
+  test('columns of equal values have a height', async () => {
+    const { model } = await modelOf(await withChart(CLUSTERED))
+    for (const s of model!.groups[0].series) s.values = [10, 10, 10]
+    const fills = new Set(model!.groups[0].series.map((s) => s.fill))
+    const heights = [...renderChart(model!, 400, 260).split('<g clip-path')[1].matchAll(/<rect [^>]*height="([\d.]+)"[^>]*fill="([^"]+)"/g)].filter((m) => fills.has(m[2])).map((m) => Number(m[1]))
+    expect(heights.length).toBe(6)
+    expect(heights.every((h) => h > 10)).toBe(true)
+  })
+
+  test('an Excel 2010 style number (142) the XML reader already took out of its AlternateContent is style 42', async () => {
+    const { model } = await modelOf(await withChart(CLUSTERED, { style: 142 }))
+    expect(model!.textColor.toLowerCase()).toBe('#ffffff')
+  })
 })

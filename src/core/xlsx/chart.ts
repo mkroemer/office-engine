@@ -728,7 +728,11 @@ export async function readChart(root: XEl | undefined, opts: { theme: Theme; dat
 /** the built-in style number: Excel 2010's own (`c14:style`, 101…148) where it is given, else `c:style` */
 function styleOf(root: XEl | undefined): number | undefined {
   for (const el of root?.c ?? []) {
-    if (el.n === 'style') return num(el.a.val)
+    // the XML reader may already have taken the c14 choice out of its AlternateContent: then 101…148 arrives here
+    if (el.n === 'style') {
+      const s = num(el.a.val)
+      return s !== undefined && s > 100 ? s - 100 : s
+    }
     if (el.n === 'AlternateContent') {
       const choice = kid(el, 'Choice')
       const s14 = num(kid(choice, 'style')?.a.val)
