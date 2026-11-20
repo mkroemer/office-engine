@@ -313,3 +313,46 @@ describe('xlsx charts: drawing', () => {
     expect(svg).toMatch(/<g clip-path="url\(#de-plot\)">[\s\S]*<\/g>/)
   })
 })
+
+describe('xlsx charts: files that ask for more than they hold', () => {
+  test('a saved point count is capped before anything is allocated for it', async () => {
+    const huge = `<c:numRef><c:f>SalesRange</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="1000000000"/><c:pt idx="0"><c:v>7</c:v></c:pt><c:pt idx="999999999"><c:v>8</c:v></c:pt></c:numCache></c:numRef>`
+    const plot = `<c:lineChart><c:grouping val="standard"/>${ser(0, 'B', huge)}<c:axId val="1"/><c:axId val="2"/></c:lineChart>${AXES}`
+    const { model } = await modelOf(await withChart(plot))
+    const values = model!.groups[0].series[0].values
+    expect(values.length).toBeLessThanOrEqual(100_000)
+    expect(values[0]).toBe(7)
+  })
+
+  test('a scatter series without X values numbers its points', async () => {
+    const yOnly = `<c:ser><c:idx val="0"/><c:order val="0"/><c:tx>${strRef('Data!$B$1', ['y'])}</c:tx><c:spPr><a:ln><a:noFill/></a:ln></c:spPr><c:marker><c:symbol val="circle"/></c:marker><c:yVal>${numRef('Data!$B$2:$B$4', [0, 0, 0])}</c:yVal></c:ser>`
+    const plot = `<c:scatterChart><c:scatterStyle val="lineMarker"/>${yOnly}<c:axId val="1"/><c:axId val="2"/></c:scatterChart><c:valAx><c:axId val="1"/><c:axPos val="b"/><c:crossAx val="2"/></c:valAx><c:valAx><c:axId val="2"/><c:axPos val="l"/><c:crossAx val="1"/></c:valAx>`
+    const { model } = await modelOf(await withChart(plot))
+    expect(model!.groups[0].series[0].xs).toBeUndefined()
+    // three markers, plus the legend's
+    expect(renderChart(model!, 400, 260).match(/<circle /g)?.length).toBe(4)
+  })
+
+  test('a doughnut of two series draws two rings', async () => {
+    const plot = `<c:doughnutChart><c:varyColors val="1"/>${ser(0, 'B', numRef('Data!$B$2:$B$4', [1, 1, 1]))}${ser(1, 'C', numRef('Data!$C$2:$C$4', [1, 1, 1]))}<c:holeSize val="50"/></c:doughnutChart>`
+    const { model } = await modelOf(await withChart(plot))
+    // three slices a ring
+    expect(renderChart(model!, 400, 300).match(/<path d="M[^"]* A[^"]* L[^"]* A[^"]*Z"/g)?.length).toBe(6)
+  })
+
+  test('bars on an axis of negative values only start at its top, the bound nearest zero', async () => {
+    const { model } = await modelOf(await withChart(CLUSTERED))
+    const s = model!.groups[0].series
+    s[0].values = [-95, -92, -95]
+    s[1].values = [-95, -95, -95]
+    const val = model!.axes.find((a) => a.kind === 'val')!
+    val.min = -100
+    val.max = -90
+    const fills = new Set(s.map((x) => x.fill))
+    // the bars, inside the plot area (the legend's swatches come before it): per category the first series, then the second
+    const plotted = renderChart(model!, 400, 260).split('<g clip-path')[1]
+    const heights = [...plotted.matchAll(/<rect [^>]*height="([\d.]+)"[^>]*fill="([^"]+)"/g)].filter((m) => fills.has(m[2])).map((m) => Number(m[1]))
+    // -95 reaches further from -90 than -92 does
+    expect(heights[0]).toBeGreaterThan(heights[2])
+  })
+})

@@ -161,7 +161,11 @@ class XlsxStore {
       s.gridLines = p.gridLines ?? true
     }
     for (const [r, px] of p.rowSizes) s.rowAxis.set(r, px)
-    if (p.recalc) s.blocks.clear()
+    // values computed after the sheet was read: its rows are fetched again, and the charts read their cells again
+    if (p.recalc) {
+      s.blocks.clear()
+      this.edits++
+    }
     s.rows = Math.max(s.rows, p.rows)
     s.cols = Math.max(s.cols, p.cols)
     if (p.merges) s.merges = p.merges

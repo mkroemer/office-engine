@@ -313,25 +313,35 @@ function legendSize(entries: LegendEntry[], vertical: boolean, size: number, max
 
 // ---------------------------------------------------------------- pie and doughnut
 
+/** a pie (its first series) or a doughnut (a ring per series, the first innermost, as Excel draws them) */
 function drawPie(svg: Svg, m: ChartModel, g: ChartGroup, box: Box) {
-  const s = g.series[0]
-  // a negative value is a slice of its magnitude, as in Excel; its label keeps the sign
-  const vals = s.values.map((v) => (v ? Math.abs(v) : 0))
-  const total = vals.reduce((a, b) => a + b, 0)
-  if (!total) return
-  const exploded = Math.max(0, ...Object.values(s.points).map((p) => p.explosion ?? 0))
-  const outside = s.labels && (s.labels.pos === 'outEnd' || s.labels.pos === 'bestFit')
+  const rings = g.type === 'doughnut' ? g.series : g.series.slice(0, 1)
+  const s0 = rings[0]
+  // slices are exploded only where there is one ring
+  const exploded = rings.length === 1 ? Math.max(0, ...Object.values(s0.points).map((p) => p.explosion ?? 0)) : 0
+  const outside = !!s0.labels && (s0.labels.pos === 'outEnd' || s0.labels.pos === 'bestFit')
   const r = Math.max(4, (Math.min(box.w, box.h) / 2) * (outside ? 0.75 : 0.92) / (1 + exploded / 100))
   const cx = box.x + box.w / 2
   const cy = box.y + box.h / 2
   const hole = g.type === 'doughnut' ? Math.min(0.9, Math.max(0.1, g.holeSize / 100)) * r : 0
+  const width = (r - hole) / rings.length
+  rings.forEach((s, i) => drawRing(svg, m, g, s, { cx, cy, rin: hole + i * width, rout: hole + (i + 1) * width, outside: outside && i === rings.length - 1, explode: rings.length === 1 }))
+}
+
+function drawRing(svg: Svg, m: ChartModel, g: ChartGroup, s: ChartSeries, o: { cx: number; cy: number; rin: number; rout: number; outside: boolean; explode: boolean }) {
+  const { cx, cy, rin, rout: r, outside } = o
+  // a negative value is a slice of its magnitude, as in Excel; its label keeps the sign
+  const vals = s.values.map((v) => (v ? Math.abs(v) : 0))
+  const total = vals.reduce((a, b) => a + b, 0)
+  if (!total) return
   let a = ((g.firstSliceAng - 90) * Math.PI) / 180
   const lt = textOf(m, s.labels?.text)
+  const n = (x: number) => Math.round(x * 100) / 100
   vals.forEach((v, k) => {
     if (!v) return
     const sweep = (v / total) * Math.PI * 2
     const mid = a + sweep / 2
-    const off = ((s.points[k]?.explosion ?? 0) / 100) * r
+    const off = o.explode ? ((s.points[k]?.explosion ?? 0) / 100) * r : 0
     const ox = cx + off * Math.cos(mid)
     const oy = cy + off * Math.sin(mid)
     const pt = s.points[k]
@@ -341,14 +351,18 @@ function drawPie(svg: Svg, m: ChartModel, g: ChartGroup, box: Box) {
     const at = (rr: number, ang: number): Pt => ({ x: ox + rr * Math.cos(ang), y: oy + rr * Math.sin(ang) })
     const large = sweep > Math.PI ? 1 : 0
     if (sweep >= Math.PI * 2 - 1e-6) {
-      svg.circle(ox, oy, r, { fill, stroke, sw })
-      if (hole) svg.circle(ox, oy, hole, { fill: m.bg ?? '#ffffff' })
+      if (!rin) svg.circle(ox, oy, r, { fill, stroke, sw })
+      // a whole ring: the outer circle one way round and the inner one the other way, so the inside stays open
+      else
+        svg.path(
+          `M${n(ox + r)} ${n(oy)} A${n(r)} ${n(r)} 0 1 1 ${n(ox - r)} ${n(oy)} A${n(r)} ${n(r)} 0 1 1 ${n(ox + r)} ${n(oy)} Z M${n(ox + rin)} ${n(oy)} A${n(rin)} ${n(rin)} 0 1 0 ${n(ox - rin)} ${n(oy)} A${n(rin)} ${n(rin)} 0 1 0 ${n(ox + rin)} ${n(oy)} Z`,
+          { fill, stroke, sw },
+        )
     } else {
       const p1 = at(r, a)
       const p2 = at(r, a + sweep)
-      const n = (x: number) => Math.round(x * 100) / 100
-      const d = hole
-        ? `M${n(p1.x)} ${n(p1.y)} A${n(r)} ${n(r)} 0 ${large} 1 ${n(p2.x)} ${n(p2.y)} L${n(at(hole, a + sweep).x)} ${n(at(hole, a + sweep).y)} A${n(hole)} ${n(hole)} 0 ${large} 0 ${n(at(hole, a).x)} ${n(at(hole, a).y)} Z`
+      const d = rin
+        ? `M${n(p1.x)} ${n(p1.y)} A${n(r)} ${n(r)} 0 ${large} 1 ${n(p2.x)} ${n(p2.y)} L${n(at(rin, a + sweep).x)} ${n(at(rin, a + sweep).y)} A${n(rin)} ${n(rin)} 0 ${large} 0 ${n(at(rin, a).x)} ${n(at(rin, a).y)} Z`
         : `M${n(ox)} ${n(oy)} L${n(p1.x)} ${n(p1.y)} A${n(r)} ${n(r)} 0 ${large} 1 ${n(p2.x)} ${n(p2.y)} Z`
       svg.path(d, { fill, stroke, sw })
     }
@@ -358,7 +372,7 @@ function drawPie(svg: Svg, m: ChartModel, g: ChartGroup, box: Box) {
       if (s.labels.category) parts.push(s.cats[k] ?? '')
       if (s.labels.value) parts.push(fmt(s.values[k]!, s.labels.format ?? s.format, m.date1904))
       if (s.labels.percent) parts.push(fmt(v / total, s.labels.format && s.labels.format.includes('%') ? s.labels.format : '0%', m.date1904))
-      const lr = outside ? r * 1.15 : hole ? (r + hole) / 2 : r * 0.65
+      const lr = outside ? r * 1.15 : rin ? (r + rin) / 2 : r * 0.65
       const p = at(lr, mid)
       const anchor = outside ? (Math.cos(mid) >= 0 ? 'start' : 'end') : 'middle'
       const color = s.labels.text?.color ?? (outside ? m.textColor : '#ffffff')
@@ -702,6 +716,12 @@ function label(svg: Svg, m: ChartModel, s: ChartSeries, k: number, v: number, x:
   if (parts.length) svg.text(x, y, parts.join(l.sep ?? ', '), { size: t.size, color: l.text?.color ?? color ?? m.textColor, bold: t.bold, anchor })
 }
 
+/** where bars and areas start: zero, or the axis bound nearest to it when the axis does not reach zero (a log axis: its minimum) */
+function baseline(s: Scale): number {
+  if (s.log) return s.min
+  return Math.min(Math.max(0, s.min), s.max)
+}
+
 function drawBars(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo & { band: number; horizontal: boolean; size: number }) {
   const { valPos, catMid, band, horizontal } = geo
   const stacked = isStacked(g)
@@ -709,7 +729,7 @@ function drawBars(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo 
   const ov = Math.max(-1, Math.min(1, g.overlap / 100))
   const w = band / (n - (n - 1) * ov + g.gapWidth / 100)
   const total = n * w - (n - 1) * w * ov
-  const base = p.scale.min <= 0 && p.scale.max >= 0 && !p.scale.log ? 0 : p.scale.min
+  const base = baseline(p.scale)
   const len = Math.max(...g.series.map((s) => s.values.length))
   // one gradient or pattern per series (and per point with its own), shared by its bars
   const paints = g.series.map((s) => fillPaint(svg, s.fill, s.look))
@@ -751,7 +771,7 @@ function drawBars(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo 
 
 function drawArea(svg: Svg, g: ChartGroup, p: AxisPlan, geo: Geo) {
   const { valPos, catMid } = geo
-  const base = p.scale.min <= 0 && p.scale.max >= 0 ? 0 : p.scale.min
+  const base = baseline(p.scale)
   let below: number[] | null = null
   for (const s of g.series) {
     const vals = isStacked(g) ? cumulative(g, s).map((v) => v ?? 0) : s.values.map((v) => v ?? 0)

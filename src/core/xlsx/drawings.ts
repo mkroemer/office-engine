@@ -10,6 +10,7 @@ import { isWebImage } from '../opc'
 import { desc, descAll, kid, textOf, type XEl } from '../xml'
 import { MAX_COL, MAX_ROWS, MAX_SHEET_WIDTH_PX, MAX_SHEET_HEIGHT_PX, ooxmlInt } from './limits'
 import { parseFormula, references } from './formula'
+import { isoToSerial } from './formula/dates'
 import { readChart, type ChartModel, type RangeReader, type RangeValues } from './chart'
 import { T_BOOL, T_DATE, T_EMPTY, T_ERR, T_NUM, T_SST, type XlsxWorkbook } from './workbook'
 
@@ -126,6 +127,8 @@ export function workbookReader(wb: XlsxWorkbook, self: number): RangeReader {
       const s = r.sheet === undefined ? self : wb.sheets.findIndex((x) => x.name.toLowerCase() === r.sheet!.toLowerCase())
       if (s < 0) return null
       if (!wb.sheetsData.get(s)?.done) await wb.loadSheet(s, () => {})
+      // formulas still being computed after the sheet was read (no cached value, a full calculation on load)
+      await wb.settled()
       const d = wb.sheetsData.get(s)
       if (!d || d.error) return null
       const [r0, c0, r1, c1] = 'r' in r ? [r.r, r.c, r.r, r.c] : [r.r0, r.c0, Math.min(r.r1, Math.max(r.r0, d.maxRow)), Math.min(r.c1, Math.max(r.c0, d.maxCol))]
@@ -156,8 +159,10 @@ const MAX_POINTS = 50_000
 function cellValue(wb: XlsxWorkbook, t: number, v: unknown): number | string | null {
   switch (t) {
     case T_NUM:
-    case T_DATE:
       return typeof v === 'number' ? v : Number(v)
+    // a date cell holds its date as ISO text; a chart plots its serial, and shows it in the cell's date format
+    case T_DATE:
+      return typeof v === 'number' ? v : isoToSerial(String(v), wb.date1904)
     case T_SST:
       return wb.sst[v as number] ?? ''
     case T_BOOL:

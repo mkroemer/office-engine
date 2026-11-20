@@ -392,14 +392,17 @@ function labelsOf(el: XEl | undefined, ctx: ColorCtx): DataLabels | undefined {
   return l.value || l.percent || l.category || l.series ? l : undefined
 }
 
+/** the most points read from a chart's saved values: `ptCount` is the file's word, and allocated as an array */
+const MAX_CACHED = 100_000
+
 /** a cache's points by index (`c:pt idx`), `ptCount` long */
 function cacheOf(cache: XEl | undefined): { values: (string | null)[]; format?: string } | null {
   if (!cache) return null
-  const n = num(val(kid(cache, 'ptCount')), 0)!
+  const n = Math.min(Math.max(0, num(val(kid(cache, 'ptCount')), 0)!), MAX_CACHED)
   const values: (string | null)[] = new Array(n).fill(null)
   for (const pt of kids(cache, 'pt')) {
     const i = num(pt.a.idx, -1)!
-    if (i >= 0 && i < 100_000) values[i] = textOf(kid(pt, 'v'))
+    if (i >= 0 && i < n) values[i] = textOf(kid(pt, 'v'))
   }
   return { values, format: textOf(kid(cache, 'formatCode')) || undefined }
 }
@@ -473,7 +476,8 @@ async function seriesOf(ser: XEl, i: number, type: ChartType, varyColors: boolea
     return n === null ? String(v) : formatValue(n, catSrc?.format || 'General', date1904).text
   }
   let cats = (catSrc?.values ?? []).map(catText)
-  let xs = scatter ? (catSrc?.values ?? []).map(toNum) : undefined
+  // a scatter series without X values is numbered 1, 2, 3, ... (left undefined); with them, a missing one leaves a gap
+  let xs = scatter && catSrc ? catSrc.values.map(toNum) : undefined
   // hidden rows / columns are left out where the chart shows visible cells only
   const hidden = valSrc?.hidden
   if (plotVisOnly && hidden?.some(Boolean)) {
