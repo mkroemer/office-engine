@@ -35,7 +35,20 @@ export class UnionV {
   constructor(readonly areas: RangeV[]) {}
 }
 
-export type Val = Value | RangeV | ArrayV | UnionV
+/**
+ * A function as a value: what LAMBDA makes, and a function named without being called (`BYROW(rows, SUM)`). An
+ * argument left out is undefined (ISOMITTED).
+ */
+export class LambdaV {
+  constructor(
+    readonly fn: (args: (Val | undefined)[]) => Val,
+    /** the fewest and the most arguments it takes */
+    readonly min = 0,
+    readonly max = Number.POSITIVE_INFINITY,
+  ) {}
+}
+
+export type Val = Value | RangeV | ArrayV | UnionV | LambdaV
 
 export const isErr = (v: unknown): v is FormulaError => v instanceof FormulaError
 

@@ -11,6 +11,7 @@ export interface Snapshot {
   rows: (unknown[] | undefined)[]
   formulas: Map<number, string>
   arrays: Map<number, Merge>
+  dynamic: Set<number>
   shifts: Shift[]
   merges: Merge[]
   colInfo: ColInfo[]
@@ -33,6 +34,7 @@ export function snapshot(d: SheetData): Snapshot {
     rows: d.rows.slice(),
     formulas: new Map(d.formulas),
     arrays: new Map(d.arrays),
+    dynamic: new Set(d.dynamic),
     shifts: d.shifts.slice(),
     merges: d.merges.map((m) => ({ ...m })),
     colInfo: d.colInfo.map((c) => ({ ...c })),
@@ -49,6 +51,7 @@ export function restore(d: SheetData, s: Snapshot) {
   d.rows = s.rows.slice()
   d.formulas = new Map(s.formulas)
   d.arrays = new Map(s.arrays)
+  d.dynamic = new Set(s.dynamic)
   d.shifts = s.shifts.slice()
   d.merges = s.merges.map((m) => ({ ...m }))
   d.colInfo = s.colInfo.map((c) => ({ ...c }))
@@ -228,6 +231,19 @@ export function shiftSheet(d: SheetData, sheetName: string, axis: 'row' | 'col',
   d.formulas = formulas
   // array formulas: with their first cell, over the cells they still fill
   const arrays = new Map<number, Merge>()
+  const dynamic = new Set<number>()
+  for (const key of d.dynamic) {
+    let r = Math.floor(key / MAX_COL)
+    let c = key % MAX_COL
+    const v = axis === 'row' ? r : c
+    if (delta < 0 && v >= at && v < end) continue
+    if (v >= at) {
+      if (axis === 'row') r += delta
+      else c += delta
+    }
+    if (r < MAX_ROWS && c < MAX_COL) dynamic.add(r * MAX_COL + c)
+  }
+  d.dynamic = dynamic
   for (const [key, rg] of d.arrays) {
     let r = Math.floor(key / MAX_COL)
     let c = key % MAX_COL

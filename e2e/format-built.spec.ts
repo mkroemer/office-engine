@@ -101,8 +101,22 @@ for (const kind of ['docx', 'xlsx', 'pptx'] as const) {
         text.style.cssText = 'position:fixed;top:0;right:0;z-index:999999;background:white'
         wrapper.append(text)
       })
+      if (kind === 'docx') {
+        await v.page.evaluate(() => {
+          const { flushSync } = (window as any).__builtRuntime
+          const rerender = () => {
+            if (document.activeElement?.id !== 'focusable-app') return
+            document.removeEventListener('selectionchange', rerender)
+            // Change the inline onSave callback after the editor has queued its selection update.
+            flushSync(() => window.__setProps({}))
+            window.__events.push({ type: 'host-rerender' })
+          }
+          document.addEventListener('selectionchange', rerender)
+        })
+      }
       await v.page.getByText('Host page background', { exact: true }).click()
       expect(await v.page.evaluate(() => document.activeElement?.id)).toBe('focusable-app')
+      if (kind === 'docx') await v.waitEvent('host-rerender')
       await v.page.waitForFunction(() => window.__ctl.snapshot().format === null, null, { timeout: 3000 })
       await v.page.evaluate(() => window.__ctl.format({ op: 'toggle', mark: 'italic' }))
       expect(await v.page.evaluate(() => window.__ctl.snapshot().dirty)).toBe(false)

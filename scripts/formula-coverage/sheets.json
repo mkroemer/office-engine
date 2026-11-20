@@ -1,0 +1,2580 @@
+{
+ "read": "2026-11-19",
+ "functions": [
+  {
+   "name": "DATE",
+   "category": "Date",
+   "url": "https://support.google.com/docs/answer/3092969"
+  },
+  {
+   "name": "DATEDIF",
+   "category": "Date",
+   "url": "https://support.google.com/docs/answer/6055612"
+  },
+  {
+   "name": "DATEVALUE",
+   "category": "Date",
+   "url": "https://support.google.com/docs/answer/3093039"
+  },
+  {
+   "name": "DAY",
+   "category": "Date",
+   "url": "https://support.google.com/docs/answer/3093040"
+  },
+  {
+   "name": "DAYS",
+   "category": "Date",
+   "url": "https://support.google.com/docs/answer/9061296"
+  },
+  {
+   "name": "DAYS360",
+   "category": "Date",
+   "url": "https://support.google.com/docs/answer/3093042"
+  },
+  {
+   "name": "EDATE",
+   "category": "Date",
+   "url": "https://support.google.com/docs/answer/3092974"
+  },
+  {
+   "name": "EOMONTH",
+   "category": "Date",
+   "url": "https://support.google.com/docs/answer/3093044"
+  },
+  {
+   "name": "EPOCHTODATE",
+   "category": "Date",
+   "url": "https://support.google.com/docs/answer/13193461"
+  },
+  {
+   "name": "HOUR",
+   "category": "Date",
+   "url": "https://support.google.com/docs/answer/3093045"
+  },
+  {
+   "name": "ISOWEEKNUM",
+   "category": "Date",
+   "url": "https://support.google.com/docs/answer/7368793"
+  },
+  {
+   "name": "MINUTE",
+   "category": "Date",
+   "url": "https://support.google.com/docs/answer/3093048"
+  },
+  {
+   "name": "MONTH",
+   "category": "Date",
+   "url": "https://support.google.com/docs/answer/3093052"
+  },
+  {
+   "name": "NETWORKDAYS",
+   "category": "Date",
+   "url": "https://support.google.com/docs/answer/3092979"
+  },
+  {
+   "name": "NETWORKDAYS.INTL",
+   "category": "Date",
+   "url": "https://support.google.com/docs/answer/3295902"
+  },
+  {
+   "name": "NOW",
+   "category": "Date",
+   "url": "https://support.google.com/docs/answer/3092981"
+  },
+  {
+   "name": "SECOND",
+   "category": "Date",
+   "url": "https://support.google.com/docs/answer/3093054"
+  },
+  {
+   "name": "TIME",
+   "category": "Date",
+   "url": "https://support.google.com/docs/answer/3093056"
+  },
+  {
+   "name": "TIMEVALUE",
+   "category": "Date",
+   "url": "https://support.google.com/docs/answer/3267350"
+  },
+  {
+   "name": "TODAY",
+   "category": "Date",
+   "url": "https://support.google.com/docs/answer/3092984"
+  },
+  {
+   "name": "WEEKDAY",
+   "category": "Date",
+   "url": "https://support.google.com/docs/answer/3092985"
+  },
+  {
+   "name": "WEEKNUM",
+   "category": "Date",
+   "url": "https://support.google.com/docs/answer/3294949"
+  },
+  {
+   "name": "WORKDAY",
+   "category": "Date",
+   "url": "https://support.google.com/docs/answer/3093059"
+  },
+  {
+   "name": "WORKDAY.INTL",
+   "category": "Date",
+   "url": "https://support.google.com/docs/answer/3294972"
+  },
+  {
+   "name": "YEAR",
+   "category": "Date",
+   "url": "https://support.google.com/docs/answer/3093061"
+  },
+  {
+   "name": "YEARFRAC",
+   "category": "Date",
+   "url": "https://support.google.com/docs/answer/3092989"
+  },
+  {
+   "name": "BIN2DEC",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/3092991"
+  },
+  {
+   "name": "BIN2HEX",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/3093133"
+  },
+  {
+   "name": "BIN2OCT",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/3092993"
+  },
+  {
+   "name": "BITAND",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/9061440"
+  },
+  {
+   "name": "BITLSHIFT",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/9061443"
+  },
+  {
+   "name": "BITOR",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/9083934"
+  },
+  {
+   "name": "BITRSHIFT",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/9084100"
+  },
+  {
+   "name": "BITXOR",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/9083935"
+  },
+  {
+   "name": "COMPLEX",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/7407888"
+  },
+  {
+   "name": "DEC2BIN",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/3092997"
+  },
+  {
+   "name": "DEC2HEX",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/3093137"
+  },
+  {
+   "name": "DEC2OCT",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/3093138"
+  },
+  {
+   "name": "DELTA",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/3401147"
+  },
+  {
+   "name": "ERF",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/9116267"
+  },
+  {
+   "name": "ERF.PRECISE",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/9116267"
+  },
+  {
+   "name": "GESTEP",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/9061379"
+  },
+  {
+   "name": "HEX2BIN",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/3093139"
+  },
+  {
+   "name": "HEX2DEC",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/3093192"
+  },
+  {
+   "name": "HEX2OCT",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/3093142"
+  },
+  {
+   "name": "IMABS",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/7411899"
+  },
+  {
+   "name": "IMAGINARY",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/7408639"
+  },
+  {
+   "name": "IMARGUMENT",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/9116360"
+  },
+  {
+   "name": "IMCONJUGATE",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/7410791"
+  },
+  {
+   "name": "IMCOS",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/9116546"
+  },
+  {
+   "name": "IMCOSH",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/9366233"
+  },
+  {
+   "name": "IMCOT",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/9366254"
+  },
+  {
+   "name": "IMCOTH",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/9366256"
+  },
+  {
+   "name": "IMCSC",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/9199155"
+  },
+  {
+   "name": "IMCSCH",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/9366258"
+  },
+  {
+   "name": "IMDIV",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/7411898"
+  },
+  {
+   "name": "IMEXP",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/9198277"
+  },
+  {
+   "name": "IMLOG",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/9366486"
+  },
+  {
+   "name": "IMLOG10",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/9366497"
+  },
+  {
+   "name": "IMLOG2",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/9366426"
+  },
+  {
+   "name": "IMPRODUCT",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/7409679"
+  },
+  {
+   "name": "IMREAL",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/7408138"
+  },
+  {
+   "name": "IMSEC",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/9366728"
+  },
+  {
+   "name": "IMSECH",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/9366440"
+  },
+  {
+   "name": "IMSIN",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/9198962"
+  },
+  {
+   "name": "IMSINH",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/9366445"
+  },
+  {
+   "name": "IMSUB",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/7408393"
+  },
+  {
+   "name": "IMSUM",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/7408295"
+  },
+  {
+   "name": "IMTAN",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/9203334"
+  },
+  {
+   "name": "IMTANH",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/9366655"
+  },
+  {
+   "name": "OCT2BIN",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/3093144"
+  },
+  {
+   "name": "OCT2DEC",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/3093146"
+  },
+  {
+   "name": "OCT2HEX",
+   "category": "Engineering",
+   "url": "https://support.google.com/docs/answer/3093147"
+  },
+  {
+   "name": "FILTER",
+   "category": "Lookup",
+   "url": "https://support.google.com/docs/answer/3093197"
+  },
+  {
+   "name": "SORT",
+   "category": "Lookup",
+   "url": "https://support.google.com/docs/answer/3093150"
+  },
+  {
+   "name": "SORTN",
+   "category": "Lookup",
+   "url": "https://support.google.com/docs/answer/7354624"
+  },
+  {
+   "name": "UNIQUE",
+   "category": "Lookup",
+   "url": "https://support.google.com/docs/answer/10522653"
+  },
+  {
+   "name": "ACCRINT",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093200"
+  },
+  {
+   "name": "ACCRINTM",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093202"
+  },
+  {
+   "name": "AMORLINC",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/9083932"
+  },
+  {
+   "name": "COUPDAYBS",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093154"
+  },
+  {
+   "name": "COUPDAYS",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093204"
+  },
+  {
+   "name": "COUPDAYSNC",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093156"
+  },
+  {
+   "name": "COUPNCD",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093157"
+  },
+  {
+   "name": "COUPNUM",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093208"
+  },
+  {
+   "name": "COUPPCD",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093210"
+  },
+  {
+   "name": "CUMIPMT",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093211"
+  },
+  {
+   "name": "CUMPRINC",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093159"
+  },
+  {
+   "name": "DB",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093162"
+  },
+  {
+   "name": "DDB",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093163"
+  },
+  {
+   "name": "DISC",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093216"
+  },
+  {
+   "name": "DOLLARDE",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093167"
+  },
+  {
+   "name": "DOLLARFR",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093217"
+  },
+  {
+   "name": "DURATION",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093169"
+  },
+  {
+   "name": "EFFECT",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093223"
+  },
+  {
+   "name": "FV",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093224"
+  },
+  {
+   "name": "FVSCHEDULE",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093226"
+  },
+  {
+   "name": "INTRATE",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093174"
+  },
+  {
+   "name": "IPMT",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093175"
+  },
+  {
+   "name": "IRR",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093231"
+  },
+  {
+   "name": "ISPMT",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/9116481"
+  },
+  {
+   "name": "MDURATION",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093178"
+  },
+  {
+   "name": "MIRR",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093180"
+  },
+  {
+   "name": "NOMINAL",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093234"
+  },
+  {
+   "name": "NPER",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093183"
+  },
+  {
+   "name": "NPV",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093184"
+  },
+  {
+   "name": "PDURATION",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/9368165"
+  },
+  {
+   "name": "PMT",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093185"
+  },
+  {
+   "name": "PPMT",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093187"
+  },
+  {
+   "name": "PRICE",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093188"
+  },
+  {
+   "name": "PRICEDISC",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093240"
+  },
+  {
+   "name": "PRICEMAT",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093191"
+  },
+  {
+   "name": "PV",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093243"
+  },
+  {
+   "name": "RATE",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093257"
+  },
+  {
+   "name": "RECEIVED",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093244"
+  },
+  {
+   "name": "RRI",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/9368238"
+  },
+  {
+   "name": "SLN",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093245"
+  },
+  {
+   "name": "SYD",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093261"
+  },
+  {
+   "name": "TBILLEQ",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093249"
+  },
+  {
+   "name": "TBILLPRICE",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093251"
+  },
+  {
+   "name": "TBILLYIELD",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093264"
+  },
+  {
+   "name": "VDB",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/9199424"
+  },
+  {
+   "name": "XIRR",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093266"
+  },
+  {
+   "name": "XNPV",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093268"
+  },
+  {
+   "name": "YIELD",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093255"
+  },
+  {
+   "name": "YIELDDISC",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/3093270"
+  },
+  {
+   "name": "YIELDMAT",
+   "category": "Financial",
+   "url": "https://support.google.com/docs/answer/9000132"
+  },
+  {
+   "name": "ARRAYFORMULA",
+   "category": "Google",
+   "url": "https://support.google.com/docs/answer/3093275"
+  },
+  {
+   "name": "DETECTLANGUAGE",
+   "category": "Google",
+   "url": "https://support.google.com/docs/answer/3093278"
+  },
+  {
+   "name": "GOOGLEFINANCE",
+   "category": "Google",
+   "url": "https://support.google.com/docs/answer/3093281"
+  },
+  {
+   "name": "GOOGLETRANSLATE",
+   "category": "Google",
+   "url": "https://support.google.com/docs/answer/3093331"
+  },
+  {
+   "name": "IMAGE",
+   "category": "Google",
+   "url": "https://support.google.com/docs/answer/3093333"
+  },
+  {
+   "name": "QUERY",
+   "category": "Google",
+   "url": "https://support.google.com/docs/answer/3093343"
+  },
+  {
+   "name": "SPARKLINE",
+   "category": "Google",
+   "url": "https://support.google.com/docs/answer/3093289"
+  },
+  {
+   "name": "ERROR.TYPE",
+   "category": "Info",
+   "url": "https://support.google.com/docs/answer/3238305"
+  },
+  {
+   "name": "ISBLANK",
+   "category": "Info",
+   "url": "https://support.google.com/docs/answer/3093290"
+  },
+  {
+   "name": "ISDATE",
+   "category": "Info",
+   "url": "https://support.google.com/docs/answer/9061381"
+  },
+  {
+   "name": "ISEMAIL",
+   "category": "Info",
+   "url": "https://support.google.com/docs/answer/3256503"
+  },
+  {
+   "name": "ISERR",
+   "category": "Info",
+   "url": "https://support.google.com/docs/answer/3093348"
+  },
+  {
+   "name": "ISERROR",
+   "category": "Info",
+   "url": "https://support.google.com/docs/answer/3093349"
+  },
+  {
+   "name": "ISFORMULA",
+   "category": "Info",
+   "url": "https://support.google.com/docs/answer/6270316"
+  },
+  {
+   "name": "ISLOGICAL",
+   "category": "Info",
+   "url": "https://support.google.com/docs/answer/3093351"
+  },
+  {
+   "name": "ISNA",
+   "category": "Info",
+   "url": "https://support.google.com/docs/answer/3093293"
+  },
+  {
+   "name": "ISNONTEXT",
+   "category": "Info",
+   "url": "https://support.google.com/docs/answer/3093295"
+  },
+  {
+   "name": "ISNUMBER",
+   "category": "Info",
+   "url": "https://support.google.com/docs/answer/3093296"
+  },
+  {
+   "name": "ISREF",
+   "category": "Info",
+   "url": "https://support.google.com/docs/answer/3093354"
+  },
+  {
+   "name": "ISTEXT",
+   "category": "Info",
+   "url": "https://support.google.com/docs/answer/3093297"
+  },
+  {
+   "name": "N",
+   "category": "Info",
+   "url": "https://support.google.com/docs/answer/3093357"
+  },
+  {
+   "name": "NA",
+   "category": "Info",
+   "url": "https://support.google.com/docs/answer/3093359"
+  },
+  {
+   "name": "SHEETS",
+   "category": "Info",
+   "url": "https://support.google.com/docs/answer/16865347"
+  },
+  {
+   "name": "TYPE",
+   "category": "Info",
+   "url": "https://support.google.com/docs/answer/3267375"
+  },
+  {
+   "name": "CELL",
+   "category": "Info",
+   "url": "https://support.google.com/docs/answer/3267071"
+  },
+  {
+   "name": "AND",
+   "category": "Logical",
+   "url": "https://support.google.com/docs/answer/3093301"
+  },
+  {
+   "name": "FALSE",
+   "category": "Logical",
+   "url": "https://support.google.com/docs/answer/3093302"
+  },
+  {
+   "name": "IF",
+   "category": "Logical",
+   "url": "https://support.google.com/docs/answer/3093364"
+  },
+  {
+   "name": "IFERROR",
+   "category": "Logical",
+   "url": "https://support.google.com/docs/answer/3093304"
+  },
+  {
+   "name": "IFNA",
+   "category": "Logical",
+   "url": "https://support.google.com/docs/answer/9365944"
+  },
+  {
+   "name": "IFS",
+   "category": "Logical",
+   "url": "https://support.google.com/docs/answer/7014145"
+  },
+  {
+   "name": "LAMBDA",
+   "category": "Logical",
+   "url": "https://support.google.com/docs/answer/12508718"
+  },
+  {
+   "name": "LET",
+   "category": "Logical",
+   "url": "https://support.google.com/docs/answer/13190535"
+  },
+  {
+   "name": "NOT",
+   "category": "Logical",
+   "url": "https://support.google.com/docs/answer/3093305"
+  },
+  {
+   "name": "OR",
+   "category": "Logical",
+   "url": "https://support.google.com/docs/answer/3093306"
+  },
+  {
+   "name": "SWITCH",
+   "category": "Logical",
+   "url": "https://support.google.com/docs/answer/7013690"
+  },
+  {
+   "name": "TRUE",
+   "category": "Logical",
+   "url": "https://support.google.com/docs/answer/3093307"
+  },
+  {
+   "name": "XOR",
+   "category": "Logical",
+   "url": "https://support.google.com/docs/answer/9116491"
+  },
+  {
+   "name": "ADDRESS",
+   "category": "Lookup",
+   "url": "https://support.google.com/docs/answer/3093308"
+  },
+  {
+   "name": "CHOOSE",
+   "category": "Lookup",
+   "url": "https://support.google.com/docs/answer/3093371"
+  },
+  {
+   "name": "COLUMN",
+   "category": "Lookup",
+   "url": "https://support.google.com/docs/answer/3093373"
+  },
+  {
+   "name": "COLUMNS",
+   "category": "Lookup",
+   "url": "https://support.google.com/docs/answer/3093374"
+  },
+  {
+   "name": "FORMULATEXT",
+   "category": "Lookup",
+   "url": "https://support.google.com/docs/answer/9365792"
+  },
+  {
+   "name": "GETPIVOTDATA",
+   "category": "Lookup",
+   "url": "https://support.google.com/docs/answer/6167538"
+  },
+  {
+   "name": "HLOOKUP",
+   "category": "Lookup",
+   "url": "https://support.google.com/docs/answer/3093375"
+  },
+  {
+   "name": "INDEX",
+   "category": "Lookup",
+   "url": "https://support.google.com/docs/answer/3098242"
+  },
+  {
+   "name": "INDIRECT",
+   "category": "Lookup",
+   "url": "https://support.google.com/docs/answer/3093377"
+  },
+  {
+   "name": "LOOKUP",
+   "category": "Lookup",
+   "url": "https://support.google.com/docs/answer/3256570"
+  },
+  {
+   "name": "MATCH",
+   "category": "Lookup",
+   "url": "https://support.google.com/docs/answer/3093378"
+  },
+  {
+   "name": "OFFSET",
+   "category": "Lookup",
+   "url": "https://support.google.com/docs/answer/3093379"
+  },
+  {
+   "name": "ROW",
+   "category": "Lookup",
+   "url": "https://support.google.com/docs/answer/3093316"
+  },
+  {
+   "name": "ROWS",
+   "category": "Lookup",
+   "url": "https://support.google.com/docs/answer/3093382"
+  },
+  {
+   "name": "SHEET",
+   "category": "Lookup",
+   "url": "https://support.google.com/docs/answer/16865249"
+  },
+  {
+   "name": "VLOOKUP",
+   "category": "Lookup",
+   "url": "https://support.google.com/docs/answer/3093318"
+  },
+  {
+   "name": "XLOOKUP",
+   "category": "Lookup",
+   "url": "https://support.google.com/docs/answer/12405947"
+  },
+  {
+   "name": "ABS",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093459"
+  },
+  {
+   "name": "ACOS",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093461"
+  },
+  {
+   "name": "ACOSH",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093391"
+  },
+  {
+   "name": "ACOT",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/9084227"
+  },
+  {
+   "name": "ACOTH",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/9084097"
+  },
+  {
+   "name": "ASIN",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093464"
+  },
+  {
+   "name": "ASINH",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093393"
+  },
+  {
+   "name": "ATAN",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093395"
+  },
+  {
+   "name": "ATAN2",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093468"
+  },
+  {
+   "name": "ATANH",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093397"
+  },
+  {
+   "name": "BASE",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/9084167"
+  },
+  {
+   "name": "CEILING",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093471"
+  },
+  {
+   "name": "CEILING.MATH",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/9061515"
+  },
+  {
+   "name": "CEILING.PRECISE",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/9061294"
+  },
+  {
+   "name": "COMBIN",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093400"
+  },
+  {
+   "name": "COMBINA",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/9084101"
+  },
+  {
+   "name": "COS",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093476"
+  },
+  {
+   "name": "COSH",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093477"
+  },
+  {
+   "name": "COT",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/9084169"
+  },
+  {
+   "name": "COTH",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/9084102"
+  },
+  {
+   "name": "COUNTBLANK",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093403"
+  },
+  {
+   "name": "COUNTIF",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093480"
+  },
+  {
+   "name": "COUNTIFS",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3256550"
+  },
+  {
+   "name": "COUNTUNIQUE",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093405"
+  },
+  {
+   "name": "CSC",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/9084103"
+  },
+  {
+   "name": "CSCH",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/9116336"
+  },
+  {
+   "name": "DECIMAL",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/9116090"
+  },
+  {
+   "name": "DEGREES",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093481"
+  },
+  {
+   "name": "ERFC",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093407"
+  },
+  {
+   "name": "ERFC.PRECISE",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093407"
+  },
+  {
+   "name": "EVEN",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093409"
+  },
+  {
+   "name": "EXP",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093411"
+  },
+  {
+   "name": "FACT",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093412"
+  },
+  {
+   "name": "FACTDOUBLE",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093414"
+  },
+  {
+   "name": "FLOOR",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093487"
+  },
+  {
+   "name": "FLOOR.MATH",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/9061444"
+  },
+  {
+   "name": "FLOOR.PRECISE",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/9116270"
+  },
+  {
+   "name": "GAMMALN",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093416"
+  },
+  {
+   "name": "GAMMALN.PRECISE",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093416"
+  },
+  {
+   "name": "GCD",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093489"
+  },
+  {
+   "name": "IMLN",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/9000651"
+  },
+  {
+   "name": "IMPOWER",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/9003065"
+  },
+  {
+   "name": "IMSQRT",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/9003168"
+  },
+  {
+   "name": "INT",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093490"
+  },
+  {
+   "name": "ISEVEN",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093419"
+  },
+  {
+   "name": "ISO.CEILING",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/9061294"
+  },
+  {
+   "name": "ISODD",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093491"
+  },
+  {
+   "name": "LCM",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093421"
+  },
+  {
+   "name": "LN",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093422"
+  },
+  {
+   "name": "LOG",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093495"
+  },
+  {
+   "name": "LOG10",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093423"
+  },
+  {
+   "name": "MOD",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093497"
+  },
+  {
+   "name": "MROUND",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093426"
+  },
+  {
+   "name": "MULTINOMIAL",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093429"
+  },
+  {
+   "name": "MUNIT",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/9368156"
+  },
+  {
+   "name": "ODD",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093499"
+  },
+  {
+   "name": "PI",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093432"
+  },
+  {
+   "name": "POWER",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093433"
+  },
+  {
+   "name": "PRODUCT",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093502"
+  },
+  {
+   "name": "QUOTIENT",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093436"
+  },
+  {
+   "name": "RADIANS",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093437"
+  },
+  {
+   "name": "RAND",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093438"
+  },
+  {
+   "name": "RANDARRAY",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/9211904"
+  },
+  {
+   "name": "RANDBETWEEN",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093507"
+  },
+  {
+   "name": "ROUND",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093440"
+  },
+  {
+   "name": "ROUNDDOWN",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093442"
+  },
+  {
+   "name": "ROUNDUP",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093443"
+  },
+  {
+   "name": "SEC",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/9116395"
+  },
+  {
+   "name": "SECH",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/9116560"
+  },
+  {
+   "name": "SEQUENCE",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/9368244"
+  },
+  {
+   "name": "SERIESSUM",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093444"
+  },
+  {
+   "name": "SIGN",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093513"
+  },
+  {
+   "name": "SIN",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093447"
+  },
+  {
+   "name": "SINH",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093517"
+  },
+  {
+   "name": "SQRT",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093577"
+  },
+  {
+   "name": "SQRTPI",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093579"
+  },
+  {
+   "name": "SUBTOTAL",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093649"
+  },
+  {
+   "name": "SUM",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093669"
+  },
+  {
+   "name": "SUMIF",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093583"
+  },
+  {
+   "name": "SUMIFS",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3238496"
+  },
+  {
+   "name": "SUMSQ",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093714"
+  },
+  {
+   "name": "TAN",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093586"
+  },
+  {
+   "name": "TANH",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093755"
+  },
+  {
+   "name": "TRUNC",
+   "category": "Math",
+   "url": "https://support.google.com/docs/answer/3093588"
+  },
+  {
+   "name": "ADD",
+   "category": "Operator",
+   "url": "https://support.google.com/docs/answer/3093590"
+  },
+  {
+   "name": "CONCAT",
+   "category": "Operator",
+   "url": "https://support.google.com/docs/answer/3093592"
+  },
+  {
+   "name": "DIVIDE",
+   "category": "Operator",
+   "url": "https://support.google.com/docs/answer/3093973"
+  },
+  {
+   "name": "EQ",
+   "category": "Operator",
+   "url": "https://support.google.com/docs/answer/3093593"
+  },
+  {
+   "name": "GT",
+   "category": "Operator",
+   "url": "https://support.google.com/docs/answer/3098240"
+  },
+  {
+   "name": "GTE",
+   "category": "Operator",
+   "url": "https://support.google.com/docs/answer/3093975"
+  },
+  {
+   "name": "ISBETWEEN",
+   "category": "Operator",
+   "url": "https://support.google.com/docs/answer/10538337"
+  },
+  {
+   "name": "LT",
+   "category": "Operator",
+   "url": "https://support.google.com/docs/answer/3093596"
+  },
+  {
+   "name": "LTE",
+   "category": "Operator",
+   "url": "https://support.google.com/docs/answer/3093976"
+  },
+  {
+   "name": "MINUS",
+   "category": "Operator",
+   "url": "https://support.google.com/docs/answer/3093977"
+  },
+  {
+   "name": "MULTIPLY",
+   "category": "Operator",
+   "url": "https://support.google.com/docs/answer/3093978"
+  },
+  {
+   "name": "NE",
+   "category": "Operator",
+   "url": "https://support.google.com/docs/answer/3093981"
+  },
+  {
+   "name": "POW",
+   "category": "Operator",
+   "url": "https://support.google.com/docs/answer/3093603"
+  },
+  {
+   "name": "UMINUS",
+   "category": "Operator",
+   "url": "https://support.google.com/docs/answer/3093606"
+  },
+  {
+   "name": "UNARY_PERCENT",
+   "category": "Operator",
+   "url": "https://support.google.com/docs/answer/3093982"
+  },
+  {
+   "name": "UPLUS",
+   "category": "Operator",
+   "url": "https://support.google.com/docs/answer/3093608"
+  },
+  {
+   "name": "AVEDEV",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3093613"
+  },
+  {
+   "name": "AVERAGE",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3093615"
+  },
+  {
+   "name": "AVERAGE.WEIGHTED",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/9084098"
+  },
+  {
+   "name": "AVERAGEA",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3093617"
+  },
+  {
+   "name": "AVERAGEIF",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3256529"
+  },
+  {
+   "name": "AVERAGEIFS",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3256534"
+  },
+  {
+   "name": "BETA.DIST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/9084228"
+  },
+  {
+   "name": "BETA.INV",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/9061377"
+  },
+  {
+   "name": "BETADIST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/9084099"
+  },
+  {
+   "name": "BETAINV",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/9061377"
+  },
+  {
+   "name": "BINOM.DIST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3093987"
+  },
+  {
+   "name": "BINOM.INV",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3093623"
+  },
+  {
+   "name": "BINOMDIST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3093987"
+  },
+  {
+   "name": "CHIDIST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/7003346"
+  },
+  {
+   "name": "CHIINV",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/7003198"
+  },
+  {
+   "name": "CHISQ.DIST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/7003347"
+  },
+  {
+   "name": "CHISQ.DIST.RT",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/7003199"
+  },
+  {
+   "name": "CHISQ.INV",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/7004181"
+  },
+  {
+   "name": "CHISQ.INV.RT",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/7003348"
+  },
+  {
+   "name": "CHISQ.TEST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/7004263"
+  },
+  {
+   "name": "CHITEST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/7004263"
+  },
+  {
+   "name": "CONFIDENCE",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3093988"
+  },
+  {
+   "name": "CONFIDENCE.NORM",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3093988"
+  },
+  {
+   "name": "CONFIDENCE.T",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/9365672"
+  },
+  {
+   "name": "CORREL",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3093990"
+  },
+  {
+   "name": "COUNT",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3093620"
+  },
+  {
+   "name": "COUNTA",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3093991"
+  },
+  {
+   "name": "COVAR",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3093993"
+  },
+  {
+   "name": "COVARIANCE.P",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3093993"
+  },
+  {
+   "name": "COVARIANCE.S",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/9365675"
+  },
+  {
+   "name": "CRITBINOM",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3093623"
+  },
+  {
+   "name": "DEVSQ",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3093625"
+  },
+  {
+   "name": "EXPON.DIST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3093995"
+  },
+  {
+   "name": "EXPONDIST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3093995"
+  },
+  {
+   "name": "F.DIST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/6055706"
+  },
+  {
+   "name": "F.DIST.RT",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/6055799"
+  },
+  {
+   "name": "F.INV",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/7004265"
+  },
+  {
+   "name": "F.INV.RT",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/7003960"
+  },
+  {
+   "name": "F.TEST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/7004183"
+  },
+  {
+   "name": "FDIST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/6055799"
+  },
+  {
+   "name": "FINV",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/7003960"
+  },
+  {
+   "name": "FISHER",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3093626"
+  },
+  {
+   "name": "FISHERINV",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3093998"
+  },
+  {
+   "name": "FORECAST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094000"
+  },
+  {
+   "name": "FORECAST.LINEAR",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094000"
+  },
+  {
+   "name": "FTEST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/7004183"
+  },
+  {
+   "name": "GAMMA",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/9365856"
+  },
+  {
+   "name": "GAMMA.DIST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/7013990"
+  },
+  {
+   "name": "GAMMA.INV",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/9116467"
+  },
+  {
+   "name": "GAMMADIST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/7013989"
+  },
+  {
+   "name": "GAMMAINV",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/9116467"
+  },
+  {
+   "name": "GAUSS",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/9116278"
+  },
+  {
+   "name": "GEOMEAN",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094001"
+  },
+  {
+   "name": "HARMEAN",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094003"
+  },
+  {
+   "name": "HYPGEOM.DIST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094004"
+  },
+  {
+   "name": "HYPGEOMDIST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094004"
+  },
+  {
+   "name": "INTERCEPT",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3093632"
+  },
+  {
+   "name": "KURT",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3093634"
+  },
+  {
+   "name": "LARGE",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094008"
+  },
+  {
+   "name": "LOGINV",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094010"
+  },
+  {
+   "name": "LOGNORM.DIST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094011"
+  },
+  {
+   "name": "LOGNORM.INV",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094010"
+  },
+  {
+   "name": "LOGNORMDIST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094011"
+  },
+  {
+   "name": "MARGINOFERROR",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/12487850"
+  },
+  {
+   "name": "MAX",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094013"
+  },
+  {
+   "name": "MAXA",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094016"
+  },
+  {
+   "name": "MAXIFS",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/7013817"
+  },
+  {
+   "name": "MEDIAN",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094025"
+  },
+  {
+   "name": "MIN",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094017"
+  },
+  {
+   "name": "MINA",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094018"
+  },
+  {
+   "name": "MINIFS",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/7014063"
+  },
+  {
+   "name": "MODE",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094029"
+  },
+  {
+   "name": "MODE.MULT",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/9368267"
+  },
+  {
+   "name": "MODE.SNGL",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094029"
+  },
+  {
+   "name": "NEGBINOM.DIST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094031"
+  },
+  {
+   "name": "NEGBINOMDIST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094031"
+  },
+  {
+   "name": "NORM.DIST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094021"
+  },
+  {
+   "name": "NORM.INV",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094022"
+  },
+  {
+   "name": "NORM.S.DIST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094089"
+  },
+  {
+   "name": "NORM.S.INV",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094091"
+  },
+  {
+   "name": "NORMDIST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094021"
+  },
+  {
+   "name": "NORMINV",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094022"
+  },
+  {
+   "name": "NORMSDIST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094089"
+  },
+  {
+   "name": "NORMSINV",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094091"
+  },
+  {
+   "name": "PEARSON",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094092"
+  },
+  {
+   "name": "PERCENTILE",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094093"
+  },
+  {
+   "name": "PERCENTILE.EXC",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/9368167"
+  },
+  {
+   "name": "PERCENTILE.INC",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094093"
+  },
+  {
+   "name": "PERCENTRANK",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094095"
+  },
+  {
+   "name": "PERCENTRANK.EXC",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3267357"
+  },
+  {
+   "name": "PERCENTRANK.INC",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3267360"
+  },
+  {
+   "name": "PERMUTATIONA",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/9368324"
+  },
+  {
+   "name": "PERMUT",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094036"
+  },
+  {
+   "name": "PHI",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/9116365"
+  },
+  {
+   "name": "POISSON",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094097"
+  },
+  {
+   "name": "POISSON.DIST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094097"
+  },
+  {
+   "name": "PROB",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094039"
+  },
+  {
+   "name": "QUARTILE",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094041"
+  },
+  {
+   "name": "QUARTILE.EXC",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/9368240"
+  },
+  {
+   "name": "QUARTILE.INC",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094041"
+  },
+  {
+   "name": "RANK",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094098"
+  },
+  {
+   "name": "RANK.AVG",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3267309"
+  },
+  {
+   "name": "RANK.EQ",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3267310"
+  },
+  {
+   "name": "RSQ",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094099"
+  },
+  {
+   "name": "SKEW",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094101"
+  },
+  {
+   "name": "SKEW.P",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/9368569"
+  },
+  {
+   "name": "SLOPE",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094048"
+  },
+  {
+   "name": "SMALL",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094050"
+  },
+  {
+   "name": "STANDARDIZE",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094102"
+  },
+  {
+   "name": "STDEV",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094054"
+  },
+  {
+   "name": "STDEV.P",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094105"
+  },
+  {
+   "name": "STDEV.S",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094054"
+  },
+  {
+   "name": "STDEVA",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094055"
+  },
+  {
+   "name": "STDEVP",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094105"
+  },
+  {
+   "name": "STDEVPA",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094058"
+  },
+  {
+   "name": "STEYX",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094108"
+  },
+  {
+   "name": "T.DIST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/9369014"
+  },
+  {
+   "name": "T.DIST.2T",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/9368252"
+  },
+  {
+   "name": "T.DIST.RT",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/9369017"
+  },
+  {
+   "name": "T.INV",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/6055809"
+  },
+  {
+   "name": "T.INV.2T",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/6055811"
+  },
+  {
+   "name": "T.TEST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/6055837"
+  },
+  {
+   "name": "TDIST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3295914"
+  },
+  {
+   "name": "TINV",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/6055811"
+  },
+  {
+   "name": "TRIMMEAN",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094061"
+  },
+  {
+   "name": "TTEST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/6055837"
+  },
+  {
+   "name": "VAR",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094063"
+  },
+  {
+   "name": "VAR.P",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094113"
+  },
+  {
+   "name": "VAR.S",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094063"
+  },
+  {
+   "name": "VARA",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094064"
+  },
+  {
+   "name": "VARP",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094113"
+  },
+  {
+   "name": "VARPA",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094065"
+  },
+  {
+   "name": "WEIBULL",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094116"
+  },
+  {
+   "name": "WEIBULL.DIST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094116"
+  },
+  {
+   "name": "Z.TEST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094067"
+  },
+  {
+   "name": "ZTEST",
+   "category": "Statistical",
+   "url": "https://support.google.com/docs/answer/3094067"
+  },
+  {
+   "name": "ARABIC",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3238301"
+  },
+  {
+   "name": "ASC",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/9061514"
+  },
+  {
+   "name": "CHAR",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3094120"
+  },
+  {
+   "name": "CLEAN",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3267340"
+  },
+  {
+   "name": "CODE",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3094122"
+  },
+  {
+   "name": "CONCATENATE",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3094123"
+  },
+  {
+   "name": "DOLLAR",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3094071"
+  },
+  {
+   "name": "EXACT",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3094073"
+  },
+  {
+   "name": "FIND",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3094126"
+  },
+  {
+   "name": "FINDB",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3296009"
+  },
+  {
+   "name": "FIXED",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3094075"
+  },
+  {
+   "name": "JOIN",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3094077"
+  },
+  {
+   "name": "LEFT",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3094079"
+  },
+  {
+   "name": "LEFTB",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/9367470"
+  },
+  {
+   "name": "LEN",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3094081"
+  },
+  {
+   "name": "LENB",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/9367584"
+  },
+  {
+   "name": "LOWER",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3094083"
+  },
+  {
+   "name": "MID",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3094129"
+  },
+  {
+   "name": "MIDB",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/9367691"
+  },
+  {
+   "name": "PROPER",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3094133"
+  },
+  {
+   "name": "REGEXEXTRACT",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3098244"
+  },
+  {
+   "name": "REGEXMATCH",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3098292"
+  },
+  {
+   "name": "REGEXREPLACE",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3098245"
+  },
+  {
+   "name": "REPLACE",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3098247"
+  },
+  {
+   "name": "REPLACEB",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/9367752"
+  },
+  {
+   "name": "REPT",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3094134"
+  },
+  {
+   "name": "RIGHT",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3094087"
+  },
+  {
+   "name": "RIGHTB",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/9367697"
+  },
+  {
+   "name": "ROMAN",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3094153"
+  },
+  {
+   "name": "SEARCH",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3094154"
+  },
+  {
+   "name": "SEARCHB",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3295923"
+  },
+  {
+   "name": "SPLIT",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3094136"
+  },
+  {
+   "name": "SUBSTITUTE",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3094215"
+  },
+  {
+   "name": "T",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3094138"
+  },
+  {
+   "name": "TEXT",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3094139"
+  },
+  {
+   "name": "TEXTJOIN",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/7013992"
+  },
+  {
+   "name": "TRIM",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3094140"
+  },
+  {
+   "name": "UNICHAR",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/9369024"
+  },
+  {
+   "name": "UNICODE",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/9149523"
+  },
+  {
+   "name": "UPPER",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3094219"
+  },
+  {
+   "name": "VALUE",
+   "category": "Text",
+   "url": "https://support.google.com/docs/answer/3094220"
+  },
+  {
+   "name": "DAVERAGE",
+   "category": "Database",
+   "url": "https://support.google.com/docs/answer/3094144"
+  },
+  {
+   "name": "DCOUNT",
+   "category": "Database",
+   "url": "https://support.google.com/docs/answer/3094222"
+  },
+  {
+   "name": "DCOUNTA",
+   "category": "Database",
+   "url": "https://support.google.com/docs/answer/3094147"
+  },
+  {
+   "name": "DGET",
+   "category": "Database",
+   "url": "https://support.google.com/docs/answer/3094148"
+  },
+  {
+   "name": "DMAX",
+   "category": "Database",
+   "url": "https://support.google.com/docs/answer/3094227"
+  },
+  {
+   "name": "DMIN",
+   "category": "Database",
+   "url": "https://support.google.com/docs/answer/3094149"
+  },
+  {
+   "name": "DPRODUCT",
+   "category": "Database",
+   "url": "https://support.google.com/docs/answer/3094230"
+  },
+  {
+   "name": "DSTDEV",
+   "category": "Database",
+   "url": "https://support.google.com/docs/answer/3094151"
+  },
+  {
+   "name": "DSTDEVP",
+   "category": "Database",
+   "url": "https://support.google.com/docs/answer/3094280"
+  },
+  {
+   "name": "DSUM",
+   "category": "Database",
+   "url": "https://support.google.com/docs/answer/3094281"
+  },
+  {
+   "name": "DVAR",
+   "category": "Database",
+   "url": "https://support.google.com/docs/answer/3094236"
+  },
+  {
+   "name": "DVARP",
+   "category": "Database",
+   "url": "https://support.google.com/docs/answer/3094238"
+  },
+  {
+   "name": "CONVERT",
+   "category": "Parser",
+   "url": "https://support.google.com/docs/answer/6055540"
+  },
+  {
+   "name": "TO_DATE",
+   "category": "Parser",
+   "url": "https://support.google.com/docs/answer/3094239"
+  },
+  {
+   "name": "TO_DOLLARS",
+   "category": "Parser",
+   "url": "https://support.google.com/docs/answer/3094241"
+  },
+  {
+   "name": "TO_PERCENT",
+   "category": "Parser",
+   "url": "https://support.google.com/docs/answer/3094284"
+  },
+  {
+   "name": "TO_PURE_NUMBER",
+   "category": "Parser",
+   "url": "https://support.google.com/docs/answer/3094243"
+  },
+  {
+   "name": "TO_TEXT",
+   "category": "Parser",
+   "url": "https://support.google.com/docs/answer/3094285"
+  },
+  {
+   "name": "ARRAY_CONSTRAIN",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/3267036"
+  },
+  {
+   "name": "BYCOL",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/12571032"
+  },
+  {
+   "name": "BYROW",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/12570930"
+  },
+  {
+   "name": "CHOOSECOLS",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/13197914"
+  },
+  {
+   "name": "CHOOSEROWS",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/13196659"
+  },
+  {
+   "name": "FLATTEN",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/10307761"
+  },
+  {
+   "name": "FREQUENCY",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/3094286"
+  },
+  {
+   "name": "GROWTH",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/3094287"
+  },
+  {
+   "name": "HSTACK",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/13190756"
+  },
+  {
+   "name": "LINEST",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/3094249"
+  },
+  {
+   "name": "LOGEST",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/3094251"
+  },
+  {
+   "name": "MAKEARRAY",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/12569202"
+  },
+  {
+   "name": "MAP",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/12568985"
+  },
+  {
+   "name": "MDETERM",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/3094290"
+  },
+  {
+   "name": "MINVERSE",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/3094253"
+  },
+  {
+   "name": "MMULT",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/3094292"
+  },
+  {
+   "name": "REDUCE",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/12568597"
+  },
+  {
+   "name": "SCAN",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/12569094"
+  },
+  {
+   "name": "SUMPRODUCT",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/3094294"
+  },
+  {
+   "name": "SUMX2MY2",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/3094257"
+  },
+  {
+   "name": "SUMX2PY2",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/3094260"
+  },
+  {
+   "name": "SUMXMY2",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/3094298"
+  },
+  {
+   "name": "TOCOL",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/13187258"
+  },
+  {
+   "name": "TOROW",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/13187459"
+  },
+  {
+   "name": "TRANSPOSE",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/3094262"
+  },
+  {
+   "name": "TREND",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/3094263"
+  },
+  {
+   "name": "VSTACK",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/13191461"
+  },
+  {
+   "name": "WRAPCOLS",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/13184284"
+  },
+  {
+   "name": "WRAPROWS",
+   "category": "Array",
+   "url": "https://support.google.com/docs/answer/13184285"
+  },
+  {
+   "name": "ENCODEURL",
+   "category": "Web",
+   "url": "https://support.google.com/docs/answer/9199778"
+  },
+  {
+   "name": "HYPERLINK",
+   "category": "Web",
+   "url": "https://support.google.com/docs/answer/3093313"
+  },
+  {
+   "name": "IMPORTDATA",
+   "category": "Web",
+   "url": "https://support.google.com/docs/answer/3093335"
+  },
+  {
+   "name": "IMPORTFEED",
+   "category": "Web",
+   "url": "https://support.google.com/docs/answer/3093337"
+  },
+  {
+   "name": "IMPORTHTML",
+   "category": "Web",
+   "url": "https://support.google.com/docs/answer/3093339"
+  },
+  {
+   "name": "IMPORTRANGE",
+   "category": "Web",
+   "url": "https://support.google.com/docs/answer/3093340"
+  },
+  {
+   "name": "IMPORTXML",
+   "category": "Web",
+   "url": "https://support.google.com/docs/answer/3093342"
+  },
+  {
+   "name": "ISURL",
+   "category": "Web",
+   "url": "https://support.google.com/docs/answer/3256501"
+  },
+  {
+   "name": "AI",
+   "category": "AI",
+   "url": "https://support.google.com/docs/answer/15877199"
+  }
+ ]
+}
