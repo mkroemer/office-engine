@@ -1638,14 +1638,22 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
   // the controller's undo / redo and formatting: this sheet's grid runs them while it is shown
   const cellFmt = cellFormat(activeCss, meta.baseFont as { fontFamily?: string; fontSize?: string | number })
   // commands sent faster than the worker answers (a quick second toggle) go by what the earlier ones left, not by the
-  // format last read from the cell; it is dropped once the cell's own format changes, or the selection does
+  // format last read from the cell. That is dropped for good once the cell's own format has changed (the worker has
+  // answered), and by undo and redo: an undo can bring back the format it was read from, and it must not count again
   const cellFmtKey = JSON.stringify(cellFmt)
   const selKey = `${sheet}:${rect.r0}:${rect.c0}:${rect.r1}:${rect.c1}:${sel.whole ?? ''}`
   const pendingFmt = useRef<{ sel: string; read: string; fmt: TextFormat } | null>(null)
+  if (pendingFmt.current && (pendingFmt.current.read !== cellFmtKey || pendingFmt.current.sel !== selKey)) pendingFmt.current = null
   useEffect(() => {
     gridCommands.current = {
-      undo: () => editable && undo(),
-      redo: () => editable && redo(),
+      undo: () => {
+        pendingFmt.current = null
+        if (editable) undo()
+      },
+      redo: () => {
+        pendingFmt.current = null
+        if (editable) redo()
+      },
       format: (c) => {
         const p = pendingFmt.current
         const now = p && p.sel === selKey && p.read === cellFmtKey ? p.fmt : cellFmt
