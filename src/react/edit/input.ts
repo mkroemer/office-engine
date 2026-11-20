@@ -566,11 +566,19 @@ export class RichInput {
       this.lastSel = sel
       return true
     }
-    if (this.dbg && this.override) console.error('DBG restore clears', JSON.stringify(sel), new Error().stack?.split('\n').slice(2, 6).join(' | '))
+    // putting back the selection a select-all holds (a re-render after an edit reported late) keeps the select-all
+    const ov = this.override
+    const held = ov && (sameSel(sel, ov.dom) || sameSel(sel, ov.model)) ? ov : null
+    if (held) sel = held.dom
+    if (this.dbg && this.override) console.error('DBG restore', held ? 'keeps' : 'clears', JSON.stringify(sel), new Error().stack?.split('\n').slice(2, 6).join(' | '))
     this.override = null
     const a = domFromPos(root, sel.a)
     const f = domFromPos(root, sel.f)
     if (!a || !f) {
+      if (held) {
+        this.override = held
+        return true
+      }
       // not in the DOM (its page is not shown): the DOM caret is somewhere else, and key presses go by this one
       this.last = sel
       this.expected = sel
@@ -585,7 +593,8 @@ export class RichInput {
     }
     this.lastSel = sel
     this.expected = null
-    this.formatTarget = sel
+    this.formatTarget = held ? held.model : sel
+    this.override = held
     return true
   }
 
