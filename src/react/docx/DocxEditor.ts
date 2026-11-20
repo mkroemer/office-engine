@@ -493,8 +493,9 @@ export class DocxEditor implements RichHost<Paragraph> {
 
   private commit(pa: string, before: Paragraph[], next: Paragraph[], want?: boolean) {
     const c = this.container(pa)!
+    const structural = want || next.some((p) => p.pd !== before.find((b) => b.pid === p.pid)?.pd)
     if (c.cell && (this.st.blocks[c.cell[0]] as Table).tid !== undefined) {
-      this.commitTable(c.cell[0])
+      this.commitTable(c.cell[0], structural ? [...before, ...next].map((p) => p.pid!) : [])
       return
     }
     const list = c.list
@@ -519,7 +520,6 @@ export class DocxEditor implements RichHost<Paragraph> {
       const lost = [...had].filter((id) => !kept.has(id))
       if (lost.length) this.remark(new Set(lost), new Set([...pids, ...remove, ...before.map((b) => b.pid!)]))
     }
-    const structural = want || next.some((p) => p.pd !== before.find((b) => b.pid === p.pid)?.pd)
     this.sendParas(anchor, specs, remove, structural)
   }
 
@@ -540,12 +540,12 @@ export class DocxEditor implements RichHost<Paragraph> {
     for (const pid of pids) this.writtenIn.set(pid, seq)
     for (const pid of convert) this.stale.add(pid)
     this.inflight++
-    ;(this.client.call as (m: string, op: EditOp | TableOp) => Promise<EditResult | undefined>)(method, op)
+    ;(this.client.call as (m: string, op: EditOp | TableOp) => Promise<EditResult>)(method, op)
       .finally(() => this.inflight--)
       .then((res) => {
         // Conversion can change the look after replace's optimistic notification. Use the selection now,
         // after completing the edit, so the toolbar also sees the current history and busy state.
-        if (res && this.applyResult(res, seq)) this.emitState(this.input.sel())
+        if (this.applyResult(res, seq)) this.emitState(this.input.sel())
       })
       // (a listener that throws included: reported here, not left as an unhandled rejection)
       .catch((e) => console.error('[office-engine] edit failed', e))
@@ -1055,13 +1055,14 @@ export class DocxEditor implements RichHost<Paragraph> {
     return undefined
   }
 
-  /** writes the table at `bi` whole */
-  private commitTable(bi: number) {
+  /** writes the table at `bi` whole; `want`: paragraphs of it whose style or list changed (as sendParas) */
+  private commitTable(bi: number, want: number[] = []) {
     const t = this.st.blocks[bi] as Table
     if (t?.t !== 'tbl' || t.tid === undefined) return
     const spec = tableSpec(t)
     const pids = spec.rows.flatMap((r) => r.cells.flatMap((c) => c.paras.map((p) => p.pid)))
-    this.send('docx.table', { tid: t.tid, item: t.item, anchor: t.item === undefined ? this.prevParaPid(bi) : undefined, spec }, pids, [])
+    const convert = pids.filter((pid) => want.includes(pid) || this.stale.has(pid))
+    this.send('docx.table', { tid: t.tid, item: t.item, anchor: t.item === undefined ? this.prevParaPid(bi) : undefined, spec, want: convert }, pids, convert)
   }
 
   /** Replaces top-level blocks (table insert/delete/restructure) with history + write-back. */

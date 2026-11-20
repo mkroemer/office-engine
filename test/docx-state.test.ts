@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
-import type { Block, EditOp, EditResult, Paragraph } from '../src/core/docx/types'
+import type { Block, EditOp, EditResult, Paragraph, Table } from '../src/core/docx/types'
 import { DocumentClient } from '../src/core/worker/client'
 import { DocxEditor, type DocState, type FormatState } from '../src/react/docx/DocxEditor'
 import { runsText, type RRun, type Sel } from '../src/react/edit/rich'
@@ -300,6 +300,119 @@ describe('DOCX conversion answers during an IME composition (#28)', () => {
     expect(states.at(-1)).toEqual({ state: ed.state(ed.input.sel()), busy: true })
     await deliver(pending, 1)
     await settle(ed)
+    expect(lists(st.blocks)).toEqual(lists((await editor(await client.call('save'))).st.blocks))
+  })
+})
+
+describe('DOCX lists in tables the editor regenerates (#27)', () => {
+  test('a list in a table inserted this session is shown, published, counted and removed (#27)', async () => {
+    const { client, ed, sel, st, states } = await editor()
+    const saved = async () => (await editor(await client.call('save'))).st.blocks
+    ed.input.lastSel = at(sel.a.pa)
+    ed.insertTable(2, 1)
+    const bi = Number(sel.a.pa) + 1
+    expect(st.blocks[bi].t).toBe('tbl')
+    const a = `${bi}.0.0.0`
+    const b = `${bi}.1.0.0`
+    for (const [pa, text] of [[a, 'One'], [b, 'Two']]) {
+      ed.input.lastSel = at(pa)
+      ed.insertText(text)
+    }
+    await settle(ed)
+
+    ed.input.lastSel = at(a, 0, 3)
+    ed.toggleList('bullet')
+    await settle(ed)
+    expect(ed.para(a)?.lst).toBe('bullet')
+    expect(ed.para(a)?.marker?.text).toBe('•')
+    expect(states.at(-1)).toMatchObject({ state: { lst: 'bullet', inTable: true }, busy: false })
+    let file = await saved()
+    expect((file[bi] as Table).rows[0].cells[0].blocks[0]).toMatchObject({ lst: 'bullet', marker: { text: '•' } })
+    expect(lists(st.blocks)).toEqual(lists(file))
+
+    // the second click takes it away again
+    ed.toggleList('bullet')
+    await settle(ed)
+    expect(ed.para(a)?.lst).toBeUndefined()
+    expect(ed.para(a)?.marker).toBeUndefined()
+    expect(states.at(-1)).toMatchObject({ state: { lst: undefined, inTable: true }, busy: false })
+    file = await saved()
+    expect((file[bi] as Table).rows[0].cells[0].blocks[0]).not.toHaveProperty('lst')
+    expect(lists(st.blocks)).toEqual(lists(file))
+
+    // numbered items in its cells count in document order, with the numbered paragraphs after the table
+    for (const pa of [a, b, String(bi + 1)]) {
+      ed.input.lastSel = at(pa, 0, 1)
+      ed.toggleList('number')
+    }
+    await settle(ed)
+    expect(ed.para(a)?.lst).toBe('number')
+    const hire = () => ed.para(paraAt(st, 'Hire the platform team'))?.marker?.text
+    // (the sample's numbered list goes on from them: one list for the numbered paragraphs the editor makes)
+    expect([a, b, String(bi + 1)].map((pa) => ed.para(pa)?.marker?.text)).toEqual(['1.', '2.', '3.'])
+    expect(hire()).toBe('4.')
+    file = await saved()
+    expect(lists(st.blocks)).toEqual(lists(file))
+
+    // and with the table taken out, what came after it counts without its items
+    ed.input.lastSel = at(a)
+    ed.tableOp('delTable')
+    await settle(ed)
+    expect(st.blocks[bi].t).toBe('p')
+    expect(ed.para(String(bi))?.marker?.text).toBe('1.')
+    expect(hire()).toBe('2.')
+    file = await saved()
+    expect(lists(st.blocks)).toEqual(lists(file))
+  })
+
+  test('a list in a table of the file restructured this session is shown and removed (#27)', async () => {
+    const { client, ed, st, states } = await editor()
+    const saved = async () => (await editor(await client.call('save'))).st.blocks
+    const ti = st.blocks.findIndex((b) => b.t === 'tbl')
+    const north = `${ti}.1.0.0`
+    expect(runsText(ed.para(north)!.runs as RRun[])).toBe('North')
+    // a row added: the table is written whole from now on
+    ed.input.lastSel = at(north)
+    ed.tableOp('rowBelow')
+    await settle(ed)
+    expect((st.blocks[ti] as Table).tid).toBeDefined()
+
+    ed.input.lastSel = at(north, 0, 5)
+    ed.toggleList('bullet')
+    await settle(ed)
+    expect(ed.para(north)).toMatchObject({ lst: 'bullet', marker: { text: '•' } })
+    expect(states.at(-1)).toMatchObject({ state: { lst: 'bullet', inTable: true }, busy: false })
+    expect(lists(st.blocks)).toEqual(lists(await saved()))
+
+    ed.toggleList('bullet')
+    await settle(ed)
+    expect(ed.para(north)?.lst).toBeUndefined()
+    expect(ed.para(north)?.marker).toBeUndefined()
+    expect(states.at(-1)).toMatchObject({ state: { lst: undefined, inTable: true }, busy: false })
+    expect(lists(st.blocks)).toEqual(lists(await saved()))
+  })
+
+  test('a list turned on in a table cell, then typing in another cell before the answer: both kept (#26, #27)', async () => {
+    const { client, ed, sel, st } = await editor()
+    ed.input.lastSel = at(sel.a.pa)
+    ed.insertTable(1, 2)
+    const bi = Number(sel.a.pa) + 1
+    const a = `${bi}.0.0.0`
+    const b = `${bi}.0.1.0`
+    ed.input.lastSel = at(a)
+    ed.insertText('One')
+    await settle(ed)
+    const pending = holdEdits(client)
+    ed.input.lastSel = at(a, 0, 3)
+    ed.toggleList('bullet')
+    ed.input.lastSel = at(b)
+    ed.insertText('Two')
+    await deliver(pending, 0)
+    await deliver(pending, 1)
+    await settle(ed)
+    expect(ed.para(a)?.lst).toBe('bullet')
+    expect(ed.para(a)?.marker?.text).toBe('•')
+    expect(runsText(ed.para(b)!.runs as RRun[])).toBe('Two')
     expect(lists(st.blocks)).toEqual(lists((await editor(await client.call('save'))).st.blocks))
   })
 })
