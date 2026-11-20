@@ -31,7 +31,7 @@ export function ZoomBar({ controller: ctl, className, style }: Props) {
 
 /** The outline as a list: a document's headings (indented by level), a workbook's sheets, a presentation's slides. */
 export function OutlineList({ controller: ctl, className, style }: Props) {
-  const { outline } = useViewerState(ctl)
+  const { outline, pointing } = useViewerState(ctl)
   const t = useStrings()
   if (!outline) return null
   const label = outline.kind === 'headings' ? t.docx.outline : outline.kind === 'sheets' ? t.xlsx.sheets : t.pptx.slides
@@ -45,6 +45,8 @@ export function OutlineList({ controller: ctl, className, style }: Props) {
           aria-current={item.current || undefined}
           style={{ paddingLeft: 10 + item.level * 14 }}
           title={item.title}
+          // a workbook's sheets: as with SheetTabs, a formula that can take a reference stays open across the switch
+          onMouseDown={(e) => pointing && e.preventDefault()}
           onClick={() => ctl.goto(item.id)}
         >
           {item.title}

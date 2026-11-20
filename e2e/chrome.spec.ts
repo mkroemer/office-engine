@@ -94,9 +94,9 @@ describe('host-placed controls around a headless viewer', () => {
     expect(v.errors).toEqual([])
   })
 
-  test('xlsx: a formula being typed stays open across a sheet tab, for a cross-sheet reference', async () => {
+  for (const [what, sel] of [['sheet tab', '.de-tabs [role="tab"]'], ['sheet in the outline list', 'nav.de-ctl-outline button']]) test(`xlsx: a formula being typed stays open across a ${what}, for a cross-sheet reference`, async () => {
     const v = await viewer({ src: 'samples/sample.xlsx', headless: true, chrome: true, editable: true })
-    const tabs = chrome(v, '.de-tabs [role="tab"]')
+    const tabs = chrome(v, sel)
     await tabs.first().waitFor()
     await v.clickCell('J12')
     await v.page.keyboard.type('=SUM(')
