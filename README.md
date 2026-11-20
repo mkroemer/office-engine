@@ -73,6 +73,7 @@ Also online at [p10node.github.io/office-engine](https://p10node.github.io/offic
 - **Microsoft Visio (view only)**: `.vsdx` drawings (also `.vsdm`, templates and stencils) open read-only, a slide per page: shapes with their geometry (lines, arcs, ellipses, Béziers, NURBS), masters, groups, connectors with line ends, fills, gradients, themes, text, pictures, background pages and layers; *Download as* PowerPoint saves the converted file
 - **CSV, text, Markdown, HTML, SVG**: `.csv` / `.tsv` open as a workbook (streamed: a million rows in about 2 s; past 12 million cells the rows are read from the file as they are shown, so there is no row limit), `.txt` / `.md` / `.html` as a document, `.svg` / `.svgz` as a picture (`.gz` files are unpacked first), from any `src` (file, Blob, URL); format from the extension, MIME type or content; UTF-8 / UTF-16 / Windows-1252; editable. Markdown, HTML and SVG are saved back in their own format (CSV and text as `.xlsx` / `.docx`)
 - **Diagrams as code**: `.mmd` (Mermaid), `.puml` (PlantUML), `.dot` / `.gv` (Graphviz) open as a document with the drawing; ` ```mermaid ` / ` ```plantuml ` / ` ```dot ` blocks in Markdown and `<pre class="mermaid">` in HTML are drawn too. Drawn by a built-in layout engine in the worker: no server, no network, no dependency
+- **Math in Markdown**: `$…$` and `$$…$$` TeX formulas are drawn as equations (the browser's own MathML: selectable, read by screen readers, printed); the document stays editable around them and saves each formula back exactly as it was written. Currency (`$5 and $10`), `\$` and code are left alone; a formula that cannot be read shows its source. *Download as* Word gives real Word equations
 - **Code side by side**: Markdown, HTML, SVG and diagram files show their source next to the document (**Code** button); edit it and the document is rebuilt as you type; edit the document and the Markdown / HTML is built again from it
 - **File menu**: new, open (also DOC / XLS / PPT / RTF / OpenDocument / Pages / Keynote / Numbers / Visio / CSV / text / Markdown / HTML / SVG / diagrams), import CSV, rename, download as PDF / HTML / text / CSV, document details, print
 - **Comments**: threads with replies, resolve, edit / delete, @mentions; on DOCX text, XLSX cells and PPTX slides, stored in the file the way Word, Excel and PowerPoint store them
@@ -104,7 +105,7 @@ The renderers also ship on their own, to show diagrams and Markdown in any page 
 | [`@p10node/mermaid`](packages/mermaid)   | Mermaid → SVG                                                       | 26 KB       |
 | [`@p10node/plantuml`](packages/plantuml) | PlantUML → SVG (no Java)                                            | 29 KB       |
 | [`@p10node/graphviz`](packages/graphviz) | Graphviz DOT → SVG (no WebAssembly)                                 | 16 KB       |
-| [`@p10node/markdown`](packages/markdown) | Markdown → safe HTML, diagram code blocks drawn                     | 39 KB       |
+| [`@p10node/markdown`](packages/markdown) | Markdown → safe HTML, diagram code blocks drawn, TeX math as MathML | 53 KB       |
 
 ```ts
 import { render } from '@p10node/mermaid'

@@ -424,6 +424,16 @@
   padding: 3.6pt 7.2pt;
   overflow: hidden;
 }
+/* TeX math ($…$, $$…$$ in Markdown): MathML drawn by the browser */
+.de-p > span.de-math { white-space: normal; text-indent: 0; }
+.de-math[data-display] { display: block; }
+.de-math merror { border: 0; background: none; color: var(--de-status-error, #d93025); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.85em; }
+/* table columns (aligned, cases, array) where the browser reads only CSS for them (Chromium) */
+.de-math mtd[columnalign='left'] { text-align: left; }
+.de-math mtd[columnalign='right'] { text-align: right; }
+.de-math mtable[columnspacing='0em 2em'] > mtr > mtd { padding-left: 0; padding-right: 0; }
+.de-math mtable[columnspacing='0em 2em'] > mtr > mtd[columnalign='right']:not(:first-child) { padding-left: 2em; }
+.de-math mtable[columnspacing='1em'] > mtr > mtd + mtd { padding-left: 1em; }
 
 /* ---------------------------------------------------------------- xlsx */
 .de-xlsx {

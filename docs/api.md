@@ -252,7 +252,7 @@ const { svg, width, height } = render('sequenceDiagram\n  Ann->>Ben: hi') // lan
 renderPage() // <pre class="mermaid">, <code class="language-dot">… of the page become drawings
 
 import { render as markdown } from '@p10node/markdown'
-el.innerHTML = markdown(text) // safe HTML; ```mermaid / ```plantuml / ```dot drawn
+el.innerHTML = markdown(text) // safe HTML; ```mermaid / ```plantuml / ```dot drawn, $…$ / $$…$$ math as MathML
 ```
 
 ## CSP

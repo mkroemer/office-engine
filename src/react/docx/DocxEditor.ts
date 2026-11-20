@@ -984,7 +984,8 @@ export class DocxEditor implements RichHost<Paragraph> {
 
   /**
    * Copy / cut of text: the clipboard gets the paragraphs as the model has them (list items, headings, runs), not the
-   * page's DOM (which holds the list markers as text and the colors as computed). Pictures and ranges across a table are
+   * page's DOM (which holds the list markers as text and the colors as computed). TeX formulas go as MathML holding
+   * their TeX (pasted back as formulas) and as their source in the plain text. Pictures and ranges across a table are
    * left to the browser.
    */
   copy(sel: Sel, data: DataTransfer, cut: boolean): boolean {
@@ -995,7 +996,7 @@ export class DocxEditor implements RichHost<Paragraph> {
       const p = this.para(pa)!
       return { ...p, runs: sliceRunsOf(p, i === 0 ? s.o : 0, i === pas.length - 1 ? e.o : plen(p.runs as RRun[])) }
     })
-    if (parts.some((p) => p.runs.some((r) => r.t !== 'text'))) return false
+    if (parts.some((p) => p.runs.some((r) => r.t !== 'text' && !(r.t === 'ref' && r.math)))) return false
     data.setData('text/html', docxBodyHtml(parts))
     data.setData('text/plain', docxToText(parts).replace(/\n$/, ''))
     if (cut) opDelete(this, sel)

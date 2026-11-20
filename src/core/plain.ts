@@ -4,7 +4,7 @@
  * are drawn too). A gzip-compressed plain file (.svgz, .csv.gz) is unpacked first.
  * Used by the engine (a source that is not an Office package) and by File → Open.
  */
-import { detectSeparator, markdownToHtml, parasToDocx, parseCsv, rowsToXlsx, textToParas, type ImportPara } from './convert'
+import { detectSeparator, markdownToHtml, parasToDocx, parseCsv, rowsToXlsx, textToParas, type ImportPara, type ImportRun } from './convert'
 import { DIAGRAM_EXT, DIAGRAM_NAME, FENCE_LANG, renderDiagrams, sniffDiagram, type DiagramLang } from './diagram'
 import { decodeEntities, htmlToParas } from './html'
 import { BlobSource, type ByteSource } from './source'
@@ -264,7 +264,7 @@ const fromHtml = (html: string, dom = true): ImportPara[] =>
   htmlToParas(html, dom).map((p) => ({
     heading: p.heading,
     list: p.list,
-    runs: p.runs.flatMap((r) => (r.t === 'text' ? [{ text: r.text, set: r.d, href: r.href }] : [])),
+    runs: p.runs.flatMap((r): ImportRun[] => (r.t === 'text' ? [{ text: r.text, set: r.d, href: r.href }] : r.t === 'ref' && r.math ? [{ text: '', math: r.math }] : [])),
   }))
 
 /** a diagram's pictures, or (when it cannot be drawn) why, and its source */

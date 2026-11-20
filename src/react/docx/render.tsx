@@ -1,6 +1,7 @@
-import { memo, type CSSProperties, type PointerEvent as RPointerEvent, type ReactNode } from 'react'
+import { createElement, memo, useMemo, type CSSProperties, type PointerEvent as RPointerEvent, type ReactElement, type ReactNode } from 'react'
 import { cssColor } from '../../core/color'
-import type { Block, Inline, Paragraph, ParaStyle, RunStyle, Table, TrackMark } from '../../core/docx/types'
+import type { Block, Inline, Paragraph, ParaStyle, RunStyle, Table, TexMath, TrackMark } from '../../core/docx/types'
+import { texToMathml, type MNode } from '../../core/math/tex'
 import { safeHref } from '../../core/url'
 import type { DocumentClient } from '../../core/worker/client'
 import { useMediaUrl } from '../common/hooks'
@@ -119,6 +120,25 @@ function Img({ ctx, target, w, h, alt }: { ctx: RenderCtx; target: string; w: nu
   return <img src={url} alt={alt ?? ''} style={{ ...size, verticalAlign: 'bottom', display: 'inline-block' }} draggable={false} />
 }
 
+/** a MathML tree as elements (React puts them in the MathML namespace under `math`) */
+function mathEl(n: MNode, key?: number): ReactElement {
+  return createElement(n.t, { key, ...n.a }, n.x ?? n.k?.map(mathEl))
+}
+
+/**
+ * A TeX formula, drawn by the browser from its MathML (selectable, read by screen readers, printed); the TeX rides
+ * along as an annotation. A formula that cannot be drawn shows its source, its reason as the tooltip.
+ */
+function MathView({ math, sz, attrs }: { math: TexMath; sz?: number; attrs: { title?: string } }) {
+  const display = math.delim === '$$'
+  const { node, error } = useMemo(() => texToMathml(math.tex, display), [math.tex, display])
+  return (
+    <span {...attrs} className="de-math" data-display={display ? '' : undefined} data-error={error ? '' : undefined} title={error ?? attrs.title} style={sz ? { fontSize: `${sz}pt` } : undefined}>
+      {mathEl(node)}
+    </span>
+  )
+}
+
 function InlineView({ x, ctx, o }: { x: Inline; ctx: RenderCtx; o: number }): ReactNode {
   // an object inside a tracked change: outlined in the author's colour (dimmed when deleted)
   const objTc = x.t !== 'text' ? x.tc : undefined
@@ -160,6 +180,7 @@ function InlineView({ x, ctx, o }: { x: Inline; ctx: RenderCtx; o: number }): Re
       )
     }
     case 'ref':
+      if (x.math) return <MathView attrs={obj} math={x.math} sz={x.s.sz} />
       return (
         <span {...obj} style={runCss(x.s)}>
           {x.text}

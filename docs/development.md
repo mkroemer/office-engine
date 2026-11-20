@@ -34,6 +34,7 @@ src/core     parsers, DOM-free (runs in worker / Bun)
   legacy     .doc / .xls / .ppt (compound file reader + converters), .rtf, OpenDocument → DOCX / XLSX / PPTX
   iwork      Pages / Keynote / Numbers → DOCX / PPTX / XLSX
   visio      Visio drawings (.vsdx) → PPTX
+  math       TeX math: `$…$` / `$$…$$` in Markdown, TeX → MathML (views, web pages) and → OMML (Word file)
 src/react    view components
 src/embed.ts mount() + <office-viewer>
 src/collab   real-time collaboration (hub, session, per-format adapters)

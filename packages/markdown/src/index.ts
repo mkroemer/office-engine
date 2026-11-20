@@ -1,6 +1,7 @@
 /**
  * @p10node/markdown: Markdown → safe HTML (CommonMark blocks, GitHub tables, task lists, strikethrough, bare links),
- * with ```mermaid / ```plantuml / ```dot code blocks drawn as SVG. No DOM needed, no dependency.
+ * with ```mermaid / ```plantuml / ```dot code blocks drawn as SVG and `$…$` / `$$…$$` TeX math as MathML. No DOM
+ * needed, no dependency.
  */
 import { markdownToHtml } from './markdown'
 
@@ -9,6 +10,8 @@ export interface MarkdownOptions {
   diagrams?: boolean
   /** `id` attributes on headings (from their text) so `#links` reach them. Default true. */
   headingIds?: boolean
+  /** `$…$` and `$$…$$` TeX math as MathML (the browser draws it; the TeX is kept in an annotation). Default true. */
+  math?: boolean
 }
 
 /**

@@ -5,7 +5,9 @@
 import { officeHex } from './color'
 import { dict } from './dict'
 import { HIGHLIGHT } from './docx/styles'
-import type { RunSet } from './docx/types'
+import type { RunSet, TexMath } from './docx/types'
+import { M_NS, MC_NS, mathOmml, OE_NS } from './math/omml'
+import { displayEnd, findMath } from './math/scan'
 import { escAttr, escText } from './raw'
 import { safeHref } from './url'
 import { writeZip } from './zipwrite'
@@ -186,6 +188,8 @@ export interface ImportRun {
   text: string
   set?: RunSet
   href?: string
+  /** a TeX formula (written as an equation; `text` is not used) */
+  math?: TexMath
 }
 
 /** a picture of its own paragraph: an SVG drawing (diagrams) */
@@ -318,14 +322,37 @@ function mdInline(s: string): string {
   return s.replace(/\u0000(\d+)\u0000/g, (_, i: string) => `<code>${code[Number(i)]}</code>`).replace(/\u0001(\d+)\u0001/g, (_, i: string) => lit[Number(i)])
 }
 
-/** Small CommonMark subset → HTML: headings, paragraphs, lists, quotes, code blocks, rules, tables. */
+/**
+ * Inline Markdown of source text (the lines of a paragraph are joined), its `$…$` / `$$…$$` formulas (see findMath) as
+ * `<math>` elements holding the TeX as written; `math` false: none (an indented code block).
+ */
+function mathInline(src: string, math = true): string {
+  const spans = math ? findMath(src) : []
+  const held: string[] = []
+  let text = src
+  if (spans.length) {
+    text = ''
+    let at = 0
+    for (const m of spans) {
+      const html = `<math${m.delim === '$$' ? ' display="block"' : ''}><annotation encoding="application/x-tex">${escHtml(m.tex)}</annotation></math>`
+      text += src.slice(at, m.start).replace(/\u0002/g, '�') + `\u0002${held.push(html) - 1}\u0002`
+      at = m.end
+    }
+    text += src.slice(at).replace(/\u0002/g, '�')
+  }
+  const html = mdInline(escHtml(text.split('\n').map((l) => l.trim()).join(' ')))
+  return held.length ? html.replace(/\u0002(\d+)\u0002/g, (_, k: string) => held[Number(k)]) : html
+}
+
+/** Small CommonMark subset → HTML: headings, paragraphs, lists, quotes, code blocks, rules, tables, TeX math. */
 export function markdownToHtml(md: string): string {
   const lines = md.replace(/^﻿/, '').split(/\r\n|\r|\n/)
   const out: string[] = []
   let para: string[] = []
   let list: 'ul' | 'ol' | null = null
   const flush = () => {
-    if (para.length) out.push(`<p>${mdInline(escHtml(para.join(' ')))}</p>`)
+    // the lines as written (a $$ formula keeps its line breaks); a paragraph indented as code has no math
+    if (para.length) out.push(`<p>${mathInline(para.join('\n'), !/^(?: {4}|\t)/.test(para[0]))}</p>`)
     para = []
   }
   const closeList = () => {
@@ -348,6 +375,13 @@ export function markdownToHtml(md: string): string {
       closeList()
       continue
     }
+    // a $$ formula over several lines: they are the paragraph's, whatever they start with
+    const dm = list ? -1 : displayEnd(lines, i)
+    if (dm > i) {
+      para.push(...lines.slice(i, dm + 1))
+      i = dm
+      continue
+    }
     const h = /^\s{0,3}(#{1,6})\s+(.*)$/.exec(line)
     if (h) {
       // closing #s and the spaces around them off, by hand: a lazy `(.*?)\s*#*\s*$` is quadratic on a long run of spaces
@@ -356,7 +390,7 @@ export function markdownToHtml(md: string): string {
       h[2] = h[2].slice(0, e).trimEnd()
       flush()
       closeList()
-      out.push(`<h${h[1].length}>${mdInline(escHtml(h[2]))}</h${h[1].length}>`)
+      out.push(`<h${h[1].length}>${mathInline(h[2])}</h${h[1].length}>`)
       continue
     }
     if (/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(line)) {
@@ -368,7 +402,7 @@ export function markdownToHtml(md: string): string {
     if (line.includes('|') && /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/.test(lines[i + 1] ?? '')) {
       flush()
       closeList()
-      const cells = (l: string) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => mdInline(escHtml(c.trim())))
+      const cells = (l: string) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => mathInline(c.trim()))
       const rows = [`<tr>${cells(line).map((c) => `<th><b>${c}</b></th>`).join('')}</tr>`]
       i++
       while (i + 1 < lines.length && lines[i + 1].includes('|') && lines[i + 1].trim()) rows.push(`<tr>${cells(lines[++i]).map((c) => `<td>${c}</td>`).join('')}</tr>`)
@@ -384,23 +418,23 @@ export function markdownToHtml(md: string): string {
         out.push(`<${kind}>`)
         list = kind
       }
-      out.push(`<li>${mdInline(escHtml(li[3].replace(/^\[[ xX]\]\s+/, (m) => (m[1] === ' ' ? '☐ ' : '☑ '))))}</li>`)
+      out.push(`<li>${mathInline(li[3].replace(/^\[[ xX]\]\s+/, (m) => (m[1] === ' ' ? '☐ ' : '☑ ')))}</li>`)
       continue
     }
     const q = /^\s*>\s?(.*)$/.exec(line)
     if (q) {
       flush()
       closeList()
-      out.push(`<blockquote><i>${mdInline(escHtml(q[1]))}</i></blockquote>`)
+      out.push(`<blockquote><i>${mathInline(q[1])}</i></blockquote>`)
       continue
     }
     if (list && /^\s{2,}\S/.test(line)) {
       // lazy continuation of the previous item
-      out[out.length - 1] = out[out.length - 1].replace(/<\/li>$/, ` ${mdInline(escHtml(line.trim()))}</li>`)
+      out[out.length - 1] = out[out.length - 1].replace(/<\/li>$/, () => ` ${mathInline(line.trim())}</li>`)
       continue
     }
     closeList()
-    para.push(line.trim())
+    para.push(line)
   }
   flush()
   closeList()
@@ -429,6 +463,7 @@ function rPrXml(set: RunSet | undefined): string {
 }
 
 function runXml(r: ImportRun): string {
+  if (r.math) return mathOmml(r.math)
   let body = ''
   for (const piece of r.text.split(/(\t|\n)/)) {
     if (!piece) continue
@@ -538,6 +573,8 @@ export function parasToDocx(paras: ImportPara[], opts: DocxOptions = {}): Promis
     body += `<w:p>${pPr ? `<w:pPr>${pPr}</w:pPr>` : ''}${runs}</w:p>`
   }
   if (!body) body = '<w:p/>'
+  // equations (TeX math): Office Math, with the TeX in attributes Word is told it may ignore
+  const math = paras.some((p) => p.runs.some((r) => r.math)) ? ` xmlns:m="${M_NS}" xmlns:mc="${MC_NS}" xmlns:oe="${OE_NS}" mc:Ignorable="oe"` : ''
   const sect = `<w:sectPr>${opts.landscape ? '<w:pgSz w:w="15840" w:h="12240" w:orient="landscape"/>' : '<w:pgSz w:w="12240" w:h="15840"/>'}<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>`
   const styles =
     `${XML}<w:styles xmlns:w="${W}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Calibri" w:cs="Calibri"/><w:sz w:val="22"/><w:szCs w:val="22"/><w:lang w:val="en-US"/></w:rPr></w:rPrDefault>` +
@@ -563,7 +600,7 @@ export function parasToDocx(paras: ImportPara[], opts: DocxOptions = {}): Promis
     ],
     ['_rels/.rels', rootRels('word/document.xml')],
     ['word/_rels/document.xml.rels', rels],
-    ['word/document.xml', `${XML}<w:document xmlns:w="${W}" xmlns:r="${REL}"><w:body>${body}${sect}</w:body></w:document>`],
+    ['word/document.xml', `${XML}<w:document xmlns:w="${W}" xmlns:r="${REL}"${math}><w:body>${body}${sect}</w:body></w:document>`],
     ['word/styles.xml', styles],
     ['word/numbering.xml', numberingXml(nums)],
     ...images.map((svg, k) => [`word/media/diagram${k + 1}.svg`, svg] as [string, string]),

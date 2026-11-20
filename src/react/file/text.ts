@@ -1,12 +1,15 @@
 import { cssColor } from '../../core/color'
 import type { Block, Inline, Paragraph, RunStyle, Table } from '../../core/docx/types'
+import { findMath, mathSource } from '../../core/math/scan'
+import { texMathml } from '../../core/math/tex'
 import type { SlideModel, TextBody } from '../../core/pptx/types'
 import { safeHref } from '../../core/url'
 
 // ---------------------------------------------------------------- DOCX
 
-/** text as it reads with its tracked changes accepted: deleted text is left out */
-const plain = (runs: Inline[]) => runs.map((r) => (r.t === 'text' || r.t === 'ref' ? (r.s.vanish || r.tc?.k === 'del' ? '' : r.text) : '')).join('')
+/** text as it reads with its tracked changes accepted: deleted text is left out; a TeX formula is its source */
+const plain = (runs: Inline[]) =>
+  runs.map((r) => (r.t === 'text' || r.t === 'ref' ? (r.s.vanish || r.tc?.k === 'del' ? '' : r.t === 'ref' && r.math ? mathSource(r.math) : r.text) : '')).join('')
 
 const cellText = (blocks: Block[]) =>
   blocks
@@ -26,7 +29,31 @@ export function docxToText(blocks: Block[]): string {
   return out.join('\n') + '\n'
 }
 
-const mdEsc = (s: string) => s.replace(/([\\`*_[\]<>~])/g, '\\$1')
+/** (a dollar sign is marked \u0003: escaped or not once the whole paragraph is known, see dollars) */
+const mdEsc = (s: string) => s.replace(/([\\`*_[\]<>~])/g, '\\$1').replace(/\$/g, '\u0003')
+
+/**
+ * A paragraph's Markdown with its formulas put in (marked \u0004n\u0004) and its dollar signs (\u0003) escaped only when,
+ * left as they are, the text would not read back as the same formulas (`costs $5` stays as it is).
+ */
+function dollars(out: string, maths: string[]): string {
+  const put = (s: string) => (maths.length ? s.replace(/\u0004(\d+)\u0004/g, (_, k: string) => maths[Number(k)]) : s)
+  if (!out.includes('\u0003')) return put(out)
+  const want: [number, number][] = []
+  let read = ''
+  for (const part of out.split(/(\u0004\d+\u0004)/)) {
+    const k = /^\u0004(\d+)\u0004$/.exec(part)
+    if (!k) read += part.replace(/\u0003/g, '$')
+    else {
+      const src = maths[Number(k[1])]
+      want.push([read.length, read.length + src.length])
+      read += src
+    }
+  }
+  const found = findMath(read)
+  const same = found.length === want.length && found.every((f, x) => f.start === want[x][0] && f.end === want[x][1])
+  return put(out.replace(/\u0003/g, same ? '$' : '\\$'))
+}
 
 /** a paragraph that would read as a heading, quote, list item or rule given its first characters: the first one escaped */
 const mdLead = (s: string) => s.replace(/^(\s*)(#{1,6}(?=\s)|>|[-+*](?=\s)|\d+(?=[.)]\s)|(?:[-*_]\s*){3,}$)/, (_, sp: string, m: string) => (/^\d/.test(m) ? `${sp}${m}\\` : `${sp}\\${m}`))
@@ -41,11 +68,18 @@ export type Pictures = Map<string, string>
 function mdInline(runs: Inline[], heading = false, images?: Pictures): string {
   let out = ''
   let i = 0
+  const maths: string[] = []
   while (i < runs.length) {
     const r = runs[i]
     if (r.t === 'img' && r.tc?.k !== 'del' && images?.has(r.target)) {
       i++
       out += `![${mdEsc(r.alt ?? '')}](${images.get(r.target)})`
+      continue
+    }
+    // a TeX formula: as it was written
+    if (r.t === 'ref' && r.math && r.tc?.k !== 'del') {
+      i++
+      out += `\u0004${maths.push(mathSource(r.math)) - 1}\u0004`
       continue
     }
     if ((r.t !== 'text' && r.t !== 'ref') || r.tc?.k === 'del') {
@@ -79,7 +113,7 @@ function mdInline(runs: Inline[], heading = false, images?: Pictures): string {
     const body = r.s.font && MONO.test(r.s.font) ? `\`${core.replace(/`/g, '``')}\`` : mdEsc(core)
     out += `${lead}${strike}${mark}${body}${[...mark].reverse().join('')}${strike}${trail}`
   }
-  return out.replace(/\*\*\*\*/g, '')
+  return dollars(out.replace(/\*\*\*\*/g, ''), maths)
 }
 
 function mdTable(t: Table): string {
@@ -170,6 +204,11 @@ function htmlInline(runs: Inline[], heading = false, images?: Pictures): string 
       out += safeHref(r.href) ? `<a href="${hEsc(r.href!)}">${img}</a>` : img
       continue
     }
+    // a TeX formula: MathML, the TeX in an annotation
+    if (r.t === 'ref' && r.math) {
+      out += texMathml(r.math.tex, r.math.delim === '$$')
+      continue
+    }
     if (r.t !== 'text' && r.t !== 'ref') continue
     if (r.s.vanish) continue
     if (r.t === 'text' && safeHref(r.href)) {
@@ -198,7 +237,10 @@ const cellHtml = (blocks: Block[], images?: Pictures) =>
 const HTML_CSS =
   'body{max-width:48em;margin:2em auto;padding:0 1em;font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#222}' +
   'table{border-collapse:collapse}td{border:1px solid #ccc;padding:4px 8px;vertical-align:top}img{max-width:100%;height:auto}' +
-  'code{font-family:ui-monospace,Menlo,Consolas,monospace;background:#f3f3f3;padding:0 .2em}'
+  'code{font-family:ui-monospace,Menlo,Consolas,monospace;background:#f3f3f3;padding:0 .2em}' +
+  // MathML table columns in browsers that read only CSS for them (Chromium)
+  'mtd[columnalign=left]{text-align:left}mtd[columnalign=right]{text-align:right}mtable[columnspacing="0em 2em"]>mtr>mtd{padding-left:0;padding-right:0}' +
+  'mtable[columnspacing="0em 2em"]>mtr>mtd[columnalign=right]:not(:first-child){padding-left:2em}merror{border:0;background:none;color:#a33;font-family:ui-monospace,Menlo,Consolas,monospace}'
 
 /**
  * A web page of the document: headings (outline levels), paragraphs, nested lists, bold / italic / underline / strike,
