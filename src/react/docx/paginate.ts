@@ -44,6 +44,12 @@ export interface PageSlice {
 
 const EPS = 0.01
 
+/** the header rows a table repeats at the top of the pages it goes on on: none when they leave no room for a row */
+export function headOf(l: Lines | undefined, avail: number): number {
+  const n = l ? l.ys.length - 1 : 0
+  return l?.head && l.head < n && l.ys[l.head] - l.ys[0] < avail ? l.head : 0
+}
+
 /** the lines / rows a block is cut into: its measured lines, or one unit as tall as the block */
 function unitsOf(h: number, l: Lines | undefined): { ys: number[]; n: number } {
   if (l && l.ys.length >= 2) return { ys: l.ys, n: l.ys.length - 1 }
@@ -107,8 +113,7 @@ export function paginate(blocks: Block[], heights: WeakMap<Block, number>, count
     const l = lines?.get(b)
     const { ys, n } = unitsOf(h, l)
     const table = b.t === 'tbl'
-    // header rows repeat when they leave room for a row below them
-    const head = table && l?.head && l.head < n && ys[l.head] - ys[0] < avail ? l.head : 0
+    const head = table ? headOf(l, avail) : 0
     const headH = head ? ys[head] - ys[0] : 0
     const keep = table && l?.keep?.length ? new Set(l.keep) : undefined
     // the last line of a paragraph ends before its space after; a table's bottom border is part of it

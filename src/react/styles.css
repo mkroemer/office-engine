@@ -1228,7 +1228,6 @@
 .de-ps-radio input { width: auto; padding: 0; margin: 0; }
 .de-ps-preset { font-weight: 400; font-size: 12px; }
 .de-ps select, .de-hfd select { padding: 6px 8px; border: 1px solid var(--de-input-border); border-radius: var(--de-radius); background: var(--de-input-bg); color: var(--de-text); font: inherit; }
-.de-page-cols > * { break-inside: avoid; }
 .de-ps-bad { color: var(--de-danger); }
 .de-dialog-btns .de-btn:disabled { opacity: 0.5; cursor: default; }
 .de-dialog-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }

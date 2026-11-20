@@ -1,10 +1,11 @@
 import { memo, type CSSProperties, type PointerEvent as RPointerEvent, type ReactNode } from 'react'
 import { cssColor } from '../../core/color'
-import type { Block, Inline, Paragraph, ParaStyle, RunStyle, Table, TrackMark } from '../../core/docx/types'
+import type { Block, Inline, Paragraph, ParaStyle, RunStyle, Table, TableCell, TrackMark } from '../../core/docx/types'
 import { safeHref } from '../../core/url'
 import type { DocumentClient } from '../../core/worker/client'
 import { useMediaUrl } from '../common/hooks'
 import { dict } from '../../core/dict'
+import { gridOf, type GridCell } from './tables'
 
 export interface RenderCtx {
   client: DocumentClient
@@ -239,12 +240,85 @@ function ParaView({ p, ctx, pa, sp }: { p: Paragraph; ctx: RenderCtx; pa?: strin
   )
 }
 
-function TableView({ t, ctx, pa }: { t: Table; ctx: RenderCtx; pa?: string }) {
+const grids = new WeakMap<Table, ReturnType<typeof gridOf>>()
+const gridCached = (t: Table) => {
+  let g = grids.get(t)
+  if (!g) grids.set(t, (g = gridOf(t)))
+  return g
+}
+const gridRows = new WeakMap<Table, GridCell[][]>()
+/** the cells of each row with their grid column */
+const gridRowsOf = (t: Table) => {
+  let r = gridRows.get(t)
+  if (!r) {
+    const rows: GridCell[][] = t.rows.map(() => [])
+    for (const c of gridCached(t).cells) rows[c.ri].push(c)
+    gridRows.set(t, (r = rows))
+  }
+  return r
+}
+
+/**
+ * A table, or the rows [from, to) of one split across pages. A part after the first starts with copies of the header
+ * rows (`head`): display only, not editable, not addressed. A merged cell cut by the page end is cut too: its content
+ * stays on the page it starts on, an empty cell of the same look goes on below.
+ */
+function TableView({ t, ctx, pa, from = 0, to, head = 0 }: { t: Table; ctx: RenderCtx; pa?: string; from?: number; to?: number; head?: number }) {
   const total = t.cols.reduce((a, b) => a + b, 0)
   const style: CSSProperties = { width: total ? `${total}pt` : '100%' }
   if (t.align === 'center') style.margin = '0 auto'
   else if (t.align === 'right') style.marginLeft = 'auto'
   else if (t.indL) style.marginLeft = `${t.indL}pt`
+  const end = Math.min(to ?? t.rows.length, t.rows.length)
+  const cut = from > 0 || end < t.rows.length
+  const cellView = (c: TableCell, ri: number, ci: number, rowSpan: number, copy: boolean, rest = false) => (
+    <td
+      key={rest ? `m${ci}` : ci}
+      colSpan={c.colSpan > 1 ? c.colSpan : undefined}
+      rowSpan={rowSpan > 1 ? rowSpan : undefined}
+      contentEditable={rest && ctx.editable ? false : undefined}
+      style={{
+        borderTop: c.borders.t,
+        borderRight: c.borders.r,
+        borderBottom: c.borders.b,
+        borderLeft: c.borders.l,
+        background: cssColor(c.shd),
+        verticalAlign: c.vAlign,
+        padding: `${c.pad[0]}pt ${c.pad[1]}pt ${c.pad[2]}pt ${c.pad[3]}pt`,
+      }}
+    >
+      {!rest &&
+        c.blocks.map((b, i) => (
+          <BlockView
+            key={b.t === 'p' ? `${i}:${b.ver ?? 0}` : i}
+            block={b}
+            ctx={ctx}
+            pa={!copy && pa !== undefined && b.t === 'p' && b.pid !== undefined && !b.ro ? `${pa}.${ri}.${ci}.${i}` : undefined}
+            sp={contextual(b, c.blocks[i - 1], c.blocks[i + 1])}
+            nested
+          />
+        ))}
+    </td>
+  )
+  /** row `ri`, its merged cells cut at row `limit` */
+  const rowView = (ri: number, limit: number, copy: boolean) => {
+    const row = t.rows[ri]
+    let cells: ReactNode[]
+    if (!cut) cells = row.cells.map((c, ci) => cellView(c, ri, ci, c.rowSpan, false))
+    else {
+      const at: { g: number; node: ReactNode }[] = []
+      for (const gc of gridRowsOf(t)[ri]) at.push({ g: gc.g, node: cellView(gc.cell, ri, gc.ci, Math.min(gc.cell.rowSpan, limit - ri), copy) })
+      // merged cells from the page before go on here, empty
+      if (!copy && ri === from)
+        for (const gc of gridCached(t).cells) if (gc.ri < from && gc.ri + gc.cell.rowSpan > from) at.push({ g: gc.g, node: cellView(gc.cell, ri, gc.ci, Math.min(gc.ri + gc.cell.rowSpan, limit) - ri, false, true) })
+      cells = at.sort((a, b) => a.g - b.g).map((x) => x.node)
+    }
+    return (
+      <tr key={copy ? `h${ri}` : ri} className={copy ? 'de-head-copy' : undefined} contentEditable={copy && ctx.editable ? false : undefined} style={{ height: row.h ? `${row.h}pt` : undefined }}>
+        {cells}
+      </tr>
+    )
+  }
   const resize = ctx.colResize && pa !== undefined && !pa.includes('.') && total > 0 ? ctx.colResize : undefined
   const drag = (i: number) => (e: RPointerEvent<HTMLDivElement>) => {
     const tbl = (e.currentTarget.parentElement as HTMLElement).querySelector('table')
@@ -295,37 +369,8 @@ function TableView({ t, ctx, pa }: { t: Table; ctx: RenderCtx; pa?: string }) {
         </colgroup>
       )}
       <tbody>
-        {t.rows.map((row, ri) => (
-          <tr key={ri} style={{ height: row.h ? `${row.h}pt` : undefined }}>
-            {row.cells.map((c, ci) => (
-              <td
-                key={ci}
-                colSpan={c.colSpan > 1 ? c.colSpan : undefined}
-                rowSpan={c.rowSpan > 1 ? c.rowSpan : undefined}
-                style={{
-                  borderTop: c.borders.t,
-                  borderRight: c.borders.r,
-                  borderBottom: c.borders.b,
-                  borderLeft: c.borders.l,
-                  background: cssColor(c.shd),
-                  verticalAlign: c.vAlign,
-                  padding: `${c.pad[0]}pt ${c.pad[1]}pt ${c.pad[2]}pt ${c.pad[3]}pt`,
-                }}
-              >
-                {c.blocks.map((b, i) => (
-                  <BlockView
-                    key={b.t === 'p' ? `${i}:${b.ver ?? 0}` : i}
-                    block={b}
-                    ctx={ctx}
-                    pa={pa !== undefined && b.t === 'p' && b.pid !== undefined && !b.ro ? `${pa}.${ri}.${ci}.${i}` : undefined}
-                    sp={contextual(b, c.blocks[i - 1], c.blocks[i + 1])}
-                    nested
-                  />
-                ))}
-              </td>
-            ))}
-          </tr>
-        ))}
+        {from > 0 && Array.from({ length: Math.min(head, from) }, (_, ri) => rowView(ri, head, true))}
+        {Array.from({ length: end - from }, (_, k) => rowView(from + k, end, false))}
       </tbody>
     </table>
   )
@@ -346,16 +391,24 @@ export interface BlockViewProps {
   pa?: string
   sp?: Spacing
   nested?: boolean
+  /**
+   * A part of a block split across pages: the characters [from, to) of a paragraph, the rows [from, to) of a table;
+   * to undefined: to its end
+   */
+  from?: number
+  to?: number
+  /** a table part after the first: its header rows shown again above it */
+  head?: number
 }
 
-export const BlockView = memo(function BlockView({ block, ctx, pa, sp = '', nested }: BlockViewProps) {
+export const BlockView = memo(function BlockView({ block, ctx, pa, sp = '', nested, from, to, head }: BlockViewProps) {
   switch (block.t) {
     case 'p':
       return <ParaView p={block} ctx={ctx} pa={pa} sp={sp} />
     case 'tbl':
       return (
         <div style={{ overflow: 'visible' }} contentEditable={ctx.editable && (nested || pa === undefined) ? false : undefined}>
-          <TableView t={block} ctx={ctx} pa={nested ? undefined : pa} />
+          <TableView t={block} ctx={ctx} pa={nested ? undefined : pa} from={from} to={to} head={head} />
         </div>
       )
     default:

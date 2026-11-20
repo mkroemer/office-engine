@@ -13,6 +13,7 @@ import { htmlToParas, type PastedCell, type PastedPara } from '../../core/html'
 import { docxBodyHtml, docxToText } from '../file/text'
 import { cellsIn, deleteCol, deleteRow, distributeCols, gridOf, insertCol, insertRow, mergeCells, newTable, patchCells, rectOf, setBorders, tableFromRows, unmergeCell, type BorderPreset, type CellRect } from './tables'
 import { changeSpans, hasChanges, resolveRuns, trackEdit } from './track'
+import type { Lines } from './paginate'
 import { collapsed, formatRange, linkSpan, markRange, normalize, plen, rlen, runAt, runsText, shiftPa, splitRuns, type Pos, type RRun, type Sel } from '../edit/rich'
 
 /** a place in a paragraph that survives edits elsewhere: paragraph id, page-break part, offset */
@@ -52,6 +53,8 @@ const marksOf = (ps: Paragraph[]) => {
 export interface DocState {
   blocks: Block[]
   heights: WeakMap<Block, number>
+  /** where the lines of a measured paragraph / the rows of a measured table are (where pages can cut them) */
+  lines?: WeakMap<Block, Lines>
   dirty: Set<Block>
   /** leading blocks measured at least once */
   frontier: number
@@ -373,6 +376,17 @@ export class DocxEditor implements RichHost<Paragraph> {
 
   // ---------------------------------------------------------------- mutation core
 
+  /**
+   * `next` replaces `was` on the page: measured again soon, laid out meanwhile as `was` was (its height; its rows when
+   * a table keeps the same rows)
+   */
+  private estimate(was: Block | undefined, next: Block) {
+    this.st.heights.set(next, (was && this.st.heights.get(was)) ?? 0)
+    const l = was && this.st.lines?.get(was)
+    if (l && next.t === 'tbl' && was.t === 'tbl' && next.rows.length === was.rows.length) this.st.lines!.set(next, l)
+    this.st.dirty.add(next)
+  }
+
   private splice(pa: string, count: number, next: Block[]): Block[] {
     const c = this.container(pa)!
     if (!c.cell) {
@@ -384,8 +398,7 @@ export class DocxEditor implements RichHost<Paragraph> {
     const blocks = [...c.list]
     blocks.splice(c.at, count, ...next)
     const nt: Table = { ...t, rows: t.rows.map((r, i) => (i !== ri ? r : { ...r, cells: r.cells.map((cell, j) => (j !== ci ? cell : { ...cell, blocks })) })) }
-    this.st.heights.set(nt, this.st.heights.get(t) ?? 0)
-    this.st.dirty.add(nt)
+    this.estimate(t, nt)
     this.st.blocks[bi] = nt
     return blocks
   }
@@ -1036,10 +1049,7 @@ export class DocxEditor implements RichHost<Paragraph> {
   replaceBlocks(bi: number, count: number, next: Block[], sel: Sel | null, history = true) {
     const before = this.st.blocks.slice(bi, bi + count)
     this.st.blocks.splice(bi, count, ...next)
-    next.forEach((b, i) => {
-      this.st.heights.set(b, this.st.heights.get(before[i] ?? before[0]) ?? 0)
-      this.st.dirty.add(b)
-    })
+    next.forEach((b, i) => this.estimate(before[i] ?? before[0], b))
     if (bi < this.st.frontier) this.st.frontier = Math.max(0, this.st.frontier + next.length - count)
     const key = (b: Block) => (b.t === 'tbl' ? `t${b.tid ?? 'i' + b.item}` : b.t === 'p' ? `p${b.pid}` : '')
     const nextKeys = new Set(next.map(key))

@@ -24,7 +24,8 @@ import { PageSetupDialog } from './PageSetupDialog'
 import { mergeSource } from '../../core/plainmerge'
 import { docxBodyHtml, docxToHtml, docxToMarkdown, docxToText, pictureData } from '../file/text'
 import { BlockView, contextual, type RenderCtx } from './render'
-import { pageHF, paginate, type PageSlice } from './paginate'
+import { columnsOf, headOf, pageAt, pageHF, pagesOf, paginate, pieceOf, type Lines, type PageSlice } from './paginate'
+import { tableLines } from './measure'
 
 const PX = 4 / 3
 const GAP = 16
@@ -76,7 +77,7 @@ export interface DocxViewProps {
 
 export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProps) {
   const viewer = useViewer()
-  const st = useRef<DocState>({ blocks: [], heights: new WeakMap(), dirty: new Set(), frontier: 0 }).current
+  const st = useRef<DocState & { lines: WeakMap<Block, Lines> }>({ blocks: [], heights: new WeakMap(), lines: new WeakMap(), dirty: new Set(), frontier: 0 }).current
   const [version, bump] = useForceUpdate()
   const [meta, setMeta] = useState<DocxMeta | null>(null)
   const [pageDlg, setPageDlg] = useState(false)
@@ -156,6 +157,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   if (lastKey.current !== widthKey) {
     lastKey.current = widthKey
     st.heights = new WeakMap()
+    st.lines = new WeakMap()
     st.dirty.clear()
     st.frontier = 0
   }
@@ -175,11 +177,16 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   useIsoLayoutEffect(() => {
     const el = measureRef.current
     if (!el || !queue.length || !meta) return
-    const hs = Array.from(el.children).map((c) => (c as HTMLElement).getBoundingClientRect().height)
+    const res = queue.map((q, k) => {
+      const c = el.children[k] as HTMLElement | undefined
+      return { h: c?.getBoundingClientRect().height ?? 0, l: c && q.b.t === 'tbl' ? tableLines(c, q.b) : undefined }
+    })
     const dt = performance.now() - renderStart
     const id = setTimeout(() => {
       queue.forEach((q, k) => {
-        st.heights.set(q.b, hs[k] ?? 0)
+        st.heights.set(q.b, res[k].h)
+        if (res[k].l) st.lines.set(q.b, res[k].l!)
+        else st.lines.delete(q.b)
         st.dirty.delete(q.b)
       })
       if (tailEnd > st.frontier) st.frontier = tailEnd
@@ -190,7 +197,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   })
 
   const pages = useMemo(
-    () => paginate(st.blocks, st.heights, Math.min(st.frontier, total), availPx, cols, (meta?.final && meta.sectKind) || 'nextPage'),
+    () => paginate(st.blocks, st.heights, Math.min(st.frontier, total), availPx, cols, (meta?.final && meta.sectKind) || 'nextPage', st.lines),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [version, availPx, total, cols, meta?.final, meta?.sectKind],
   )
@@ -221,7 +228,16 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   const pinned = new Set<number>(domSel)
   const lastSel = isEditing ? editor.input.lastSel : null
   const caretBi = lastSel ? Number(lastSel.f.pa.split('.')[0]) : -1
-  for (const bi of lastSel ? [Number(lastSel.a.pa.split('.')[0]), caretBi] : []) pinned.add(pages.findIndex((p) => bi >= p.start && bi < p.end))
+  /** the page showing a place: of a block split across pages, the one holding that line / row */
+  const pageOfPos = (pa: string, o = 0) => {
+    const [bi, ri] = pa.split('.').map(Number)
+    const [a, b] = pagesOf(pages, bi)
+    if (a === b) return a
+    if (ri === undefined) return pageAt(pages, bi, o, st.lines.get(st.blocks[bi]))
+    for (let pi = b; pi > a; pi--) if (ri >= pieceOf(pages[pi], bi).from) return pi
+    return a
+  }
+  for (const p of lastSel ? [lastSel.a, lastSel.f] : []) pinned.add(pageOfPos(p.pa, p.o))
 
   editor.contentW = contentW
   editor.defaultFont = meta?.font
@@ -339,8 +355,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     }
     if (!editor.input.restore(sel)) {
       // caret paragraph not rendered (scrolled away): bring its page into view, retry next render
-      const bi = Number(sel.f.pa.split('.')[0])
-      const pi = pages.findIndex((p) => bi >= p.start && bi < p.end)
+      const pi = pageOfPos(sel.f.pa, sel.f.o)
       if (pi >= 0 && scrollRef.current) scrollRef.current.scrollTop = Math.max(0, tops[pi] - 16)
       if (pi < 0 || (pi >= first && pi <= last)) editor.pendingSel = null
       return
@@ -379,7 +394,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     const m = matches[idx]
     const sc = scrollRef.current
     if (!m || !sc) return
-    const pi = pages.findIndex((p) => m.bi >= p.start && m.bi < p.end)
+    const pi = pageOfPos(m.pa, m.a)
     if (pi >= 0) sc.scrollTop = Math.max(0, tops[pi] - 16)
     setFind((f) => ({ ...f, idx }))
     requestAnimationFrame(() =>
@@ -447,7 +462,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
           const tall = h > pageH
           return (
             <div key={i} className={tall ? 'de-print-page de-print-tall' : 'de-print-page'} style={{ width: `${page.w}pt`, height: tall ? `${h}px` : `${page.h}pt` }}>
-              <PageView index={i} count={pages.length} slice={p} blocks={st.blocks} meta={meta} page={page} top={0} left={0} height={h} zoom={1} client={client} docStyle={docStyle} editing={false} />
+              <PageView index={i} count={pages.length} slice={p} blocks={st.blocks} meta={meta} page={page} top={0} left={0} height={h} zoom={1} client={client} docStyle={docStyle} editing={false} lines={st.lines} avail={availPx} />
             </div>
           )
         }),
@@ -695,8 +710,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     const place = editor.commentPlaces().get(id)
     const sc = scrollRef.current
     if (!place || !sc) return
-    const bi = Number(place.pa.split('.')[0])
-    const pi = pages.findIndex((p) => bi >= p.start && bi < p.end)
+    const pi = pageOfPos(place.pa, place.o)
     if (pi < 0) return
     const show = () => {
       const el = pagesRef.current?.querySelector(`[data-cm~="${CSS.escape(id)}"]`)
@@ -765,7 +779,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   const activeHeading = headings.reduce((acc, h, i) => (h.bi <= Math.max(topBlock, caretBi) ? i : acc), -1)
   const gotoBlock = (bi: number) => {
     const sc = scrollRef.current
-    const pi = pages.findIndex((p) => bi >= p.start && bi < p.end)
+    const pi = pagesOf(pages, bi)[0]
     if (!sc || pi < 0) return
     sc.scrollTop = Math.max(0, tops[pi] - 16)
     requestAnimationFrame(() =>
@@ -806,8 +820,10 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
           spellCheck={false}
           onMouseDown={(e) => {
             if (!isEditing) return
-            // clicking a picture selects it (resize handles, image tools)
             const t = e.target as HTMLElement
+            // a copy of a table's header rows on a following page shows them, the rows themselves are edited on the first
+            if (t.closest('.de-head-copy')) return void e.preventDefault()
+            // clicking a picture selects it (resize handles, image tools)
             const obj = t.tagName === 'IMG' ? t.closest<HTMLElement>('[data-obj]') : null
             const pos = obj && pagesRef.current ? posFromDom(pagesRef.current, obj, 0) : null
             if (pos) {
@@ -851,6 +867,8 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
                 editing={isEditing}
                 colResize={colResize}
                 onHF={isEditing && done ? openHF : undefined}
+                lines={st.lines}
+                avail={availPx}
               />
             ),
           )}
@@ -955,9 +973,12 @@ interface PageViewProps {
   colResize?: RenderCtx['colResize']
   /** editing: a double click on the header / footer area edits it */
   onHF?: (k: HFKind) => void
+  /** where the blocks' lines / rows are, and the height of a page's text (px) */
+  lines: WeakMap<Block, Lines>
+  avail: number
 }
 
-function PageView({ index, count, slice, blocks, meta, page, top, left, height, zoom, client, docStyle, editing, colResize, onHF }: PageViewProps) {
+function PageView({ index, count, slice, blocks, meta, page, top, left, height, zoom, client, docStyle, editing, colResize, onHF, lines, avail }: PageViewProps) {
   const ctx = useMemo<RenderCtx>(
     () => ({ client, page: index, pages: count, measuring: false, editable: editing, colResize: editing ? colResize : undefined }),
     [client, index, count, editing, colResize],
@@ -965,19 +986,34 @@ function PageView({ index, count, slice, blocks, meta, page, top, left, height, 
   const hfCtx = useMemo<RenderCtx>(() => ({ ...ctx, editable: false }), [ctx])
   // the first page's, the even pages' (when the file has different odd and even ones) or the default
   const { header, footer, hk, fk } = pageHF(meta ?? undefined, index)
-  const items = []
-  for (let i = slice.start; i < slice.end; i++) {
-    const b = blocks[i]
-    items.push(
-      <BlockView
-        key={`${i}:${b.t === 'p' ? b.ver ?? 0 : 0}`}
-        block={b}
-        ctx={ctx}
-        pa={editable(b) || b.t === 'tbl' ? String(i) : undefined}
-        sp={contextual(b, blocks[i - 1], blocks[i + 1])}
-      />,
-    )
-  }
+  // each column's blocks; a block split across pages (or columns) shows the lines / rows it has here
+  const columns = columnsOf(slice).map((c) => {
+    const items = []
+    for (let i = c.start; i < c.end; i++) {
+      const b = blocks[i]
+      let { from, to }: { from?: number; to?: number } = pieceOf(c, i)
+      let head: number | undefined
+      if (b.t === 'tbl' && (from || to !== undefined)) head = from ? headOf(lines.get(b), avail) : undefined
+      else from = to = undefined
+      items.push(
+        <BlockView
+          // a part that starts or ends elsewhere is a new element (the caret is put back in it)
+          key={`${i}:${b.t === 'p' ? (b.ver ?? 0) : 0}:${from ?? ''}:${to ?? ''}`}
+          block={b}
+          ctx={ctx}
+          pa={editable(b) || b.t === 'tbl' ? String(i) : undefined}
+          sp={contextual(b, blocks[i - 1], blocks[i + 1])}
+          from={from || undefined}
+          to={to}
+          head={head}
+        />,
+      )
+    }
+    return items
+  })
+  const nCols = page.cols && page.cols > 1 ? page.cols : 1
+  const gap = nCols > 1 ? (page.colGap ?? 36) : 0
+  const colW = (page.w - page.ml - page.mr - gap * (nCols - 1)) / nCols
   return (
     <div className="de-page" style={{ top, left, width: page.w * PX * zoom, height }} data-page={index + 1}>
       <div className="de-page-inner de-doc" style={{ ...docStyle, width: `${page.w}pt`, height: height / zoom, zoom }}>
@@ -995,16 +1031,16 @@ function PageView({ index, count, slice, blocks, meta, page, top, left, height, 
           </div>
         )}
         <div
-          className={page.cols && page.cols > 1 ? 'de-page-cols' : undefined}
-          style={{
-            position: 'absolute',
-            top: `${page.mt}pt`,
-            left: `${page.ml}pt`,
-            width: `${page.w - page.ml - page.mr}pt`,
-            ...(page.cols && page.cols > 1 ? { columnCount: page.cols, columnGap: `${page.colGap ?? 36}pt`, columnFill: 'auto', height: `${page.h - page.mt - page.mb}pt` } : {}),
-          }}
+          className={nCols > 1 ? 'de-page-cols' : undefined}
+          style={{ position: 'absolute', top: `${page.mt}pt`, left: `${page.ml}pt`, width: `${page.w - page.ml - page.mr}pt`, ...(nCols > 1 ? { display: 'flex', columnGap: `${gap}pt` } : {}) }}
         >
-          {items}
+          {nCols > 1
+            ? columns.map((items, c) => (
+                <div key={c} className="de-page-col" style={{ width: `${colW}pt`, flex: 'none' }}>
+                  {items}
+                </div>
+              ))
+            : columns[0]}
         </div>
         {footer && (
           <div className="de-hf" contentEditable={editing ? false : undefined} style={{ bottom: `${page.footer}pt`, padding: `0 ${page.mr}pt 0 ${page.ml}pt` }} onDoubleClick={onHF && (() => onHF(fk))}>
