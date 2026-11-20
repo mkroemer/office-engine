@@ -5,6 +5,7 @@ import type { Block, Paragraph } from '../src/core/docx/types'
 import { BlobSource } from '../src/core/source'
 import { ZipArchive } from '../src/core/zip'
 import { bareDocx, para } from './docx-builder'
+import { DocBuilder, sprm } from './doc-builder'
 
 async function open(src: Blob) {
   const events: { event: string; data: any }[] = []
@@ -72,5 +73,18 @@ describe('keepLines / widowControl', () => {
       { keepLines: true, widowControl: false },
       { keepLines: undefined, widowControl: undefined },
     ])
+  })
+
+  test('RTF and Word 97 files: widow control only where the file has it (their paragraphs have none unless said)', async () => {
+    const rtf = String.raw`{\rtf1\ansi\deff0{\fonttbl{\f0 Times New Roman;}}` + '\n' + String.raw`\pard plain\par\pard\widctlpar kept\par\pard\nowidctlpar off\par}`
+    const r = await open(new Blob([rtf], { type: 'application/rtf' }))
+    expect(r.paras.map(text)).toEqual(['plain', 'kept', 'off'])
+    expect(r.paras.map((p) => p.ps.widowControl)).toEqual([false, true, false])
+    const d = new DocBuilder()
+    d.p('plain')
+    d.p('kept', 0, sprm(0x2431, 1))
+    const w = await open(new Blob([d.build() as Uint8Array<ArrayBuffer>]))
+    expect(w.paras.map(text)).toEqual(['plain', 'kept'])
+    expect(w.paras.map((p) => p.ps.widowControl)).toEqual([false, true])
   })
 })
