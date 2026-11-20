@@ -54,6 +54,34 @@ describe('host-placed controls around a headless viewer', () => {
     expect(v.errors).toEqual([])
   })
 
+  test('docx: a size typed into the format bar and Enter sets it on the selection', async () => {
+    const v = await viewer({ src: 'samples/sample.docx', headless: true, chrome: true, editable: true })
+    await until(v, 's.editing')
+    await chrome(v, '.de-ebar button[aria-label="Bold"]').waitFor()
+    await v.selectText('document')
+    await until(v, 's.format && s.format.size !== 20')
+    const size = chrome(v, '.de-size-input')
+    await size.fill('20')
+    await size.press('Enter')
+    await until(v, 's.format && s.format.size === 20')
+    expect(v.errors).toEqual([])
+  })
+
+  test('docx: a list button that shows as pressed removes the list', async () => {
+    const v = await viewer({ src: 'samples/sample.docx', headless: true, chrome: true, editable: true })
+    await until(v, 's.editing')
+    const bullets = chrome(v, '.de-ebar button[aria-label="Bulleted list"]')
+    await bullets.waitFor()
+    await v.selectText('document')
+    await until(v, 's.format && s.format.list === null')
+    await bullets.click()
+    await until(v, "s.format.list === 'bullet'")
+    expect(await bullets.getAttribute('aria-pressed')).toBe('true')
+    await bullets.click()
+    await until(v, 's.format.list === null')
+    expect(v.errors).toEqual([])
+  })
+
   test('xlsx: sheet tabs switch sheets; no zoom, no outline list of headings', async () => {
     const v = await viewer({ src: 'samples/sample.xlsx', headless: true, chrome: true })
     const tabs = chrome(v, '.de-tabs [role="tab"]')
@@ -72,6 +100,7 @@ describe('host-placed controls around a headless viewer', () => {
     await tabs.first().waitFor()
     await v.clickCell('J12')
     await v.page.keyboard.type('=SUM(')
+    await until(v, 's.pointing')
     await tabs.nth(1).click()
     await until(v, 's.outline.items[1].current')
     await v.clickCell('A1')
@@ -80,6 +109,24 @@ describe('host-placed controls around a headless viewer', () => {
     await tabs.first().click()
     await until(v, 's.outline.items[0].current')
     expect(await v.formula('J12')).toContain('Notes!A1')
+    expect(v.errors).toEqual([])
+  })
+
+  test('xlsx: text being typed is committed on its own sheet when a sheet tab is clicked', async () => {
+    const v = await viewer({ src: 'samples/sample.xlsx', headless: true, chrome: true, editable: true })
+    const tabs = chrome(v, '.de-tabs [role="tab"]')
+    await tabs.first().waitFor()
+    await v.clickCell('J12')
+    await v.page.keyboard.type('hello')
+    // text, not a formula: nothing to point at, so the tab may take the focus
+    expect(await v.page.evaluate(() => window.__ctl.snapshot().pointing)).toBe(false)
+    await tabs.nth(1).click()
+    await until(v, 's.outline.items[1].current')
+    // a click on the other sheet does not carry the text over to it
+    await v.clickCell('A1')
+    await tabs.first().click()
+    await until(v, 's.outline.items[0].current')
+    expect(await v.shown('J12')).toBe('hello')
     expect(v.errors).toEqual([])
   })
 })

@@ -56,15 +56,16 @@ export function OutlineList({ controller: ctl, className, style }: Props) {
 
 /** A workbook's visible sheets as tabs; nothing for other documents. */
 export function SheetTabs({ controller: ctl, className, style }: Props) {
-  const { outline } = useViewerState(ctl)
+  const { outline, pointing } = useViewerState(ctl)
   const t = useStrings()
   if (outline?.kind !== 'sheets') return null
   return (
     <div className={'de-tabs' + (className ? ` ${className}` : '')} style={style} role="tablist" aria-label={t.xlsx.sheets}>
       {outline.items.map((item) => (
-        // the grid keeps the focus: a formula being typed is not committed by the click, so its references can
-        // point at cells of the sheet switched to
-        <button key={item.id} type="button" role="tab" className="de-tab" aria-selected={item.current} onMouseDown={(e) => e.preventDefault()} onClick={() => ctl.goto(item.id)}>
+        // while a formula being typed can take a reference, the grid keeps the focus, so the click does not commit it
+        // and the reference can point at the sheet switched to; any other edit is committed by the click, as with the
+        // built-in tabs
+        <button key={item.id} type="button" role="tab" className="de-tab" aria-selected={item.current} onMouseDown={(e) => pointing && e.preventDefault()} onClick={() => ctl.goto(item.id)}>
           {item.title}
         </button>
       ))}
@@ -84,14 +85,19 @@ export function StatusText({ controller: ctl, className, style }: Props) {
 
 /**
  * Undo, redo and the formatting every kind shares (marks, size, alignment, lists where there are lists), through
- * `ViewerController.format`. Disabled while there is no selection to format; nothing while viewing.
+ * `ViewerController.format`. Disabled while there is no selection to format, but kept in place, so the bar does not
+ * change its width as the focus moves; nothing while viewing.
  */
-export function FormatBar({ controller: ctl }: { controller: ViewerController }) {
+export function FormatBar({ controller: ctl, className, style }: Props) {
   const s = useViewerState(ctl)
   const t = useStrings()
   if (!s.editing) return null
   const f = s.format
   const off = !f
+  // documents and slides have justified text and lists; cells have neither
+  const paragraphs = s.kind === 'docx' || s.kind === 'pptx'
+  // a list button that shows as pressed removes the list, as in the built-in toolbars
+  const list = (kind: 'bullet' | 'number') => ctl.format({ op: 'list', list: f?.list === kind ? null : kind })
   const mark = (m: 'bold' | 'italic' | 'underline' | 'strike', icon: 'bold' | 'italic' | 'underline' | 'strike', title: string) => (
     <Btn icon={icon} title={title} active={!!f?.[m]} disabled={off} onClick={() => ctl.format({ op: 'toggle', mark: m })} />
   )
@@ -99,7 +105,8 @@ export function FormatBar({ controller: ctl }: { controller: ViewerController })
     <Btn icon={icon} title={title} active={f?.align === a} disabled={off} onClick={() => ctl.format({ op: 'align', align: a })} />
   )
   return (
-    <ToolbarRow>
+    <div className={'de-ctl-format' + (className ? ` ${className}` : '')} style={style}>
+      <ToolbarRow>
       <Btn icon="undo" title={t.edit.undo} disabled={!s.canUndo} onClick={() => ctl.undo()} />
       <Btn icon="redo" title={t.edit.redo} disabled={!s.canRedo} onClick={() => ctl.redo()} />
       <Sep />
@@ -113,12 +120,13 @@ export function FormatBar({ controller: ctl }: { controller: ViewerController })
       {align('left', 'alignLeft', t.edit.alignLeft)}
       {align('center', 'alignCenter', t.edit.center)}
       {align('right', 'alignRight', t.edit.alignRight)}
-      {f?.list !== undefined && align('justify', 'justify', t.edit.justify)}
-      {f?.list !== undefined && <Sep />}
-      {f?.list !== undefined && <Btn icon="bullets" title={t.edit.bullets} active={f.list === 'bullet'} onClick={() => ctl.format({ op: 'list', list: 'bullet' })} />}
-      {f?.list !== undefined && <Btn icon="numbers" title={t.edit.numbers} active={f.list === 'number'} onClick={() => ctl.format({ op: 'list', list: 'number' })} />}
+      {paragraphs && align('justify', 'justify', t.edit.justify)}
+      {paragraphs && <Sep />}
+      {paragraphs && <Btn icon="bullets" title={t.edit.bullets} active={f?.list === 'bullet'} disabled={off || f.list === undefined} onClick={() => list('bullet')} />}
+      {paragraphs && <Btn icon="numbers" title={t.edit.numbers} active={f?.list === 'number'} disabled={off || f.list === undefined} onClick={() => list('number')} />}
       <Sep />
       <Btn icon="clear" title={t.edit.clearFormat} disabled={off} onClick={() => ctl.format({ op: 'clear' })} />
-    </ToolbarRow>
+      </ToolbarRow>
+    </div>
   )
 }
