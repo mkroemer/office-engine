@@ -574,7 +574,8 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
       const [lo, hi] = on.some((x) => x.type === 'bubble') ? bubbleRoom(lowest(xs), highest(xs)) : [lowest(xs), highest(xs)]
       sc = niceScale(lo, hi, { min: a?.min, max: a?.max, major: a?.major, ticks: Math.round(area.w / 70) })
     }
-    const f = a?.format ?? on[0].series[0]?.format
+    // linked to its source: the format of the X values, never the Y values'
+    const f = a?.format ?? on.flatMap((x) => x.series).find((s) => s.xFormat)?.xFormat
     xPlans.set(id, { axis: a ?? fallbackAxis(id, 'b'), scale: { ...sc, format: f }, labels: sc.ticks.map((t) => fmt(t, f, m.date1904)) })
   }
   // the first group's X axis is the one drawn
@@ -627,10 +628,20 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
     return horizontal ? inner.x + f * inner.w : inner.y + inner.h - f * inner.h
   }
   const catReverse = catAxis?.reverse ?? false
-  const band = (horizontal ? inner.h : inner.w) / n
+  const catLen = horizontal ? inner.h : inner.w
+  // a date axis places each point at its date, a day to a band: dates a week apart are seven bands apart
+  const dates = catAxis?.kind === 'date' ? groups.find((g) => !xValued(g))?.series[0]?.catValues : undefined
+  const known = dates?.filter((v): v is number => v !== null) ?? []
+  const d0 = catAxis?.min ?? (known.length ? lowest(known) : 0)
+  const d1 = catAxis?.max ?? (known.length ? highest(known) : 0)
+  const byDate = known.length > 0 && d1 >= d0
+  const units = byDate ? Math.min(100_000, Math.floor(d1 - d0) + 1) : n
+  const band = catLen / units
   const catMid = (k: number) => {
+    const d = byDate ? dates![k] : null
+    let i = d !== null && d !== undefined ? d - d0 : k
     // horizontal bars run from the bottom up, as Excel draws them
-    const i = horizontal !== catReverse ? n - 1 - k : k
+    if (horizontal !== catReverse) i = units - 1 - i
     return (horizontal ? inner.y : inner.x) + (i + 0.5) * band
   }
   const xPosOf = (pl: AxisPlan) => (v: number) => inner.x + (pl.axis.reverse ? 1 - frac(pl.scale, v) : frac(pl.scale, v)) * inner.w
@@ -681,12 +692,12 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
       } else svg.text(catMid(k), y0 + catLh / 2, c, { ...o, anchor: 'middle' })
     })
   }
-  // the category axis line, where the value axis is 0 (or its minimum)
+  // the category axis line, where it crosses the value axis: zero (or the bound nearest it), or where the file says
   const pp = plans.get(primary)
+  const crossOf = (p: AxisPlan) => (p === pp ? crossing(p.scale, catAxis) : baseline(p.scale))
   const catLine = catAxis?.line === null ? null : catAxis?.line ? linePaint(catAxis.line) : { stroke: m.axisColor }
   if (pp && catLine && !(catAxis?.deleted ?? false)) {
-    const at = pp.scale.min <= 0 && pp.scale.max >= 0 && !pp.scale.log ? 0 : pp.scale.min
-    const pos = valPos(pp, at)
+    const pos = valPos(pp, crossOf(pp))
     horizontal ? svg.line(pos, inner.y, pos, inner.y + inner.h, catLine) : svg.line(inner.x, pos, inner.x + inner.w, pos, catLine)
   }
   // axis titles
@@ -715,11 +726,14 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
   // values outside a fixed axis range stop at the plot area; the margin keeps markers on its edge whole
   const c = CLIP_MARGIN
   svg.raw(`<defs><clipPath id="de-plot"><rect x="${Math.round(inner.x - c)}" y="${Math.round(inner.y - c)}" width="${Math.round(inner.w + 2 * c)}" height="${Math.round(inner.h + 2 * c)}"/></clipPath></defs><g clip-path="url(#de-plot)">`)
+  // data labels go on a layer after the clipped series: a label beside a point on the plot's edge stays whole
+  const labels = new Svg()
+  labelLayers.set(svg, labels)
   for (const g of [...groups].sort((a, b) => order(a) - order(b))) {
     const p = plans.get(g.axIds[1]) ?? plans.get(primary)
     if (!p) continue
-    if (g.type === 'bar') drawBars(svg, m, g, p, { valPos, catMid, band, horizontal, size })
-    else if (g.type === 'area') drawArea(svg, g, p, { valPos, catMid })
+    if (g.type === 'bar') drawBars(svg, m, g, p, { valPos, catMid, band, horizontal, size, base: crossOf(p) })
+    else if (g.type === 'area') drawArea(svg, g, p, { valPos, catMid, base: crossOf(p) })
     else if (g.type === 'line') drawLines(svg, m, g, p, { valPos, catMid, size })
     else if (g.type === 'stock') drawStock(svg, m, g, p, { valPos, catMid, band, size })
     else if (xValued(g) && xPlans.has(g.axIds[0])) {
@@ -729,9 +743,22 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
     }
   }
   svg.raw('</g>')
+  labelLayers.delete(svg)
+  svg.raw(labels.body())
 }
 
 const CLIP_MARGIN = 6
+
+/** while a chart's series are drawn, the layer their data labels go on (unclipped, above them) */
+const labelLayers = new WeakMap<Svg, Svg>()
+
+/** where the category axis crosses the value axis: as the file says (`crosses`, `crossesAt`), else zero or the bound nearest it */
+function crossing(s: Scale, cat: ChartAxis | undefined): number {
+  if (cat?.crossesAt !== undefined && (!s.log || cat.crossesAt > 0)) return Math.min(Math.max(cat.crossesAt, s.min), s.max)
+  if (cat?.crosses === 'max') return s.max
+  if (cat?.crosses === 'min') return s.min
+  return baseline(s)
+}
 
 function fallbackAxis(id: string, pos: string): ChartAxis {
   return { id, kind: 'val', pos, deleted: false, reverse: false, gridlines: true, labels: true, crossAx: '', crosses: 'autoZero' }
@@ -749,7 +776,7 @@ function label(svg: Svg, m: ChartModel, s: ChartSeries, k: number, v: number, x:
   if (l.category) parts.push(s.cats[k] ?? '')
   if (l.value) parts.push(fmt(v, l.format ?? s.format, m.date1904))
   const t = textOf(m, l.text)
-  if (parts.length) svg.text(x, y, parts.join(l.sep ?? ', '), { size: t.size, color: l.text?.color ?? color ?? m.textColor, bold: t.bold, anchor })
+  if (parts.length) (labelLayers.get(svg) ?? svg).text(x, y, parts.join(l.sep ?? ', '), { size: t.size, color: l.text?.color ?? color ?? m.textColor, bold: t.bold, anchor })
 }
 
 /** where bars and areas start: zero, or the axis bound nearest to it when the axis does not reach zero (a log axis: its minimum) */
@@ -758,14 +785,15 @@ function baseline(s: Scale): number {
   return Math.min(Math.max(0, s.min), s.max)
 }
 
-function drawBars(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo & { band: number; horizontal: boolean; size: number }) {
+function drawBars(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo & { band: number; horizontal: boolean; size: number; base: number }) {
   const { valPos, catMid, band, horizontal } = geo
   const stacked = isStacked(g)
   const n = stacked ? 1 : g.series.length
   const ov = Math.max(-1, Math.min(1, g.overlap / 100))
   const w = band / (n - (n - 1) * ov + g.gapWidth / 100)
   const total = n * w - (n - 1) * w * ov
-  const base = baseline(p.scale)
+  // bars grow from where the category axis crosses
+  const base = geo.base
   const len = highest(g.series.map((s) => s.values.length))
   // one gradient or pattern per series (and per point with its own), shared by its bars
   const paints = g.series.map((s) => fillPaint(svg, s.fill, s.look))
@@ -805,9 +833,8 @@ function drawBars(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo 
   }
 }
 
-function drawArea(svg: Svg, g: ChartGroup, p: AxisPlan, geo: Geo) {
-  const { valPos, catMid } = geo
-  const base = baseline(p.scale)
+function drawArea(svg: Svg, g: ChartGroup, p: AxisPlan, geo: Geo & { base: number }) {
+  const { valPos, catMid, base } = geo
   let below: number[] | null = null
   for (const s of g.series) {
     const vals = isStacked(g) ? cumulative(g, s).map((v) => v ?? 0) : s.values.map((v) => v ?? 0)
@@ -821,12 +848,13 @@ function drawArea(svg: Svg, g: ChartGroup, p: AxisPlan, geo: Geo) {
 function drawLines(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo & { size: number }) {
   const { valPos, catMid } = geo
   for (const s of g.series) {
-    // empty cells leave a gap in the line, as do values a log axis cannot place
-    const vals = (isStacked(g) ? cumulative(g, s) : s.values).map((v) => (v !== null && placeable(p.scale, v) ? v : null))
+    // an empty cell is a gap in the line, zero, or spanned, as the chart says; a value a log axis cannot place is a gap
+    const vals = (isStacked(g) ? cumulative(g, s) : s.values).map((v) => (v === null ? (m.blanks === 'zero' && placeable(p.scale, 0) ? 0 : null) : placeable(p.scale, v) ? v : null))
     const runs: Pt[][] = [[]]
     vals.forEach((v, k) => {
-      if (v === null) runs.push([])
-      else runs[runs.length - 1].push({ x: catMid(k), y: valPos(p, v) })
+      if (v === null) {
+        if (m.blanks !== 'span' || s.values[k] !== null) runs.push([])
+      } else runs[runs.length - 1].push({ x: catMid(k), y: valPos(p, v) })
     })
     if (s.line) for (const run of runs) if (run.length > 1) svg.path(linePath(run, s.smooth), linePaint(s.line))
     const lh = lineHeight(textOf(m, s.labels?.text).size)
@@ -867,19 +895,28 @@ function drawScatter(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: {
   const lines = g.scatterStyle !== 'marker' && g.scatterStyle !== 'none'
   for (const s of g.series) {
     const pts: (Pt & { k: number })[] = []
-    s.values.forEach((v, k) => {
+    // the line's runs: an empty Y cell breaks it unless the chart spans blanks (or shows them as zero)
+    const runs: Pt[][] = [[]]
+    s.values.forEach((y, k) => {
       // without X values the points are numbered; with them, a point missing its X is not drawn
       const xv = s.xs ? s.xs[k] : k + 1
-      if (v === null || xv === null || xv === undefined) return
+      const v = y === null && m.blanks === 'zero' ? 0 : y
+      if (v === null || xv === null || xv === undefined) {
+        if (v === null && m.blanks === 'gap') runs.push([])
+        return
+      }
       // a log axis has no place for zero or less
       if (!placeable(p.scale, v) || (xLog && xv <= 0)) return
-      pts.push({ x: xPos(xv), y: valPos(p, v), k })
+      const pt = { x: xPos(xv), y: valPos(p, v), k }
+      pts.push(pt)
+      runs[runs.length - 1].push(pt)
     })
-    if (lines && s.line && pts.length > 1) svg.path(linePath(pts, s.smooth || g.scatterStyle === 'smooth' || g.scatterStyle === 'smoothMarker'), linePaint(s.line))
+    const smooth = s.smooth || g.scatterStyle === 'smooth' || g.scatterStyle === 'smoothMarker'
+    if (lines && s.line) for (const run of runs) if (run.length > 1) svg.path(linePath(run, smooth), linePaint(s.line))
     const lh = lineHeight(textOf(m, s.labels?.text).size)
     pts.forEach((pt) => {
       if (s.marker) marker(svg, pt.x, pt.y, s.marker)
-      if (s.labels) label(svg, m, s, pt.k, s.values[pt.k]!, pt.x, pt.y - lh * 0.8)
+      if (s.labels) label(svg, m, s, pt.k, s.values[pt.k] ?? 0, pt.x, pt.y - lh * 0.8)
     })
   }
 }

@@ -406,3 +406,66 @@ describe('xlsx charts: large series, log axes, hidden points, markers', () => {
     expect(on!.groups[0].series[0].marker).not.toBeNull()
   })
 })
+
+describe('xlsx charts: axis formats, labels at the edge, empty cells, date axes, axis crossings', () => {
+  const LINE = (extra = '') => `<c:lineChart><c:grouping val="standard"/>${ser(0, 'B', numRef('Data!$B$2:$B$4', [1, 1, 1]), extra)}<c:axId val="1"/><c:axId val="2"/></c:lineChart>${AXES}`
+  /** the points of the first line path drawn in the plot */
+  const linePoints = (svg: string) => {
+    const d = /<path d="(M[^"]*)"[^>]*stroke=/.exec(svg.split('<g clip-path')[1])?.[1] ?? ''
+    return [...d.matchAll(/[ML]([\d.]+) ([\d.]+)/g)].map((m) => ({ x: Number(m[1]), y: Number(m[2]) }))
+  }
+
+  test('a scatter X axis linked to its source is written in the X values\' format, not the Y values\'', async () => {
+    const xy = `<c:ser><c:idx val="0"/><c:order val="0"/><c:tx>${strRef('Data!$B$1', ['y'])}</c:tx><c:xVal>${numRef('Data!$B$2:$B$4', [0, 0, 0])}</c:xVal><c:yVal>${numRef('Data!$C$2:$C$4', [0, 0, 0], '0%')}</c:yVal></c:ser>`
+    const plot = `<c:scatterChart><c:scatterStyle val="marker"/>${xy}<c:axId val="1"/><c:axId val="2"/></c:scatterChart><c:valAx><c:axId val="1"/><c:axPos val="b"/><c:crossAx val="2"/></c:valAx><c:valAx><c:axId val="2"/><c:axPos val="l"/><c:crossAx val="1"/></c:valAx>`
+    const { model } = await modelOf(await withChart(plot))
+    const s = model!.groups[0].series[0]
+    s.xs = [1, 2, 3]
+    s.values = [0.1, 0.2, 0.3]
+    s.format = '0%'
+    const svg = renderChart(model!, 400, 260)
+    expect(svg).toContain('>20%<')
+    expect(svg).not.toMatch(/>[123]00%</)
+  })
+
+  test('a data label beside a point on the plot\'s edge is drawn outside the plot\'s clipping', async () => {
+    const { model } = await modelOf(await withChart(LINE('<c:dLbls><c:showVal val="1"/></c:dLbls>')))
+    model!.axes.find((a) => a.kind === 'val')!.max = 20
+    const svg = renderChart(model!, 400, 260)
+    const clip = svg.indexOf('<g clip-path')
+    const closed = svg.indexOf('</g>', clip)
+    // Q2 is 20, the axis maximum: its label sits above the plot
+    expect(svg.lastIndexOf('>20<')).toBeGreaterThan(closed)
+  })
+
+  test('empty cells in a line: a gap, zero or spanned, as the chart says', async () => {
+    const { model } = await modelOf(await withChart(LINE()))
+    model!.groups[0].series[0].values = [10, null, 15]
+    model!.blanks = 'gap'
+    expect(linePoints(renderChart(model!, 400, 260)).length).toBe(0)
+    model!.blanks = 'span'
+    expect(linePoints(renderChart(model!, 400, 260)).length).toBe(2)
+    model!.blanks = 'zero'
+    expect(linePoints(renderChart(model!, 400, 260)).length).toBe(3)
+  })
+
+  test('a date axis places its points by date: a gap of eight days is eight times one of a day', async () => {
+    const { model } = await modelOf(await withChart(LINE()))
+    model!.axes.find((a) => a.kind === 'cat')!.kind = 'date'
+    model!.groups[0].series[0].catValues = [46000, 46001, 46009]
+    const [a, b, c] = linePoints(renderChart(model!, 400, 260))
+    expect(Math.abs((c.x - b.x) / (b.x - a.x) - 8)).toBeLessThan(0.05)
+  })
+
+  test('columns grow from where the category axis crosses: at the top when it crosses at the maximum', async () => {
+    const { model } = await modelOf(await withChart(CLUSTERED))
+    const fills = new Set(model!.groups[0].series.map((s) => s.fill))
+    const tops = (svg: string) => [...svg.split('<g clip-path')[1].matchAll(/<rect [^>]*y="([\d.]+)"[^>]*fill="([^"]+)"/g)].filter((m) => fills.has(m[2])).map((m) => Number(m[1]))
+    const atZero = tops(renderChart(model!, 400, 260))
+    model!.axes.find((a) => a.kind === 'cat')!.crosses = 'max'
+    const atMax = tops(renderChart(model!, 400, 260))
+    // from the top every column starts at the same place, the axis maximum
+    expect(new Set(atMax).size).toBe(1)
+    expect(atMax[0]).toBeLessThan(Math.min(...atZero))
+  })
+})

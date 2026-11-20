@@ -83,6 +83,10 @@ export interface ChartSeries {
   cats: string[]
   /** x values (scatter, bubble) */
   xs?: (number | null)[]
+  /** the x values' number format, for an x axis linked to its source */
+  xFormat?: string
+  /** the categories as numbers where they are (dates: their serials), for a date axis that places them by value */
+  catValues?: (number | null)[]
   values: (number | null)[]
   /** bubble sizes */
   sizes?: (number | null)[]
@@ -197,6 +201,8 @@ export interface ChartModel {
    *  built-in style's (a dark one has lighter ones) */
   gridColor: string
   axisColor: string
+  /** how lines show empty cells (`c:dispBlanksAs`): a gap, as zero, or spanned by the line */
+  blanks: 'gap' | 'zero' | 'span'
   date1904: boolean
 }
 
@@ -478,6 +484,7 @@ async function seriesOf(ser: XEl, i: number, type: ChartType, varyColors: boolea
     return n === null ? String(v) : formatValue(n, catSrc?.format || 'General', date1904).text
   }
   let cats = (catSrc?.values ?? []).map(catText)
+  let catValues = !scatter && catSrc ? catSrc.values.map(toNum) : undefined
   // a scatter series without X values is numbered 1, 2, 3, ... (left undefined); with them, a missing one leaves a gap
   let xs = scatter && catSrc ? catSrc.values.map(toNum) : undefined
   // hidden rows / columns are left out where the chart shows visible cells only
@@ -490,6 +497,7 @@ async function seriesOf(ser: XEl, i: number, type: ChartType, varyColors: boolea
     for (let k = 0, j = 0; k < hidden.length; k++) if (!hidden[k]) map.set(k, j++)
     shownAt = (k) => (k < hidden.length ? map.get(k) : k - hidden.length + map.size)
     values = values.filter(keep)
+    catValues = catValues?.filter(keep)
     cats = cats.filter(keep)
     xs = xs?.filter(keep)
     sizes = sizes?.filter(keep)
@@ -549,6 +557,8 @@ async function seriesOf(ser: XEl, i: number, type: ChartType, varyColors: boolea
     name,
     cats,
     xs,
+    ...(scatter && catSrc?.format ? { xFormat: catSrc.format } : {}),
+    ...(catValues?.some((v) => v !== null) ? { catValues } : {}),
     values,
     ...(sizes ? { sizes } : {}),
     format: valSrc?.format,
@@ -709,6 +719,8 @@ export async function readChart(root: XEl | undefined, opts: { theme: Theme; dat
     ...(plotBorder !== undefined ? { plotBorder } : {}),
     gridColor: style.grid,
     axisColor: style.axis,
+    // Excel leaves a gap where the element is missing
+    blanks: ((b) => (b === 'zero' || b === 'span' ? b : 'gap'))(val(kid(chart, 'dispBlanksAs'))),
     date1904: opts.date1904,
   }
 }
