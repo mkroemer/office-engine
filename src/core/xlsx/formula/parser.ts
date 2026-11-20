@@ -3,6 +3,7 @@ import { FormulaSyntaxError, tokenize, type Token } from './lexer'
 import type { RefAddr } from './refs'
 import type { ErrorCode, Value } from './types'
 import { FormulaError } from './types'
+import type { Val } from './values'
 
 export type BinOp = '+' | '-' | '*' | '/' | '^' | '&' | '=' | '<>' | '<' | '>' | '<=' | '>='
 
@@ -21,12 +22,28 @@ export type Ast =
   | { type: 'range'; left: Ast; right: Ast }
   | { type: 'union'; items: Ast[] }
   | { type: 'call'; name: string; args: Ast[] }
+  /** what an expression gives, called as a function: LAMBDA(x, x + 1)(5) */
+  | { type: 'invoke'; fn: Ast; args: Ast[] }
+  /** a value already computed (never parsed: an argument handed to a function called through a function value) */
+  | { type: 'value'; value: Val }
 
 const CMP = new Set(['=', '<>', '<', '>', '<=', '>='])
 
+/** the function a space between two references stands for: the cells both have (the intersection operator) */
+export const INTERSECT = ' '
+
+/** functions that give a reference: what a space after them may intersect */
+const REF_FUNCTIONS = new Set(['OFFSET', 'INDEX', 'INDIRECT', 'ANCHORARRAY', INTERSECT])
+
+const refLike = (a: Ast) => a.type === 'ref' || a.type === 'range' || a.type === 'name' || a.type === 'union' || (a.type === 'call' && REF_FUNCTIONS.has(a.name))
+
 class Parser {
   i = 0
-  constructor(private readonly toks: Token[]) {}
+  constructor(
+    private readonly toks: Token[],
+    /** whether white space came before each token */
+    private readonly spaced: boolean[] = [],
+  ) {}
 
   private peek(): Token | undefined {
     return this.toks[this.i]
@@ -106,15 +123,39 @@ class Parser {
       this.i++
       return { type: 'unary', op: op as '-' | '+', arg: this.unary() }
     }
-    return this.range()
+    // @: the one value of a range / array that is the formula's own (a file writes it SINGLE)
+    if (this.isOp('@')) {
+      this.i++
+      return { type: 'call', name: 'SINGLE', args: [this.unary()] }
+    }
+    return this.intersect()
+  }
+  /** a space between two references: the cells both have (`B2:D4 C1:C9`, `North Q1`) */
+  private intersect(): Ast {
+    let l = this.range()
+    for (;;) {
+      const t = this.toks[this.i]
+      if (!t || !this.spaced[this.i] || !refLike(l)) return l
+      if (!(t.t === 'ref' || t.t === 'name' || t.t === 'func' || (t.t === 'punc' && t.v === '('))) return l
+      l = { type: 'call', name: INTERSECT, args: [l, this.range()] }
+    }
   }
   private range(): Ast {
-    let l = this.primary()
+    let l = this.spilled()
     while (this.isOp(':')) {
       this.i++
-      l = { type: 'range', left: l, right: this.primary() }
+      l = { type: 'range', left: l, right: this.spilled() }
     }
     return l
+  }
+  /** x#: all the cells the dynamic array formula in x fills */
+  private spilled(): Ast {
+    let x = this.primary()
+    while (this.isOp('#')) {
+      this.i++
+      x = { type: 'call', name: 'ANCHORARRAY', args: [x] }
+    }
+    return x
   }
 
   private primary(): Ast {
@@ -136,14 +177,14 @@ class Parser {
         return t.sheet === undefined ? { type: 'name', name: t.v } : { type: 'name', name: t.v, sheet: t.sheet }
       case 'func': {
         this.expectPunc('(')
-        return { type: 'call', name: t.v, args: this.args() }
+        return this.called({ type: 'call', name: t.v, args: this.args() })
       }
       case 'punc':
         if (t.v === '(') {
           const first = this.expr()
           if (!this.isPunc(',')) {
             this.expectPunc(')')
-            return first
+            return this.called(first)
           }
           const items = [first]
           while (this.isPunc(',')) {
@@ -157,6 +198,15 @@ class Parser {
     }
     this.i--
     return this.fail('unexpected token')
+  }
+
+  /** `x` followed by arguments is `x` called with them: LAMBDA(…)(1, 2) */
+  private called(x: Ast): Ast {
+    while (this.isPunc('(')) {
+      this.i++
+      x = { type: 'invoke', fn: x, args: this.args() }
+    }
+    return x
   }
 
   private args(): Ast[] {
@@ -207,9 +257,19 @@ class Parser {
 /** Parse formula text (OOXML stored form, without '='; a leading '=' is tolerated). Throws FormulaSyntaxError. */
 export function parseFormula(text: string): Ast {
   const src = text.startsWith('=') ? text.slice(1) : text
-  const toks = tokenize(src).filter((t) => t.t !== 'ws')
+  const toks: Token[] = []
+  const spaced: boolean[] = []
+  let space = false
+  for (const t of tokenize(src)) {
+    if (t.t === 'ws') space = true
+    else {
+      toks.push(t)
+      spaced.push(space)
+      space = false
+    }
+  }
   if (!toks.length) throw new FormulaSyntaxError('empty formula', 0)
-  const p = new Parser(toks)
+  const p = new Parser(toks, spaced)
   const ast = p.expr()
   if (p.i < toks.length) throw new FormulaSyntaxError('unexpected token', toks[p.i].s)
   return ast

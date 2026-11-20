@@ -66,7 +66,7 @@ Also online at [p10node.github.io/office-engine](https://p10node.github.io/offic
 
 - **Progressive loading**: lazy ZIP, HTTP Range requests, streaming XML parser in a Web Worker → UI never blocks
 - **Virtualized views**: only visible pages, cells and slides render
-- **Editing** with a Google Docs-style toolbar: DOCX text, styles, lists, images, tables; XLSX cells, formulas (135 functions), formats, borders, rows/columns, sheets; PPTX text, shapes, images, slides, slideshow
+- **Editing** with a Google Docs-style toolbar: DOCX text, styles, lists, images, tables; XLSX cells, formulas (540+ functions of Excel and Google Sheets, dynamic arrays, `LET` / `LAMBDA`), formats, borders, rows/columns, sheets; PPTX text, shapes, images, slides, slideshow
 - **Fast save**: only edited parts are regenerated, everything else keeps its original bytes
 - **Word, Excel and PowerPoint 97-2003, RTF, OpenDocument**: `.doc` / `.xls` / `.ppt`, `.rtf` and `.odt` / `.ods` / `.odp` (also templates and flat XML) are converted in the worker to DOCX / XLSX / PPTX and open **editable**: styles, lists, tables, pictures, headers and footers, notes and comments; formulas with their values, number formats, merged cells, frozen panes; masters, shapes, text and pictures of slides. Saved as `.docx` / `.xlsx` / `.pptx`
 - **Apple Pages, Keynote and Numbers (view only)**: `.pages` / `.key` / `.numbers` files open read-only, converted to Word / PowerPoint / Excel in the worker (styles, lists, tables, images, shapes, header/footer, footnotes, master slides, typed and formatted cells); *Download as* Word / PowerPoint / Excel saves the converted file
