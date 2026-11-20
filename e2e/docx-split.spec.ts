@@ -450,7 +450,7 @@ describe('a Word 97 file', () => {
     d.p(long)
     d.table({ widths: [4000, 4000], header: true, borders: true, rows: [[{ paras: ['Head A'] }, { paras: ['Head B'] }], ...Array.from({ length: 70 }, (_, i) => [{ paras: [`row ${i + 1} a`] }, { paras: [`row ${i + 1} b`] }])] })
     d.p('The end')
-    const v = await open(new Blob([d.build()]), 0.5, 'split.doc')
+    const v = await open(new Blob([d.build() as BlobPart]), 0.5, 'split.doc')
     const ps = await parts(v, 30)
     expect(ps.length).toBe(2)
     expect(ps.map((p) => p.text).join('')).toBe(long)
