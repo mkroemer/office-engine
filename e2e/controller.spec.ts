@@ -280,7 +280,18 @@ describe('controller and headless mode', () => {
     const v = await viewer({ controller: true, src: 'samples/sample.docx', headless: true, editable: true, onSave: true, hostControls: true })
     const { page } = v
     await until(v, 's.editing')
+    // a formatting command does nothing on a selection that spans a table, so the sample's text, table included, is
+    // replaced by plain paragraphs over several pages
     await v.selectText('Quarterly Report', 'end')
+    await page.keyboard.press('ControlOrMeta+a')
+    await page.keyboard.type('Line 0')
+    for (let i = 1; i <= 150; i++) {
+      await page.keyboard.press('Enter')
+      await page.keyboard.type(`Line ${i}`)
+    }
+    await until(v, 's.page && s.page.count > 3')
+    // the pages far from the caret are not rendered
+    expect(await page.locator('.de-pages [data-pa]').count()).toBeLessThan(151)
     await page.keyboard.press('ControlOrMeta+a')
     await page.waitForTimeout(150)
     // the host's control takes the focus, as a click on it would
@@ -290,9 +301,9 @@ describe('controller and headless mode', () => {
     await until(v, 's.format.bold')
     await page.evaluate(() => window.__ctl.save())
     const saved = await v.waitEvent('save')
-    const paras = (await docxParas(fromB64(saved.b64 as string))).filter((p) => paraText(p).trim())
-    // the last paragraph is pages away from the first: it is bold too
-    expect(runsOf(paras.at(-1)!).every((r) => r.s.b)).toBe(true)
+    const paras = (await docxParas(fromB64(saved.b64 as string))).filter((p) => paraText(p).startsWith('Line '))
+    expect(paras).toHaveLength(151)
+    expect(paras.every((p) => runsOf(p).every((r) => r.s.b))).toBe(true)
     expect(v.errors).toEqual([])
   })
 
