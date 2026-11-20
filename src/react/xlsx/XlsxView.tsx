@@ -1628,6 +1628,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
     if (patch.wrap) void done.then(() => fitRows(range, false))
     if (patch.numFmt !== undefined) void done.then(() => widen(range))
     if (focus) focusGrid()
+    return done
   }
   const toggle = (k: 'b' | 'i' | 'u' | 'strike') => {
     const on = cellFmt[k === 'b' ? 'bold' : k === 'i' ? 'italic' : k === 'u' ? 'underline' : 'strike']
@@ -1637,13 +1638,17 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
   const redo = () => void run(client.call('xlsx.redo'), 'redo')
   // the controller's undo / redo and formatting: this sheet's grid runs them while it is shown
   const cellFmt = cellFormat(activeCss, meta.baseFont as { fontFamily?: string; fontSize?: string | number })
-  // commands sent faster than the worker answers (a quick second toggle) go by what the earlier ones left, not by the
-  // format last read from the cell. That is dropped for good once the cell's own format has changed (the worker has
-  // answered), and by undo and redo: an undo can bring back the format it was read from, and it must not count again
-  const cellFmtKey = JSON.stringify(cellFmt)
+  // Commands sent faster than the cell shows their effect (a quick second or third toggle) go by the marks the earlier
+  // ones left, not by the format last read from the cell: the worker answers each in turn, and the cell's rows are read
+  // again after that. Those marks are kept while any command is unanswered and until the cell shows them; another
+  // selection, undo and redo drop them (an undo can bring back the very format they were worked out from).
   const selKey = `${sheet}:${rect.r0}:${rect.c0}:${rect.r1}:${rect.c1}:${sel.whole ?? ''}`
-  const pendingFmt = useRef<{ sel: string; read: string; fmt: TextFormat } | null>(null)
-  if (pendingFmt.current && (pendingFmt.current.read !== cellFmtKey || pendingFmt.current.sel !== selKey)) pendingFmt.current = null
+  const marks = (f: TextFormat) => `${f.bold}${f.italic}${f.underline}${f.strike}`
+  const pendingFmt = useRef<{ sel: string; fmt: TextFormat; waiting: number } | null>(null)
+  {
+    const p = pendingFmt.current
+    if (p && (p.sel !== selKey || (p.waiting === 0 && marks(p.fmt) === marks(cellFmt)))) pendingFmt.current = null
+  }
   useEffect(() => {
     gridCommands.current = {
       undo: () => {
@@ -1655,12 +1660,17 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
         if (editable) redo()
       },
       format: (c) => {
-        const p = pendingFmt.current
-        const now = p && p.sel === selKey && p.read === cellFmtKey ? p.fmt : cellFmt
+        const p = pendingFmt.current && pendingFmt.current.sel === selKey ? pendingFmt.current : null
+        const now = p ? p.fmt : cellFmt
         const patch = editable && cellPatch(c, now)
         if (!patch) return
-        pendingFmt.current = { sel: selKey, read: cellFmtKey, fmt: marksAfter(c, now) }
-        fmtAt(fmtRange(), patch, false)
+        const q = p ?? { sel: selKey, fmt: now, waiting: 0 }
+        q.fmt = marksAfter(c, now)
+        q.waiting++
+        pendingFmt.current = q
+        void fmtAt(fmtRange(), patch, false).finally(() => {
+          q.waiting--
+        })
       },
     }
     const h = store.history

@@ -338,6 +338,26 @@ describe('controller and headless mode', () => {
     expect(v.errors).toEqual([])
   })
 
+  test('xlsx: three toggles in quick succession leave the cell bold, whenever the worker answers them', async () => {
+    const v = await viewer({ controller: true, src: 'samples/sample.xlsx', editable: true, onSave: true, headless: true })
+    const { page } = v
+    await page.locator('.de-grid').waitFor()
+    await v.typeCell('J10', '12.5')
+    await v.clickCell('J10')
+    await until(v, 's.format && !s.format.bold')
+    await page.evaluate(async () => {
+      const pause = () => new Promise((r) => setTimeout(r, 30))
+      window.__ctl.format({ op: 'toggle', mark: 'bold' })
+      await pause()
+      window.__ctl.format({ op: 'toggle', mark: 'bold' })
+      await pause()
+      window.__ctl.format({ op: 'toggle', mark: 'bold' })
+    })
+    await page.waitForTimeout(800)
+    await until(v, 's.format && s.format.bold')
+    expect(v.errors).toEqual([])
+  })
+
   test('xlsx: a toggle after undo starts from the cell as it is again', async () => {
     const v = await viewer({ controller: true, src: 'samples/sample.xlsx', editable: true, onSave: true, headless: true })
     const { page } = v
