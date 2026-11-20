@@ -1,15 +1,16 @@
 import { describe, expect, test } from 'bun:test'
 import type { Paragraph, Table } from '../src/core/docx/types'
+import { DocBuilder } from '../test/doc-builder'
 import { bareDocx, para, table } from '../test/docx-builder'
 import { docxBlocks, paraText, useBrowser, viewer, type Viewer } from './harness'
 
 useBrowser()
 
 /** opens a built document in the fixture, editable, at `zoom`; waits until every page is laid out */
-async function open(doc: Blob | Promise<Blob>, zoom = 1) {
+async function open(doc: Blob | Promise<Blob>, zoom = 1, name = 'split.docx') {
   const v = await viewer({ editable: true, onSave: true }, { wait: false })
   const b64 = Buffer.from(await (await doc).arrayBuffer()).toString('base64')
-  await v.page.evaluate(([b, z]) => window.__setProps({ src: new Blob([Uint8Array.from(atob(b as string), (c) => c.charCodeAt(0))]), name: 'split.docx', zoom: z as number }), [b64, zoom] as const)
+  await v.page.evaluate(([b, z, n]) => window.__setProps({ src: new Blob([Uint8Array.from(atob(b as string), (c) => c.charCodeAt(0))]), name: n as string, zoom: z as number }), [b64, zoom, name] as const)
   await v.ready('docx')
   await v.page.waitForFunction(() => /Page \d+ of \d+ ·/.test(document.querySelector('.de-bar .de-status')?.textContent ?? ''))
   await v.page.waitForTimeout(200)
@@ -399,6 +400,93 @@ describe('editing a paragraph split across pages', () => {
     const text = long.slice(0, cut) + 'đx' + long.slice(cut)
     expect(await joined(v, 30)).toBe(text)
     expect(await savedText(v, 30)).toBe(text)
+    expect(v.errors).toEqual([])
+  })
+})
+
+describe('more layouts', () => {
+  test('text columns: a paragraph goes on from one column to the next, then to the next page', async () => {
+    const long = uniq(900)
+    const sectPr = '<w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:num="2" w:space="720"/>'
+    const v = await open(bareDocx(filler(20) + para(long) + para('After'), { sectPr }), 0.5)
+    const ps = await parts(v, 20)
+    expect(ps.length).toBeGreaterThanOrEqual(3)
+    expect(ps.map((p) => p.text).join('')).toBe(long)
+    // the first two parts on page 1, in its two columns side by side
+    const cols = await v.page.evaluate(() =>
+      Array.from(document.querySelectorAll<HTMLElement>('.de-pages [data-pa="20"]')).map((el) => ({ page: el.closest<HTMLElement>('.de-page')!.dataset.page, col: Array.from(el.closest('.de-page-cols')!.children).indexOf(el.closest('.de-page-col')!) })),
+    )
+    expect(cols.slice(0, 3)).toEqual([
+      { page: '1', col: 0 },
+      { page: '1', col: 1 },
+      { page: '2', col: 0 },
+    ])
+    expect(v.errors).toEqual([])
+  })
+
+  test('a justified paragraph: ↓ from the last line of the first part goes to the next page', async () => {
+    const long = uniq(420)
+    const v = await open(bareDocx(filler(30) + para(long, '<w:jc w:val="both"/>') + para('After')), 0.5)
+    const ps = await parts(v, 30)
+    expect(ps.map((p) => p.page)).toEqual([1, 2])
+    await setSel(v, 30, [0, ps[0].text.length - 3])
+    await v.page.keyboard.press('ArrowDown')
+    const c = await caretAt(v, 30)
+    expect(c.page).toBe(2)
+    expect(c.o).toBeGreaterThanOrEqual(ps[1].from)
+    // End on the last line of the first part: the caret at its end, still on page 1
+    await setSel(v, 30, [0, ps[0].text.length - 3])
+    await v.page.keyboard.press('End')
+    expect(await caretAt(v, 30)).toEqual({ page: 1, o: ps[1].from })
+    expect(v.errors).toEqual([])
+  })
+})
+
+describe('a Word 97 file', () => {
+  test('converted, it is cut the same way: a long paragraph, a long table with its header row repeated', async () => {
+    const d = new DocBuilder()
+    for (let i = 0; i < 30; i++) d.p(`Filler line ${i + 1}`)
+    const long = uniq(420)
+    d.p(long)
+    d.table({ widths: [4000, 4000], header: true, borders: true, rows: [[{ paras: ['Head A'] }, { paras: ['Head B'] }], ...Array.from({ length: 70 }, (_, i) => [{ paras: [`row ${i + 1} a`] }, { paras: [`row ${i + 1} b`] }])] })
+    d.p('The end')
+    const v = await open(new Blob([d.build()]), 0.5, 'split.doc')
+    const ps = await parts(v, 30)
+    expect(ps.length).toBe(2)
+    expect(ps.map((p) => p.text).join('')).toBe(long)
+    const n = await pageCount(v)
+    let copies = 0
+    for (let k = 2; k <= n; k++) {
+      await showPage(v, k)
+      copies += await v.page.locator(`.de-page[data-page="${k}"] tr.de-head-copy`).count()
+    }
+    expect(copies).toBeGreaterThan(0)
+    expect(v.errors).toEqual([])
+  })
+})
+
+describe('comments', () => {
+  test('a comment on text over the page cut marks it on both pages', async () => {
+    const long = uniq(420)
+    const v = await open(bareDocx(filler(30) + para(long) + para('After')), 0.5)
+    const ps = await parts(v, 30)
+    const cut = ps[1].from
+    const back = ps[0].text.trimEnd().split(' ').slice(-2).join(' ').length + 1
+    await setSel(v, 30, [0, ps[0].text.length - back], [1, 11])
+    await v.page.keyboard.press('Control+Alt+KeyM')
+    await v.page.locator('.de-cm-panel').waitFor()
+    const quote = long.slice(cut - back, cut + 11)
+    expect(await v.page.locator('.de-cm-draft .de-cm-quote').innerText()).toBe(quote.trim())
+    await v.page.keyboard.type('over the page end')
+    await v.page.keyboard.press('Enter')
+    const add = await v.waitEvent('comment')
+    await v.page.waitForTimeout(200)
+    const marked = await v.page.evaluate(
+      (id) => Array.from(document.querySelectorAll<HTMLElement>(`.de-pages [data-cm~="${id}"]`)).map((el) => ({ page: el.closest<HTMLElement>('.de-page')!.dataset.page, text: el.textContent })),
+      add.id as string,
+    )
+    expect(marked.map((m) => m.page)).toEqual(['1', '2'])
+    expect(marked.map((m) => m.text).join('')).toBe(quote)
     expect(v.errors).toEqual([])
   })
 })
