@@ -192,6 +192,18 @@ function moveSel(sel: Sel, from: string, to: string): Sel {
   return { a: mv(sel.a), f: mv(sel.f) }
 }
 
+/** lines of a paragraph whose text went from `a` to `b`: the lines starting after the change move with the text */
+function shifted(l: Lines, a: string, b: string): Lines {
+  if (!l.at) return { ys: l.ys }
+  let pre = 0
+  while (pre < a.length && pre < b.length && a[pre] === b[pre]) pre++
+  let suf = 0
+  while (suf < a.length - pre && suf < b.length - pre && a[a.length - 1 - suf] === b[b.length - 1 - suf]) suf++
+  const at = l.at.map((x) => (x === undefined || x <= pre ? x : x >= a.length - suf ? x + b.length - a.length : pre))
+  for (let k = 1; k < at.length; k++) if (at[k] === undefined || at[k]! <= at[k - 1]! || at[k]! >= b.length) return { ys: l.ys }
+  return { ys: l.ys, at }
+}
+
 /** a model change: contiguous paragraphs replaced, or top-level blocks replaced */
 export type DocxCommit = { kind: 'paras'; before: Paragraph[]; next: Paragraph[] } | { kind: 'blocks'; bi: number; before: Block[]; next: Block[] }
 
@@ -378,12 +390,13 @@ export class DocxEditor implements RichHost<Paragraph> {
 
   /**
    * `next` replaces `was` on the page: measured again soon, laid out meanwhile as `was` was (its height; its rows when
-   * a table keeps the same rows)
+   * a table keeps the same rows; its lines when it is the same paragraph edited, `same`)
    */
-  private estimate(was: Block | undefined, next: Block) {
+  private estimate(was: Block | undefined, next: Block, same = false) {
     this.st.heights.set(next, (was && this.st.heights.get(was)) ?? 0)
     const l = was && this.st.lines?.get(was)
     if (l && next.t === 'tbl' && was.t === 'tbl' && next.rows.length === was.rows.length) this.st.lines!.set(next, l)
+    else if (l && same && next.t === 'p' && was.t === 'p') this.st.lines!.set(next, shifted(l, runsText(was.runs as RRun[]), runsText(next.runs as RRun[])))
     this.st.dirty.add(next)
   }
 
@@ -429,10 +442,7 @@ export class DocxEditor implements RichHost<Paragraph> {
     }
     // heights: estimate from what was there, remeasure soon
     if (!c.cell) {
-      next.forEach((p, i) => {
-        this.st.heights.set(p, this.st.heights.get(before[i] ?? before[0]) ?? 0)
-        this.st.dirty.add(p)
-      })
+      next.forEach((p, i) => this.estimate(before[i] ?? before[0], p, before.length === next.length))
       for (const k of [at - 1, at + next.length]) if (list[k]) this.st.dirty.add(list[k])
       if (at < this.st.frontier) this.st.frontier = Math.max(0, this.st.frontier + next.length - pas.length)
     }
@@ -692,10 +702,7 @@ export class DocxEditor implements RichHost<Paragraph> {
     if (!c) return
     const old = c.list[c.at]
     this.splice(pa, 1, [p])
-    if (!c.cell) {
-      this.st.heights.set(p, this.st.heights.get(old) ?? 0)
-      this.st.dirty.add(p)
-    }
+    if (!c.cell) this.estimate(old, p, true)
   }
 
   private applyResult(res: EditResult, sent: Set<Paragraph>): boolean {

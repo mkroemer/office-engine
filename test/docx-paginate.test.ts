@@ -33,7 +33,8 @@ function doc(specs: Spec[]) {
       heights.set(b, 0)
       continue
     }
-    const b: Block = s.t ? { t: 'tbl', cols: [100], rows: s.t.map(() => ({ cells: [] })) } : { t: 'p', ps: s.ps ?? {}, runs: [], pb: s.pb }
+    // (widow / orphan control off unless a test turns it on: the cuts are then where the lines end)
+    const b: Block = s.t ? { t: 'tbl', cols: [100], rows: s.t.map(() => ({ cells: [] })) } : { t: 'p', ps: s.ps ?? { widowControl: false }, runs: [], pb: s.pb }
     blocks.push(b)
     if (s.h !== undefined) {
       heights.set(b, s.h)
@@ -172,5 +173,57 @@ describe('breaks, sections, columns', () => {
     l.at[5] = 100
     l.at[15] = 300
     expect([0, 99, 100, 299, 300, 500].map((o) => pageAt(pages, 1, o, l))).toEqual([0, 0, 1, 1, 2, 2])
+  })
+})
+
+describe('keep rules', () => {
+  const wc: ParaStyle = {}
+  const off: ParaStyle = { widowControl: false }
+
+  test('orphan control: the first line of a paragraph is not left alone at the bottom of a page', () => {
+    expect(pieces(run([{ p: lines(9) }, { p: lines(5), ps: wc }]))).toEqual([['0'], ['1']])
+    expect(pieces(run([{ p: lines(9) }, { p: lines(5), ps: off }]))).toEqual([['0', '1:0-1'], ['1:1-end']])
+  })
+
+  test('widow control: nor its last line alone at the top of the next', () => {
+    expect(pieces(run([{ p: lines(6) }, { p: lines(5), ps: wc }]))).toEqual([['0', '1:0-3'], ['1:3-end']])
+    expect(pieces(run([{ p: lines(6) }, { p: lines(5), ps: off }]))).toEqual([['0', '1:0-4'], ['1:4-end']])
+    // three lines with room for two: neither cut is allowed, the paragraph moves whole
+    expect(pieces(run([{ p: lines(8) }, { p: lines(3), ps: wc }]))).toEqual([['0'], ['1']])
+    // a paragraph longer than a page: its last page keeps two lines
+    expect(pieces(run([{ p: lines(21), ps: wc }]))).toEqual([['0:0-10'], ['0:10-19'], ['0:19-end']])
+  })
+
+  test('at the top of a page the rules give way: a line too tall for two to fit', () => {
+    expect(pieces(run([{ p: [60, 60, 60], ps: wc }]))).toEqual([['0:0-1'], ['0:1-2'], ['0:2-end']])
+  })
+
+  test('keep lines together: the paragraph moves whole; one longer than a page is cut all the same', () => {
+    expect(pieces(run([{ p: lines(6) }, { p: lines(5), ps: { keepLines: true } }]))).toEqual([['0'], ['1']])
+    expect(pieces(run([{ p: lines(2) }, { p: lines(15), ps: { keepLines: true } }]))).toEqual([['0', '1:0-8'], ['1:8-end']])
+  })
+
+  test('keep with next: a heading goes with the first lines of what follows it', () => {
+    const heading: ParaStyle = { keepNext: true, widowControl: false }
+    // room for 2 lines after the heading: the paragraph's first part is 2 lines (orphan control), they fit
+    expect(pieces(run([{ p: lines(7) }, { p: [10], ps: heading }, { p: lines(5), ps: wc }]))).toEqual([['0', '1', '2:0-2'], ['2:2-end']])
+    // room for one: the heading starts the next page with the paragraph
+    expect(pieces(run([{ p: lines(8) }, { p: [10], ps: heading }, { p: lines(5), ps: wc }]))).toEqual([['0'], ['1', '2']])
+    // a chain of two headings: both move
+    expect(pieces(run([{ p: lines(7) }, { p: [10], ps: heading }, { p: [10], ps: heading }, { p: lines(5), ps: wc }]))).toEqual([['0'], ['1', '2', '3']])
+    // before a table: with its header row and first row
+    expect(pieces(run([{ p: lines(8) }, { p: [10], ps: heading }, { t: lines(5), head: 1 }]))).toEqual([['0'], ['1', '2']])
+    expect(pieces(run([{ p: lines(7) }, { p: [10], ps: heading }, { t: lines(5), head: 1 }]))).toEqual([['0', '1', '2:0-2'], ['2:2-end']])
+    // a page break after the chain: nothing to keep it with on this page
+    expect(pieces(run([{ p: lines(8) }, { p: [10], ps: heading }, { p: lines(5), pb: true }]))).toEqual([['0', '1'], ['2']])
+  })
+
+  test('a chain of paragraphs kept with the next taller than a page is cut like any: no page pushed on forever', () => {
+    const heading: ParaStyle = { keepNext: true, widowControl: false }
+    const specs: Spec[] = [{ p: lines(5) }, ...Array.from({ length: 15 }, () => ({ p: [10], ps: heading })), { p: lines(3) }]
+    expect(pieces(run(specs))).toEqual([['0', '1', '2', '3', '4', '5'], ['6', '7', '8', '9', '10', '11', '12', '13', '14', '15'], ['16']])
+    // every paragraph kept with the next: the document is cut into full pages
+    const all = run(Array.from({ length: 40 }, () => ({ p: [10], ps: heading })))
+    expect(all.map((p) => p.end - p.start)).toEqual([10, 10, 10, 10])
   })
 })

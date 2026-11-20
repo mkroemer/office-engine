@@ -386,6 +386,9 @@
   -moz-tab-size: 36pt;
 }
 .de-p > span { white-space: inherit; }
+/* a justified paragraph going on on the next page: its last line here is not its last, it is justified (an empty
+   line after it takes the place of the last; the part's height is set, that line is outside it) */
+.de-p.de-just::after { content: ''; display: inline-block; width: 100%; }
 .de-marker { display: inline-block; text-indent: 0; white-space: pre; }
 .de-tbl {
   border-collapse: collapse;

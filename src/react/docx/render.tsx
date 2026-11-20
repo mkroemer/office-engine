@@ -204,7 +204,12 @@ function InlineView({ x, ctx, o }: { x: Inline; ctx: RenderCtx; o: number }): Re
   }
 }
 
-function ParaView({ p, ctx, pa, sp }: { p: Paragraph; ctx: RenderCtx; pa?: string; sp: Spacing }) {
+/**
+ * A paragraph, or the characters [from, to) of one split across pages: lines as the whole paragraph has them there.
+ * A part after the first has no first-line indent, no space or border above; one before the last no space or border
+ * below, its height the measured one (`height`, px), and its last line justified when the paragraph is.
+ */
+function ParaView({ p, ctx, pa, sp, from = 0, to, height }: { p: Paragraph; ctx: RenderCtx; pa?: string; sp: Spacing; from?: number; to?: number; height?: number }) {
   const hang = p.ps.indFirst && p.ps.indFirst < 0 ? -p.ps.indFirst : 0
   const visible = p.runs.length > 0
   const style = paraCss(p.ps, sp)
@@ -212,16 +217,34 @@ function ParaView({ p, ctx, pa, sp }: { p: Paragraph; ctx: RenderCtx; pa?: strin
     style.fontSize = pt(p.markSz)
     if (p.markFont) style.fontFamily = p.markFont
   }
+  const first = from === 0
+  const last = to === undefined
+  if (!first) style.paddingTop = style.textIndent = style.borderTop = undefined
+  if (!last) {
+    style.paddingBottom = style.borderBottom = undefined
+    style.boxSizing = 'border-box'
+    style.height = height
+  }
   const editable = ctx.editable && pa !== undefined
   let o = 0
-  const runs = p.runs.map((x, i) => {
-    const node = <InlineView key={i} x={x} ctx={ctx} o={o} />
-    o += x.t === 'text' ? x.text.length : 1
-    return node
+  const runs: ReactNode[] = []
+  p.runs.forEach((x, i) => {
+    const n = x.t === 'text' ? x.text.length : 1
+    const a = Math.max(from, o)
+    const b = Math.min(to ?? Infinity, o + n)
+    if (b > a || (n === 0 && first && last)) runs.push(<InlineView key={i} x={x.t === 'text' && (a > o || b < o + n) ? { ...x, text: x.text.slice(a - o, b - o) } : x} ctx={ctx} o={a} />)
+    o += n
   })
   return (
-    <div className="de-p" style={style} data-pa={pa} contentEditable={ctx.editable && !editable ? false : undefined}>
-      {p.marker && (
+    <div
+      className={!last && p.ps.align === 'justify' ? 'de-p de-just' : 'de-p'}
+      style={style}
+      data-pa={pa}
+      data-from={first ? undefined : from}
+      data-to={to}
+      contentEditable={ctx.editable && !editable ? false : undefined}
+    >
+      {first && p.marker && (
         <span className="de-marker" contentEditable={ctx.editable ? false : undefined} style={{ ...runCss(p.marker.s), minWidth: p.marker.tab && hang ? `${hang}pt` : undefined }}>
           {p.marker.text}
           {p.marker.tab && !hang ? '\t' : ''}
@@ -399,12 +422,14 @@ export interface BlockViewProps {
   to?: number
   /** a table part after the first: its header rows shown again above it */
   head?: number
+  /** a paragraph part before the last: its height (px) */
+  height?: number
 }
 
-export const BlockView = memo(function BlockView({ block, ctx, pa, sp = '', nested, from, to, head }: BlockViewProps) {
+export const BlockView = memo(function BlockView({ block, ctx, pa, sp = '', nested, from, to, head, height }: BlockViewProps) {
   switch (block.t) {
     case 'p':
-      return <ParaView p={block} ctx={ctx} pa={pa} sp={sp} />
+      return <ParaView p={block} ctx={ctx} pa={pa} sp={sp} from={from} to={to} height={height} />
     case 'tbl':
       return (
         <div style={{ overflow: 'visible' }} contentEditable={ctx.editable && (nested || pa === undefined) ? false : undefined}>

@@ -1,4 +1,4 @@
-import type { Block, DocxMeta, HFKind } from '../../core/docx/types'
+import type { Block, DocxMeta, HFKind, Paragraph } from '../../core/docx/types'
 
 /**
  * The header and footer a page shows (`index`: 0-based) and the editable kind each is: the first page's when "different
@@ -61,6 +61,7 @@ function unitsOf(h: number, l: Lines | undefined): { ys: number[]; n: number } {
  * between two rows, its header rows repeated at the top of the next page; a block with no line or row that fits
  * starts the next page, and one that does not fit an empty page either (one line or one row taller than the page) is
  * placed anyway: its page grows (`used` > `avail`). The space after the last paragraph of a page needs no room.
+ * Keep rules choose the cut: widow / orphan control, keep lines together, keep with next (see `kept`, `chain`).
  * With text columns (`cols` > 1) a page holds `cols` columns of `avail`, filled the same way one after the other;
  * `used` is the tallest.
  */
@@ -100,6 +101,58 @@ export function paginate(blocks: Block[], heights: WeakMap<Block, number>, count
       ;(cur.cols ??= []).push([bi, k])
     } else newPage(bi, k)
   }
+  /** what pagination needs to know of a block: where it can be cut, and the paragraph's keep rules */
+  const shape = (b: Block) => {
+    const h = heights.get(b) ?? 0
+    const l = lines?.get(b)
+    const { ys, n } = unitsOf(h, l)
+    const table = b.t === 'tbl'
+    const head = table ? headOf(l, avail) : 0
+    // the last line of a paragraph ends before its space after; a table's bottom border is part of it
+    return { h, ys, n, head, headH: head ? ys[head] - ys[0] : 0, keep: table && l?.keep?.length ? new Set(l.keep) : undefined, inkEnd: table ? h : ys[n], ps: b.t === 'p' ? b.ps : undefined }
+  }
+  type Shape = ReturnType<typeof shape>
+  /** a cut before line / row `j` the block allows: a table below its header rows, not inside a merged cell kept whole */
+  const cuts = (s: Shape, j: number) => j > 0 && j < s.n && j > s.head && !s.keep?.has(j)
+  /**
+   * the keep rules of a paragraph allow a part [k, j): it is not split when it keeps its lines together (and fits a
+   * page); widow / orphan control (on unless turned off) leaves neither its first nor its last line alone on a page
+   */
+  const kept = (s: Shape, k: number, j: number) =>
+    !s.ps || !((s.ps.keepLines && s.inkEnd <= avail + EPS) || (s.ps.widowControl !== false && ((k === 0 && j < 2) || s.n - j < 2)))
+  /** the height of the smallest first part of a block (whole when it cannot be cut) */
+  const firstPart = (s: Shape) => {
+    for (let j = 1; j < s.n; j++) if (cuts(s, j) && kept(s, 0, j)) return s.ys[j]
+    return s.inkEnd
+  }
+  /**
+   * Keep with next: what block `i` needs on its page, with the paragraphs after it that keep with the next one too and
+   * the first part of the block after them; `end`: that block. Infinity when that would not fit a page either: such a
+   * chain is let go, its paragraphs are cut like the others (no page is pushed on forever).
+   */
+  const chain = (i: number): { need: number; end: number } => {
+    let need = 0
+    for (let m = i; m < count; m++) {
+      const b = blocks[m]
+      // a page break comes before the next block anyway
+      if (b.t === 'sect' || (m > i && b.t === 'p' && b.pb)) return { need: 0, end: m }
+      const s = shape(b)
+      if (m > i && !s.ps?.keepNext) {
+        need += firstPart(s)
+        return { need: need > avail + EPS ? Infinity : need, end: m }
+      }
+      need += s.h
+      if (need > avail + EPS) {
+        let end = m + 1
+        while (end < count && blocks[end].t === 'p' && (blocks[end] as Paragraph).ps.keepNext) end++
+        return { need: Infinity, end }
+      }
+    }
+    // what comes next is not measured yet
+    return { need: 0, end: count }
+  }
+  /** blocks before this one belong to a chain let go */
+  let loose = 0
   for (let i = 0; i < count; i++) {
     const b = blocks[i]
     if (b.t === 'sect') {
@@ -109,16 +162,8 @@ export function paginate(blocks: Block[], heights: WeakMap<Block, number>, count
       continue
     }
     if (b.t === 'p' && b.pb && cur.end > cur.start) newPage(i, 0)
-    const h = heights.get(b) ?? 0
-    const l = lines?.get(b)
-    const { ys, n } = unitsOf(h, l)
-    const table = b.t === 'tbl'
-    const head = table ? headOf(l, avail) : 0
-    const headH = head ? ys[head] - ys[0] : 0
-    const keep = table && l?.keep?.length ? new Set(l.keep) : undefined
-    // the last line of a paragraph ends before its space after; a table's bottom border is part of it
-    const inkEnd = table ? h : ys[n]
-    const canBreak = (j: number) => j > 0 && j < n && j > head && !keep?.has(j)
+    const s = shape(b)
+    const { h, ys, n, headH, inkEnd } = s
     const pieceH = (k: number, j: number) => (k > 0 ? headH - ys[k] : 0) + (j === n ? h : ys[j])
     const pieceInk = (k: number, j: number) => (k > 0 ? headH - ys[k] : 0) + (j === n ? inkEnd : ys[j])
     const place = (k: number, j: number) => {
@@ -127,23 +172,39 @@ export function paginate(blocks: Block[], heights: WeakMap<Block, number>, count
       y += pieceH(k, j)
       ink = y - (j === n ? h - inkEnd : 0)
     }
+    /** the last cut where the part from `k` fits `room` and `ok` allows */
+    const best = (k: number, room: number, ok: (j: number) => boolean) => {
+      let j = -1
+      for (let x = k + 1; x < n && pieceInk(k, x) <= room + EPS; x++) if (ok(x)) j = x
+      return j
+    }
     for (let k = 0; ; ) {
       const room = avail - y
+      // a paragraph kept with the next one starts the next page (or column) when they do not fit together here
+      if (k === 0 && i >= loose && s.ps?.keepNext) {
+        const c = chain(i)
+        if (c.need === Infinity) loose = c.end
+        else if (y > 0 && c.need > room + EPS) {
+          advance(i, 0)
+          continue
+        }
+      }
       if (pieceInk(k, n) <= room + EPS) {
         place(k, n)
         break
       }
       // the most lines / rows that fit
-      let j = -1
-      for (let x = k + 1; x < n && pieceInk(k, x) <= room + EPS; x++) if (canBreak(x)) j = x
+      let j = best(k, room, (x) => cuts(s, x) && kept(s, k, x))
       if (j < 0 && y > 0) {
         advance(i, k)
         continue
       }
-      // nothing fits an empty page or column: the smallest piece there is, its page grows
+      // at the top of a page or column the keep rules give way; when not even one line / row fits there, the smallest
+      // part there is goes on it and its page grows
+      if (j < 0) j = best(k, room, (x) => cuts(s, x))
       if (j < 0) {
         j = k + 1
-        while (j < n && !canBreak(j)) j++
+        while (j < n && !cuts(s, j)) j++
       }
       place(k, j)
       if (j === n) break
