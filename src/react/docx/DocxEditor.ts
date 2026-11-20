@@ -528,11 +528,14 @@ export class DocxEditor implements RichHost<Paragraph> {
     if (convert) for (const x of specs) this.stale.add(x.pid)
     const sent = new Set<Paragraph>(next)
     const op: EditOp = { anchor, list: specs, remove, want: convert }
+    // an edit from a host's control (a list, alignment or clear button) leaves the focus there, also when its converted
+    // paragraphs come back later and put the caret back
+    const noRefocus = this.input.formatting
     this.inflight++
     let applied = false
     this.client
       .call('docx.edit', op)
-      .then((res) => { applied = this.applyResult(res, sent) })
+      .then((res) => { applied = this.applyResult(res, sent, noRefocus) })
       .catch((e) => console.error('[office-engine] edit failed', e))
       .finally(() => {
         this.inflight--
@@ -698,7 +701,7 @@ export class DocxEditor implements RichHost<Paragraph> {
     }
   }
 
-  private applyResult(res: EditResult, sent: Set<Paragraph>): boolean {
+  private applyResult(res: EditResult, sent: Set<Paragraph>, noRefocus = false): boolean {
     if (this.input.isComposing) return false
     let touched = false
     // the caret inside a rebuilt paragraph is put back after the render (same offsets: the text is the same)
@@ -737,7 +740,10 @@ export class DocxEditor implements RichHost<Paragraph> {
       }
     }
     if (!touched) return false
-    if (sel && !this.pendingSel && (rebuilt.has(sel.a.pa) || rebuilt.has(sel.f.pa))) this.pendingSel = sel
+    if (sel && !this.pendingSel && (rebuilt.has(sel.a.pa) || rebuilt.has(sel.f.pa))) {
+      this.pendingSel = sel
+      this.pendingNoRefocus = noRefocus
+    }
     this.changed()
     return true
   }
