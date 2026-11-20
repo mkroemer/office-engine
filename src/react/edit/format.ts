@@ -73,3 +73,10 @@ export function cellPatch(c: FormatCommand, now: TextFormat): FmtPatch | null {
   if (c.op === 'clear') return { clear: true }
   return null
 }
+
+/** the marks a command leaves (the part of the format the next toggle depends on): `now` with the command applied */
+export function marksAfter(c: FormatCommand, now: TextFormat): TextFormat {
+  if (c.op === 'toggle') return { ...now, [c.mark]: !now[c.mark] }
+  if (c.op === 'clear') return { ...now, bold: false, italic: false, underline: false, strike: false }
+  return now
+}
