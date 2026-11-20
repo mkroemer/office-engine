@@ -511,9 +511,18 @@ export function SizeBox(props: { value?: number; placeholder?: number; sizes?: n
     const value = fontSize(n)
     if (value !== null) props.onChange(value)
   }
+  // where the focus came from (the document, usually): Enter and Escape go back there, since a plain blur leaves the
+  // focus on the page body and a document then has no selection to format
+  const back = useRef<HTMLElement | null>(null)
+  const leave = () => {
+    const to = back.current
+    back.current = null
+    if (to?.isConnected) to.focus({ preventScroll: true })
+    else inputRef.current?.blur()
+  }
   const done = () => {
     if (draft.current !== null) set(parseFloat(draft.current))
-    inputRef.current?.blur()
+    leave()
   }
   const t = useStrings()
   const title = props.title ?? t.toolbar.fontSize
@@ -530,6 +539,7 @@ export function SizeBox(props: { value?: number; placeholder?: number; sizes?: n
         value={text ?? (props.value !== undefined ? String(props.value) : '')}
         placeholder={props.placeholder !== undefined ? String(props.placeholder) : ''}
         onFocus={(e) => {
+          back.current = e.relatedTarget instanceof HTMLElement ? e.relatedTarget : null
           e.currentTarget.select()
           setOpen(true)
         }}
@@ -543,7 +553,7 @@ export function SizeBox(props: { value?: number; placeholder?: number; sizes?: n
             e.preventDefault()
             editText(null)
             setOpen(false)
-            inputRef.current?.blur()
+            leave()
           } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
             e.preventDefault()
             const cur = parseFloat(text ?? String(base))
