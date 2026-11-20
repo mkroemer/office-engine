@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type MutableRefObject, type ReactNode } from 'react'
 import type { BookOp, CellDetail, ClipCell, CellInput, CellOut, FindMatch, FindOptions, FmtPatch, Merge, Range, SheetOp, SheetProgress, TextRun, WorkbookMeta, XlsxClip, XlsxEditResult } from '../../core/xlsx/types'
-import { parseTsv, tsvCell } from '../../core/xlsx/clip'
+import { parseTsv, shiftedClip, tsvCell } from '../../core/xlsx/clip'
 import { colName, MAX_ROWS } from '../../core/xlsx/workbook'
 import { detectSeparator, parseCsv } from '../../core/convert'
 import { closeFormula, formulaContext, isFormula, rangeText, type FormulaContext } from '../../core/xlsx/formula/assist'
@@ -1751,8 +1751,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
         for (let j = 0; j < cols; j++) {
           const cell = clip.cells[down ? i % h : i]?.[down ? j : j % w] ?? null
           const tile = down ? Math.floor(i / h) : Math.floor(j / w)
-          // (the worker moves every formula by the distance of the first block: the others by what is left of theirs)
-          line.push(cell && cell[3] !== undefined && tile ? ([cell[0], cell[1], cell[2], translateFormula(cell[3], down ? tile * h : 0, down ? 0 : tile * w)] as ClipCell) : cell)
+          line.push(shiftedClip(cell, down ? tile * h : 0, down ? 0 : tile * w))
         }
         cells.push(line)
       }
@@ -1998,10 +1997,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
         const line: ClipCell[] = []
         for (let j = 0; j < w * tiles.c; j++) {
           const src = copied[i % h]?.[j % w] ?? null
-          const ti = Math.floor(i / h)
-          const tj = Math.floor(j / w)
-          // (the worker moves every formula by the distance of the first block: the others by what is left of theirs)
-          line.push(src && src[3] !== undefined && (ti || tj) ? ([src[0], src[1], src[2], translateFormula(src[3], ti * h, tj * w)] as ClipCell) : src)
+          line.push(shiftedClip(src, Math.floor(i / h) * h, Math.floor(j / w) * w))
         }
         cells.push(line)
       }
