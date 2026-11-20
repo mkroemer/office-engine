@@ -290,7 +290,8 @@ export class Converter {
     const base = merge<RunStyle>(this.styles.docRs, layer?.rs, st.rs)
     const markRs = merge<RunStyle>(base, readRPr(kid(pPr, 'rPr'), this.theme))
     const sid = d.styleId ?? this.styles.defaultPara ?? ''
-    let cur: Paragraph = { t: 'p', ps, runs: [], markSz: markRs.sz, markFont: markRs.font, sid }
+    const code = this.styles.code(sid)
+    let cur: Paragraph = { t: 'p', ps, runs: [], markSz: markRs.sz, markFont: markRs.font, sid, ...(code !== undefined ? { code } : {}) }
     if (ps.pageBreakBefore) cur.pb = true
     let lst: 'bullet' | 'number' | undefined
     if (level && numPr) {
@@ -351,7 +352,7 @@ export class Converter {
         else runs.splice(i, 1, { ...last, text: last.text.slice(0, -1) }, { ...last, text: last.text.slice(-1), cm })
       },
       pageBreak: () => {
-        cur = { t: 'p', ps, runs: [], markSz: markRs.sz, markFont: markRs.font, pb: true, sid }
+        cur = { t: 'p', ps, runs: [], markSz: markRs.sz, markFont: markRs.font, pb: true, sid, ...(code !== undefined ? { code } : {}) }
         if (pid !== undefined) cur.pid = pid
         parts.push(cur)
       },

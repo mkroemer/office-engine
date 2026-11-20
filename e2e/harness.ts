@@ -101,8 +101,8 @@ export class Viewer {
     if (err && !(await this.events('load')).length) await this.fail(`document failed to load: ${err.message}`)
     const loaded = (await this.events('load')).at(-1)
     const k = kind ?? (loaded?.kind as keyof typeof READY)
-    // an SVG file shows its picture, not a document page
-    const sel = loaded?.imported === 'svg' ? '[data-testid=de-picture] img' : k && READY[k]
+    // an SVG file shows its picture, a source file its code, not a document page
+    const sel = loaded?.imported === 'svg' ? '[data-testid=de-picture] img' : loaded?.imported === 'code' ? '[data-testid=de-code]' : k && READY[k]
     if (sel) await this.page.locator(sel).first().waitFor({ timeout: 30_000 }).catch((e: Error) => this.fail(`${k} did not render`, e))
     await this.page.waitForTimeout(400)
   }

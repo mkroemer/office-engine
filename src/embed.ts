@@ -35,13 +35,13 @@ export function mount(el: HTMLElement, options: MountOptions): MountedViewer {
 /**
  * `<office-viewer src="/file.xlsx" style="height:600px"></office-viewer>`
  * Rendered inside a shadow root so host page CSS cannot leak in.
- * Attributes: src, name, editable, toolbar / thumbnails / save / download / file-menu / open / capture-select-all ("false" to turn off),
- * theme ("light" | "dark" | "auto");
+ * Attributes: src, name, language (a source file's: "typescript", "py"…), editable, toolbar / thumbnails / save / download /
+ * file-menu / open / capture-select-all ("false" to turn off), theme ("light" | "dark" | "auto");
  * real-time collaboration: collab (hub WebSocket URL), room, user (display name), base (snapshot seq `src` was opened at).
  * Properties: `file` (File/Blob/ArrayBuffer) for local data; `icons` (map or resolver, as DocViewer's `icons`).
  */
 export class OfficeViewerElement extends HTMLElement {
-  static observedAttributes = ['src', 'name', 'toolbar', 'thumbnails', 'editable', 'save', 'download', 'file-menu', 'open', 'capture-select-all', 'theme', 'collab', 'room', 'user', 'base', 'comments']
+  static observedAttributes = ['src', 'name', 'language', 'toolbar', 'thumbnails', 'editable', 'save', 'download', 'file-menu', 'open', 'capture-select-all', 'theme', 'collab', 'room', 'user', 'base', 'comments']
   private viewer?: MountedViewer
   private _file?: Blob | ArrayBuffer
   private _icons?: Icons
@@ -90,6 +90,7 @@ export class OfficeViewerElement extends HTMLElement {
     return {
       src: this._file ?? this.getAttribute('src'),
       name: this.getAttribute('name') ?? undefined,
+      language: this.getAttribute('language') || undefined,
       toolbar: this.getAttribute('toolbar') !== 'false',
       thumbnails: this.getAttribute('thumbnails') !== 'false',
       editable: this.hasAttribute('editable') && this.getAttribute('editable') !== 'false',

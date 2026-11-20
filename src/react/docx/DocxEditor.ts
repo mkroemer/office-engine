@@ -13,7 +13,7 @@ import { htmlToParas, type PastedCell, type PastedPara } from '../../core/html'
 import { docxBodyHtml, docxToText } from '../file/text'
 import { cellsIn, deleteCol, deleteRow, distributeCols, gridOf, insertCol, insertRow, mergeCells, newTable, patchCells, rectOf, setBorders, tableFromRows, unmergeCell, type BorderPreset, type CellRect } from './tables'
 import { changeSpans, hasChanges, resolveRuns, trackEdit } from './track'
-import { collapsed, formatRange, linkSpan, markRange, normalize, plen, rlen, runAt, runsText, shiftPa, splitRuns, type Pos, type RRun, type Sel } from '../edit/rich'
+import { collapsed, deleteRange, formatRange, linkSpan, markRange, normalize, plen, rlen, runAt, runsText, shiftPa, splitRuns, type Pos, type RRun, type Sel } from '../edit/rich'
 
 /** a place in a paragraph that survives edits elsewhere: paragraph id, page-break part, offset */
 export interface ParaPos {
@@ -966,6 +966,22 @@ export class DocxEditor implements RichHost<Paragraph> {
     return true
   }
 
+  /** a code block is one paragraph: its lines are line breaks */
+  keepsLines(p: Paragraph): boolean {
+    return p.code !== undefined
+  }
+
+  /** Enter on the empty last line of a code block: that line goes, a paragraph of the default style follows the block */
+  leaveLines(pa: string, p: Paragraph): boolean {
+    const len = plen(p.runs as RRun[])
+    const [a, b] = this.split(p, deleteRange(p.runs as RRun[], len - 1, len), [], true)
+    const out: Paragraph = { ...b, pd: { ...(b.pd ?? {}), style: '' }, sid: undefined, caret: undefined }
+    delete out.code
+    const next = shiftPa(pa, 1)
+    this.replace([pa], [a, out], { a: { pa: next, o: 0 }, f: { pa: next, o: 0 } }, { label: 'enter' })
+    return true
+  }
+
   /** ArrowRight after the last character of a table leaves it, as ArrowDown does */
   arrow(sel: Sel, dir: 1 | -1): boolean {
     if (dir !== 1 || !sel.a.pa.includes('.')) return false
@@ -1307,6 +1323,8 @@ export class DocxEditor implements RichHost<Paragraph> {
   }
 
   pasteRich(sel: Sel, data: DataTransfer): boolean {
+    // into a code block: the plain text, its lines kept in the block
+    if (this.para(sel.a.pa)?.code !== undefined) return false
     const files = Array.from(data.files ?? []).filter((f) => f.type.startsWith('image/'))
     if (files.length) {
       void this.insertImages(files, sel)

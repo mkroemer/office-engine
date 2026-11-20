@@ -36,6 +36,7 @@ const items: FileMenuItem[] = [
 const initial: DocViewerProps = {
   src: q.get('src'),
   name: q.get('name') ?? undefined,
+  language: q.get('language') ?? undefined,
   style: { height: '100vh' },
   toolbar: flag('toolbar'),
   editable: flag('editable'),
