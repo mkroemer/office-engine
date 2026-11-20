@@ -138,6 +138,8 @@ export function readPPr(pPr: XEl | undefined): PPrResult {
         break
       }
       case 'keepNext': ps.keepNext = onOff(c); break
+      case 'keepLines': ps.keepLines = onOff(c); break
+      case 'widowControl': ps.widowControl = onOff(c); break
       case 'contextualSpacing': ps.contextual = onOff(c); break
       case 'pageBreakBefore': ps.pageBreakBefore = onOff(c); break
       case 'outlineLvl': ps.outline = num(c.a.val); break
