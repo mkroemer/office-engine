@@ -93,7 +93,7 @@ export class XlsxCollabWorker {
       case 'comment':
         return null
       case 'set':
-        return ed.setCells(await this.sheet(op.sheet), op.cells)
+        return ed.setCells(await this.sheet(op.sheet), op.cells, op.locale ? { locale: op.locale } : {})
       case 'fmt':
         return ed.format(await this.sheet(op.sheet), op.range, op.patch)
       case 'sheet':

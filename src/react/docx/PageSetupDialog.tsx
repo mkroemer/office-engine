@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PageSet, PageSetup } from '../../core/docx/types'
+import { numberText, parseNumber } from '../../core/number-input'
+import { useLocale } from '../common/locale'
 
 /** paper sizes in pt (portrait) */
 export const PAPERS: { k: string; label: string; w: number; h: number }[] = [
@@ -36,17 +38,23 @@ const MARGIN_PRESETS: { label: string; cm: [number, number, number, number] }[] 
  * `onOk` gets only what changed.
  */
 export function PageSetupDialog({ page, onOk, onClose }: { page: PageSetup; onOk: (set: PageSet) => void; onClose: () => void }) {
+  // Numbers are typed in the viewer's locale (2,54 in de-DE) and read whole: one that is not a number (empty, 2,5 where
+  // the decimal separator is a point) is refused as one out of bounds is. Without a locale the fields are the
+  // browser's number fields, as they were.
+  const locale = useLocale()
+  const text = (cm: number) => numberText(cm, locale)
   const [paper, setPaper] = useState(paperOf(page))
   const [land, setLand] = useState(page.w > page.h)
   // margins as typed (cm): top, right, bottom, left
-  const [mar, setMar] = useState([page.mt, page.mr, page.mb, page.ml].map((v) => String(toCm(v))))
+  const [mar, setMar] = useState([page.mt, page.mr, page.mb, page.ml].map((v) => text(toCm(v))))
   const [cols, setCols] = useState(page.cols ?? 1)
-  const [gap, setGap] = useState(String(toCm(page.colGap ?? 36)))
+  const [gap, setGap] = useState(text(toCm(page.colGap ?? 36)))
   const first = useRef<HTMLSelectElement>(null)
   useEffect(() => first.current?.focus(), [])
 
-  const nums = mar.map(Number)
-  const gapN = Number(gap)
+  const num = (v: string) => parseNumber(v, locale) ?? NaN
+  const nums = mar.map(num)
+  const gapN = num(gap)
   const size = (() => {
     const p = PAPERS.find((x) => x.k === paper)
     const lo = p ? p.w : Math.min(page.w, page.h)
@@ -80,7 +88,8 @@ export function PageSetupDialog({ page, onOk, onClose }: { page: PageSetup; onOk
     <label className="de-ps-field">
       <span>{label}</span>
       <input
-        type="number"
+        type={locale ? 'text' : 'number'}
+        inputMode="decimal"
         step="any"
         min="0"
         aria-label={`${label} margin (cm)`}
@@ -147,7 +156,7 @@ export function PageSetupDialog({ page, onOk, onClose }: { page: PageSetup; onOk
             value=""
             onChange={(e) => {
               const p = MARGIN_PRESETS[Number(e.target.value)]
-              if (p) setMar(p.cm.map(String))
+              if (p) setMar(p.cm.map(text))
             }}
           >
             <option value="">Presets…</option>
@@ -175,7 +184,7 @@ export function PageSetupDialog({ page, onOk, onClose }: { page: PageSetup; onOk
           {cols > 1 && (
             <label className="de-ps-field">
               <span>Spacing</span>
-              <input type="number" step="any" min="0" aria-label="Column spacing (cm)" value={gap} onChange={(e) => setGap(e.target.value)} />
+              <input type={locale ? 'text' : 'number'} inputMode="decimal" step="any" min="0" aria-label="Column spacing (cm)" value={gap} onChange={(e) => setGap(e.target.value)} />
               <em>cm</em>
             </label>
           )}

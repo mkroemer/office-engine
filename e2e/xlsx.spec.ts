@@ -1096,3 +1096,99 @@ describe('xlsx dynamic arrays', () => {
     expect(v.errors).toEqual([])
   })
 })
+
+describe('xlsx numbers typed in a locale (#17)', () => {
+  const openIn = async (locale?: string, browser?: string) => {
+    const v = await viewer({ src: 'samples/sample.xlsx', editable: true, onSave: true, ...(locale ? { locale } : {}) }, { locale: browser })
+    await v.page.locator('.de-ebar').waitFor()
+    return v
+  }
+  /** type and value of saved cells (column A to Z) */
+  const kinds = async (v: Viewer, refs: string[]) => {
+    const s = await saved(v)
+    const out: [string, string, string][] = []
+    for (const ref of refs) {
+      const [, col, row] = /^([A-Z])(\d+)$/.exec(ref)!
+      const d: any = await s.engine.call('xlsx.cell', [0, Number(row) - 1, col.charCodeAt(0) - 65])
+      out.push([ref, d?.type, d?.value])
+    }
+    return out
+  }
+  const sizeBox = (v: Viewer) => v.page.locator('input[aria-label="Font size"]').first()
+  const typeSize = async (v: Viewer, text: string) => {
+    await sizeBox(v).click()
+    await sizeBox(v).fill(text)
+    await sizeBox(v).press('Enter')
+    await v.page.waitForTimeout(300)
+  }
+  const stylesXml = async (v: Viewer) => (await unzip(new Blob([(await v.save()).bytes]))).text('xl/styles.xml')
+
+  test('de-DE: 1,5 and 1.234,5 are numbers, 1.5 is text; the formula bar shows 1,5 and an edit of it stays 1.5', async () => {
+    const v = await openIn('de-DE')
+    await v.typeCell('J10', '1,5')
+    await v.typeCell('J11', '1.234,5')
+    await v.typeCell('J12', '1.5')
+    await v.typeCell('J13', '=J10*2')
+    expect(await v.shown('J13')).toBe('3')
+    expect(await v.formula('J10')).toBe('1,5')
+    expect(await v.formula('J13')).toBe('=J10*2')
+    // edited again: what is shown is what is read
+    await v.clickCell('J10')
+    await v.page.keyboard.press('F2')
+    await v.page.keyboard.type('0')
+    await v.page.keyboard.press('Enter')
+    await v.page.waitForTimeout(200)
+    expect(await v.formula('J10')).toBe('1,5')
+    expect(await v.shown('J13')).toBe('3')
+    expect(await kinds(v, ['J10', 'J11', 'J12', 'J13'])).toEqual([
+      ['J10', 'number', '1.5'],
+      ['J11', 'number', '1234.5'],
+      ['J12', 'string', '1.5'],
+      ['J13', 'number', '3'],
+    ])
+    expect(v.errors).toEqual([])
+  })
+
+  test('without a locale (in a German browser): 1,5 stays text, 1.5 is a number, as before', async () => {
+    const v = await openIn(undefined, 'de-DE')
+    await v.typeCell('J10', '1,5')
+    await v.typeCell('J11', '1.5')
+    await v.typeCell('J12', '1,234')
+    expect(await v.formula('J11')).toBe('1.5')
+    expect(await kinds(v, ['J10', 'J11', 'J12'])).toEqual([
+      ['J10', 'string', '1,5'],
+      ['J11', 'number', '1.5'],
+      ['J12', 'number', '1234'],
+    ])
+    expect(v.errors).toEqual([])
+  })
+
+  test('the font size box: 12,5 in de-DE; 12,5 and 12.5 without a locale; what is not a size keeps the size it had', async () => {
+    const de = await openIn('de-DE')
+    await de.clickCell('J10')
+    const was = await sizeBox(de).inputValue()
+    await typeSize(de, '12.5')
+    expect(await sizeBox(de).inputValue()).toBe(was)
+    await typeSize(de, '12,5')
+    expect(await sizeBox(de).inputValue()).toBe('12,5')
+    expect(await stylesXml(de)).toContain('<sz val="12.5"/>')
+    expect(de.errors).toEqual([])
+
+    const none = await openIn()
+    await none.clickCell('J10')
+    expect(await sizeBox(none).inputValue()).toBe(was)
+    for (const bad of ['12pt', '1.2.5', '1,2,5', '1,234', '']) {
+      await typeSize(none, bad)
+      expect([bad, await sizeBox(none).inputValue()]).toEqual([bad, was])
+    }
+    expect(await stylesXml(none)).not.toContain('<sz val="12.5"/>')
+    // without a locale the size box alone reads a decimal comma (#17): a size has no grouping
+    await typeSize(none, '12,5')
+    expect(await sizeBox(none).inputValue()).toBe('12.5')
+    expect(await stylesXml(none)).toContain('<sz val="12.5"/>')
+    await typeSize(none, '14.5')
+    expect(await sizeBox(none).inputValue()).toBe('14.5')
+    expect(await stylesXml(none)).toContain('<sz val="14.5"/>')
+    expect(none.errors).toEqual([])
+  })
+})

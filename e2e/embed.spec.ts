@@ -51,4 +51,33 @@ describe('embedding without React', () => {
     await v.page.evaluate(() => (window as any).__mounted.destroy())
     expect(await host.innerHTML()).toBe('')
   })
+
+  test('<office-viewer locale>: numbers typed are read in it; the attribute is live (#17)', async () => {
+    const v = await viewer({}, { page: 'embed.html' })
+    const wc = v.page.locator('#wc')
+    await wc.locator('.de-page-inner').first().waitFor()
+    await v.page.evaluate(() => {
+      const el = document.getElementById('wc')!
+      el.setAttribute('locale', 'de-DE')
+      el.setAttribute('src', 'samples/sample.xlsx')
+    })
+    await wc.locator('.de-grid').waitFor()
+    await wc.locator('.de-bar button.de-mode', { hasText: 'Edit' }).click()
+    const size = wc.locator('input[aria-label="Font size"]')
+    const typeSize = async (text: string) => {
+      await size.click()
+      await size.fill(text)
+      await size.press('Enter')
+      await v.page.waitForTimeout(300)
+    }
+    await typeSize('12,5')
+    expect(await size.inputValue()).toBe('12,5')
+    await v.page.evaluate(() => document.getElementById('wc')!.removeAttribute('locale'))
+    await v.page.waitForFunction(() => (document.getElementById('wc')!.shadowRoot!.querySelector('input[aria-label="Font size"]') as HTMLInputElement).value === '12.5')
+    await typeSize('1,234')
+    expect(await size.inputValue()).toBe('12.5')
+    await typeSize('10,5')
+    expect(await size.inputValue()).toBe('10.5')
+    expect(v.errors).toEqual([])
+  })
 })
