@@ -77,6 +77,7 @@ Also online at [p10node.github.io/office-engine](https://p10node.github.io/offic
 - **File menu**: new, open (also DOC / XLS / PPT / RTF / OpenDocument / Pages / Keynote / Numbers / Visio / CSV / text / Markdown / HTML / SVG / diagrams), import CSV, rename, download as PDF / HTML / text / CSV, document details, print
 - **Comments**: threads with replies, resolve, edit / delete, @mentions; on DOCX text, XLSX cells and PPTX slides, stored in the file the way Word, Excel and PowerPoint store them
 - **Real-time collaboration**: live edits, avatars, collaborators' cursors, offline edits sync on reconnect
+- **Fonts**: hand the viewer font files (the OFL fallbacks Carlito, Caladea, Liberation, or the originals) and documents are laid out once they are loaded, so lines and pages break as with the fonts the document names ([API](docs/api.md#fonts))
 - **Dark mode and theming**: `theme="dark"` or `"auto"` (follows the OS), or a theme object with design tokens for colors, type and shape ([Theming](docs/theming.md)); documents keep their own colors
 - **Embed anywhere**: React component, hook, vanilla `mount()`, `<office-viewer>` web component, single `<script>` file
 
