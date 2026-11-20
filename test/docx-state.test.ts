@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, test } from 'bun:test'
-import type { EditOp, EditResult } from '../src/core/docx/types'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
+import type { Block, EditOp, EditResult, Paragraph } from '../src/core/docx/types'
 import { DocumentClient } from '../src/core/worker/client'
 import { DocxEditor, type DocState, type FormatState } from '../src/react/docx/DocxEditor'
-import type { Sel } from '../src/react/edit/rich'
+import { runsText, type RRun, type Sel } from '../src/react/edit/rich'
 
 const clients: DocumentClient[] = []
 afterEach(() => {
@@ -21,7 +21,7 @@ async function editor(src: Blob = Bun.file(`${import.meta.dir}/../playground/pub
   ed.input.lastSel = sel
   const states: { state: FormatState | null; busy: boolean }[] = []
   ed.onState = (state) => states.push({ state, busy: ed.busy })
-  return { client, ed, sel, states }
+  return { client, ed, sel, st, states }
 }
 
 async function settle(ed: DocxEditor) {
@@ -29,12 +29,12 @@ async function settle(ed: DocxEditor) {
   expect(ed.busy).toBe(false)
 }
 
-/** Let the engine finish normally, but control when the editor receives each response. */
+/** Let the engine finish normally, but control when the editor receives each response (paragraph and table writes). */
 function holdEdits(client: DocumentClient) {
   const pending: { result: Promise<EditResult>; release: () => void }[] = []
   client.interceptor = (method, args) => {
-    if (method !== 'docx.edit') return
-    const result = client.direct('docx.edit', args[0] as EditOp)
+    if (method !== 'docx.edit' && method !== 'docx.table') return
+    const result = (client.direct as (m: string, op: unknown) => Promise<EditResult>)(method, args[0] as EditOp)
     let release!: () => void
     const gate = new Promise<void>((r) => { release = r })
     pending.push({ result, release })
@@ -124,5 +124,122 @@ describe('DOCX conversion state notifications (#19)', () => {
     await settle(ed)
     expect(states).toHaveLength(count)
     expect(states.at(-1)?.state?.b).toBe(true)
+  })
+})
+
+/** a caret (or a range up to `f`) in paragraph `pa` */
+const at = (pa: string, o = 0, f = o): Sel => ({ a: { pa, o }, f: { pa, o: f } })
+
+/** address of the top-level paragraph starting with `text` */
+const paraAt = (st: DocState, text: string) => String(st.blocks.findIndex((b) => b.t === 'p' && runsText(b.runs as RRun[]).startsWith(text)))
+
+/** delivers held response `i` and lets the editor take it in */
+async function deliver(pending: ReturnType<typeof holdEdits>, i: number) {
+  await pending[i].result
+  pending[i].release()
+  await Bun.sleep(1)
+}
+
+/** text, list kind and marker of every paragraph (table cells too), in document order */
+function lists(blocks: Block[]) {
+  const out: string[] = []
+  const para = (p: Paragraph) => out.push(`${runsText(p.runs as RRun[]).slice(0, 12)}|${p.lst ?? ''}|${p.marker?.text ?? ''}`)
+  for (const b of blocks) {
+    if (b.t === 'p') para(b)
+    else if (b.t === 'tbl') for (const r of b.rows) for (const c of r.cells) for (const x of c.blocks) if (x.t === 'p') para(x)
+  }
+  return out
+}
+
+describe('DOCX conversion answers that cross other edits (#26, #29)', () => {
+  test('a second edit sent before the first conversion returns gets its own conversion (#26)', async () => {
+    const { client, ed, sel, states } = await editor()
+    const pending = holdEdits(client)
+    ed.toggleList('bullet')
+    ed.setPara({ align: 'center' })
+    // the first answer comes while the second edit is still on its way
+    await deliver(pending, 0)
+    await deliver(pending, 1)
+    await settle(ed)
+    const p = ed.para(sel.a.pa)!
+    expect([p.ps.align, p.lst, p.marker?.text]).toEqual(['center', 'bullet', '•'])
+    expect(states.at(-1)).toMatchObject({ state: { align: 'center', lst: 'bullet' }, busy: false })
+    // the file says the same
+    const reopened = await editor(await client.call('save'))
+    const q = reopened.ed.para(reopened.sel.a.pa)!
+    expect([q.ps.align, q.lst, q.marker?.text]).toEqual(['center', 'bullet', '•'])
+  })
+
+  test('the second edit is converted when the first answer comes after it too (#26)', async () => {
+    const { client, ed, sel, states } = await editor()
+    const pending = holdEdits(client)
+    ed.toggleList('bullet')
+    ed.setPara({ align: 'right' })
+    await deliver(pending, 1)
+    await deliver(pending, 0)
+    await settle(ed)
+    const p = ed.para(sel.a.pa)!
+    expect([p.ps.align, p.lst, p.marker?.text]).toEqual(['right', 'bullet', '•'])
+    // published with the second answer (the first one still on its way); the first one, obsolete, publishes nothing
+    expect(states.at(-1)).toMatchObject({ state: { align: 'right', lst: 'bullet' }, busy: true })
+  })
+
+  test('an obsolete list answer publishes nothing: a list turned on and undone never shows as on (#29)', async () => {
+    const { client, ed, sel, states } = await editor()
+    const pending = holdEdits(client)
+    ed.toggleList('bullet')
+    ed.undo()
+    await deliver(pending, 0)
+    await deliver(pending, 1)
+    await settle(ed)
+    // the list asked for (not known yet), the undo, the undo's conversion: never a pressed list button
+    expect(states.map((s) => ({ lst: s.state?.lst, busy: s.busy }))).toEqual([
+      { lst: undefined, busy: true },
+      { lst: undefined, busy: true },
+      { lst: undefined, busy: false },
+    ])
+    expect(ed.para(sel.a.pa)?.lst).toBeUndefined()
+    expect(ed.para(sel.a.pa)?.marker).toBeUndefined()
+  })
+
+  test('the numbering of other paragraphs in an obsolete answer is still shown (#29)', async () => {
+    const { client, ed, st } = await editor()
+    const hire = paraAt(st, 'Hire the platform team')
+    const ship = paraAt(st, 'Ship the viewer engine')
+    const pending = holdEdits(client)
+    ed.input.lastSel = at(hire, 0, 4)
+    // the item leaves the list (the next ones count from 1), and is typed in before the answer comes
+    ed.toggleList('number')
+    ed.input.lastSel = at(hire, 4)
+    ed.insertText('!')
+    await deliver(pending, 0)
+    await deliver(pending, 1)
+    await settle(ed)
+    expect(ed.para(hire)?.lst).toBeUndefined()
+    expect(ed.para(ship)?.marker?.text).toBe('1.')
+    expect(lists(st.blocks)).toEqual(lists((await editor(await client.call('save'))).st.blocks))
+  })
+
+  test('a throwing state listener does not make a conversion an unhandled rejection (#29)', async () => {
+    const { client, ed } = await editor()
+    const pending = holdEdits(client)
+    ed.toggleList('bullet')
+    const unhandled: unknown[] = []
+    const onUnhandled = (e: unknown) => unhandled.push(e)
+    process.on('unhandledRejection', onUnhandled)
+    const logged = spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      ed.onState = () => {
+        throw new Error('listener failed')
+      }
+      await deliver(pending, 0)
+      await settle(ed)
+      await Bun.sleep(20)
+      expect(unhandled).toEqual([])
+      expect(logged).toHaveBeenCalled()
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+      logged.mockRestore()
+    }
   })
 })
