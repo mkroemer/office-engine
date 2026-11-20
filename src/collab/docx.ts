@@ -232,7 +232,7 @@ export class DocxCollab implements Adapter<DocxOp> {
   /** this client's rid / link key → resource key */
   private resKey = new Map<string, string>()
   private results = new WeakMap<DocxOp, unknown>()
-  private snap: { a: DPos; f: DPos; text: Map<string, string>; focused: boolean } | null = null
+  private snap: { a: DPos; f: DPos; text: Map<string, string>; focused: boolean; all: boolean } | null = null
   /** the model was changed since the last `settled` */
   private touchedModel = false
   private site = 0
@@ -678,7 +678,8 @@ export class DocxCollab implements Adapter<DocxOp> {
       const l = this.locate(d.pid)[d.k]
       if (l) text.set(`${d.pid}:${d.k}`, runsText(l.p.runs as RRun[]))
     }
-    this.snap = { a, f, text, focused }
+    // a select-all held while a host's control has the focus: lastSel is only the pages shown, the selection is everything
+    this.snap = { a, f, text, focused, all: !focused && this.ed.input.selectingAll }
   }
 
   /** the remembered selection in the current model */
@@ -708,6 +709,13 @@ export class DocxCollab implements Adapter<DocxOp> {
     }
     const sel = this.sel()
     this.snap = null
+    // a held select-all stays the whole document, with what the collaborators added
+    const all = s.all ? this.ed.input.renewSelectAll() : null
+    if (all) {
+      this.ed.pendingSel = null
+      this.ed.onSelection(all)
+      return
+    }
     // keep the caret where the user was; never steal focus from other controls
     this.ed.pendingSel = s.focused ? sel : null
     if (!s.focused) this.ed.input.lastSel = sel

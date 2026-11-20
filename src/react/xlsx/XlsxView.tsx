@@ -11,8 +11,8 @@ import type { DocumentClient } from '../../core/worker/client'
 import { getPeers, publishLocal, subscribePeers, getLocalHistory, subscribeLocalHistory } from '../../collab/hosts'
 import { claimFocus, useForceUpdate, useScroll, useSize } from '../common/hooks'
 import { useFileOps, useViewer, useSelectAll } from '../common/Slots'
-import { useViewCommands, type FormatCommand } from '../controller'
-import { cellFormat, cellPatch } from '../edit/format'
+import { useViewCommands, type FormatCommand, type TextFormat } from '../controller'
+import { cellFormat, cellPatch, marksAfter } from '../edit/format'
 import { Status } from '../common/Status'
 import { ContextMenu, MOD, type MenuItem } from '../common/ContextMenu'
 import { Toast } from '../common/Dialog'
@@ -1637,13 +1637,22 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
   const redo = () => void run(client.call('xlsx.redo'), 'redo')
   // the controller's undo / redo and formatting: this sheet's grid runs them while it is shown
   const cellFmt = cellFormat(activeCss, meta.baseFont as { fontFamily?: string; fontSize?: string | number })
+  // commands sent faster than the worker answers (a quick second toggle) go by what the earlier ones left, not by the
+  // format last read from the cell; it is dropped once the cell's own format changes, or the selection does
+  const cellFmtKey = JSON.stringify(cellFmt)
+  const selKey = `${sheet}:${rect.r0}:${rect.c0}:${rect.r1}:${rect.c1}:${sel.whole ?? ''}`
+  const pendingFmt = useRef<{ sel: string; read: string; fmt: TextFormat } | null>(null)
   useEffect(() => {
     gridCommands.current = {
       undo: () => editable && undo(),
       redo: () => editable && redo(),
       format: (c) => {
-        const patch = editable && cellPatch(c, cellFmt)
-        if (patch) fmtAt(fmtRange(), patch, false)
+        const p = pendingFmt.current
+        const now = p && p.sel === selKey && p.read === cellFmtKey ? p.fmt : cellFmt
+        const patch = editable && cellPatch(c, now)
+        if (!patch) return
+        pendingFmt.current = { sel: selKey, read: cellFmtKey, fmt: marksAfter(c, now) }
+        fmtAt(fmtRange(), patch, false)
       },
     }
     const h = store.history

@@ -322,6 +322,22 @@ describe('controller and headless mode', () => {
     expect(v.errors).toEqual([])
   })
 
+  test('xlsx: two toggles sent before the worker answers cancel out', async () => {
+    const v = await viewer({ controller: true, src: 'samples/sample.xlsx', editable: true, onSave: true, headless: true })
+    const { page } = v
+    await page.locator('.de-grid').waitFor()
+    await v.typeCell('J10', '12.5')
+    await v.clickCell('J10')
+    await until(v, 's.format && !s.format.bold')
+    await page.evaluate(() => {
+      window.__ctl.format({ op: 'toggle', mark: 'bold' })
+      window.__ctl.format({ op: 'toggle', mark: 'bold' })
+    })
+    await page.waitForTimeout(600)
+    await until(v, 's.format && !s.format.bold')
+    expect(v.errors).toEqual([])
+  })
+
   test('xlsx: a column selected by its header is formatted whole through the controller, as by the toolbar', async () => {
     const v = await viewer({ controller: true, src: 'samples/sample.xlsx', editable: true, headless: true })
     const { page } = v

@@ -535,6 +535,19 @@ export class RichInput {
     return true
   }
 
+  /** a select-all is held: the selection is the whole document, though the DOM holds only the pages shown */
+  get selectingAll(): boolean {
+    return !!this.override
+  }
+
+  /** after the document changed under a held select-all (a collaborator's edit): it is the whole document as it is now */
+  renewSelectAll(): Sel | null {
+    const all = this.host.all?.()
+    if (!this.override || !all) return null
+    this.override = { ...this.override, model: all }
+    return all
+  }
+
   /** Applies a model selection to the DOM; false when its paragraph isn't rendered. */
   restore(sel: Sel | null, focus: boolean | 'preserve' = this.formatting ? 'preserve' : true): boolean {
     const root = this.root
