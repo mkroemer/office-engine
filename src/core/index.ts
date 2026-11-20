@@ -1,5 +1,6 @@
 import './default-worker'
 export * from './source'
+export type { FontSource } from './fonts'
 export { ZipArchive } from './zip'
 export { SaxParser, TreeBuilder, parseXml, parseXmlStream, type XEl, type SaxHandler } from './xml'
 export { OpcPackage, type DocKind } from './opc'

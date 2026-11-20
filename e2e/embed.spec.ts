@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test'
+import { parasToDocx } from '../src/core/convert'
+import { testFont } from '../test/font-builder'
 import { useBrowser, viewer } from './harness'
 
 useBrowser()
@@ -38,6 +40,44 @@ describe('embedding without React', () => {
       wc.file = await (await fetch('samples/sample.xlsx')).blob()
     })
     await v.page.locator('#wc .de-grid').waitFor()
+  })
+
+  test('<office-viewer>: fonts attribute (URLs), fonts property (bytes too)', async () => {
+    const font = Buffer.from(testFont({ family: 'Wide Test' }))
+    const docx = Buffer.from(await (await parasToDocx([{ runs: [{ text: 'Wide', set: { font: 'Wide Test' } }] }])).arrayBuffer())
+    const asked: string[] = []
+    const v = await viewer(
+      {},
+      {
+        page: 'embed.html',
+        setup: (v) =>
+          v.ctx.route('**/gen/**', (r) => {
+            const name = new URL(r.request().url()).pathname.split('/').pop()!
+            asked.push(name)
+            return r.fulfill({ body: name.endsWith('.docx') ? docx : font })
+          }),
+      },
+    )
+    const wc = v.page.locator('#wc')
+    await wc.locator('.de-page-inner').first().waitFor()
+    const faces = () => v.page.evaluate(() => [...document.fonts].map((f) => `${f.family.replace(/"/g, '')} ${f.status}`))
+    await v.page.evaluate(() => {
+      const el = document.getElementById('wc')!
+      el.setAttribute('fonts', JSON.stringify([{ family: 'Wide Test', src: '/gen/wide.ttf' }]))
+      el.setAttribute('src', 'gen/wide.docx')
+    })
+    await v.page.waitForFunction(() => [...document.fonts].some((f) => f.status === 'loaded'))
+    expect(asked).toEqual(['wide.docx', 'wide.ttf'])
+    expect(await faces()).toEqual(['Wide Test loaded'])
+    // the property wins over the attribute: the bytes, and the file at the URL is let go
+    await v.page.evaluate((bytes) => {
+      const el = document.getElementById('wc') as HTMLElement & { fonts?: unknown }
+      el.fonts = [{ family: 'Wide Test', src: new Uint8Array(bytes).buffer, weight: 700 }]
+    }, [...font])
+    await v.page.waitForFunction(() => [...document.fonts].length === 1 && [...document.fonts][0].weight === '700')
+    expect(await faces()).toEqual(['Wide Test loaded'])
+    expect(asked).toEqual(['wide.docx', 'wide.ttf'])
+    expect(v.errors).toEqual([])
   })
 
   test('mount(): options, update(), destroy()', async () => {

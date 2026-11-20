@@ -5,7 +5,8 @@
  */
 import { afterEach, describe, expect, test } from 'bun:test'
 import { colorOf, cssColor, cssPaint, customIndexed, drawingColor, fileHex, officeHex, sheetColor } from '../src/core/color'
-import { cssFont } from '../src/core/fonts'
+import { cssFont, docxFonts, familyKey, fontFamilies, fontsFor } from '../src/core/fonts'
+import type { Block } from '../src/core/docx/types'
 import { parseRaw } from '../src/core/raw'
 import { BlobSource, BufferSource } from '../src/core/source'
 import { parseTheme } from '../src/core/theme'
@@ -18,7 +19,7 @@ import { isSharedCall } from '../src/collab/docx'
 import { CollabSession, type Adapter } from '../src/collab/session'
 import { MemoryTransport } from '../src/collab/transport'
 import { PEER_COLORS } from '../src/collab/protocol'
-import { INHERITED, inheritedDocx, inheritedPptx, inheritedVisio, inheritedXlsx, PROBE_HOST, probeDocx, probePptx, probeVisio, probeXlsx } from './probes'
+import { CSS_FONT_NAME, INHERITED, inheritedDocx, inheritedPptx, inheritedVisio, inheritedXlsx, PROBE_HOST, probeDocx, probeFontsDocx, probePptx, probeVisio, probeXlsx } from './probes'
 
 const S = (n: string) => `${import.meta.dir}/../playground/public/samples/${n}`
 const URL_COLOR = 'fff url(https://probe.invalid/x.png)'
@@ -154,6 +155,21 @@ describe('colors given to CSS', () => {
       expect(json).not.toContain(PROBE_HOST)
     })
   }
+
+  test('docx: the fonts a file embeds or names never reach the views as something to fetch', async () => {
+    const all = await models(await probeFontsDocx())
+    const json = JSON.stringify(all)
+    // embedded fonts (word/fontTable.xml) are not read: neither their address nor their part is handed on
+    expect(json).not.toContain('embedded-font')
+    expect(json).not.toContain('odttf')
+    // a name that looks like CSS is one quoted family of its stack, followed by the generic one
+    const stacks = new Set<string>()
+    docxFonts(all.filter(Array.isArray).flat() as Block[], stacks)
+    const css = [...stacks].find((s) => s.includes('css-font'))!
+    expect(css).toBe(cssFont(CSS_FONT_NAME)!)
+    expect(fontFamilies(css)).toEqual([familyKey(CSS_FONT_NAME.replace(/"/g, '')), 'sans-serif'])
+    expect(fontsFor([{ family: 'Probe Font', src: '/host.ttf' }], stacks)).toHaveLength(1)
+  })
 
   test('an edit writes a color into the file only when it is one', async () => {
     const bad = '#fff"/><a:evil xmlns:a="x'
