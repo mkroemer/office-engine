@@ -1537,7 +1537,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
 
   /** columns that show #### for the numbers written in `range` are widened, as Excel does (a width set by hand stays) */
   const widen = async (range: Range, at = sheet) => {
-    // it runs after the edit's result: the document may have been closed (a new one opened) meanwhile
+    // it runs after the edit's result: the document may have been closed (another one opened) meanwhile
     if (!editable || at !== sheet || client.closed) return
     const live = store.sheet(sheet)
     const need = new Map<number, number>()
