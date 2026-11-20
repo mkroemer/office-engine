@@ -1466,10 +1466,16 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
 
   /** columns that show #### for the numbers written in `range` are widened, as Excel does (a width set by hand stays) */
   const widen = async (range: Range, at = sheet) => {
-    if (!editable || at !== sheet) return
+    // it runs after the edit's result: the document may have been closed (another one opened) meanwhile
+    if (!editable || at !== sheet || client.closed) return
     const live = store.sheet(sheet)
     const need = new Map<number, number>()
-    for (const [, cells] of await rowsOf(range.r0, Math.min(range.r1, range.r0 + 999))) {
+    const rows = await rowsOf(range.r0, Math.min(range.r1, range.r0 + 999)).catch((e: Error) => {
+      if (client.closed) return null
+      throw e
+    })
+    if (!rows) return
+    for (const [, cells] of rows) {
       for (const [c, text, si, kind] of cells) {
         if (c < range.c0 || c > range.c1 || kind !== 1 || !text || (meta.formats[si] ?? 'General') === 'General' || live.colAxis.size(c) !== live.colAxis.def) continue
         const css = (styles[si] ?? {}) as Record<string, string | number>
@@ -1482,7 +1488,10 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
         need.set(c, Math.max(need.get(c) ?? 0, w))
       }
     }
-    for (const [c, px] of need) await sheetOp({ op: 'colWidth', c0: c, c1: c, px: Math.min(px, 400) })
+    for (const [c, px] of need) {
+      if (client.closed) return
+      await sheetOp({ op: 'colWidth', c0: c, c1: c, px: Math.min(px, 400) })
+    }
   }
 
   /** a column as wide as its longest text (double click on its edge) */
