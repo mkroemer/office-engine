@@ -59,7 +59,6 @@ export interface RichHost<P extends RichPara = RichPara> {
 }
 
 const NAV = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'])
-const MODIFIER_KEYS = new Set(['Control', 'Meta', 'Shift', 'Alt', 'AltGraph', 'CapsLock'])
 
 export function ordered(host: RichHost, s: Sel): [Pos, Pos] {
   const c = host.cmp(s.a.pa, s.f.pa)
@@ -365,8 +364,6 @@ export class RichInput {
   formatting = false
   /** select all: the model selection covers every paragraph, the DOM one only what is rendered */
   private override: { model: Sel; dom: Sel } | null = null
-  /** a click or a key (other than select-all itself) since the last select-all */
-  private userMoved = true
   /**
    * The caret an edit asked for, until the DOM shows it: the next key press can come before the view is rebuilt, and
    * the DOM caret is then still where the edit was made (typing without a pause across a paragraph break).
@@ -534,7 +531,6 @@ export class RichInput {
     const dom: Sel = first && last ? { a: { pa: first.dataset.pa!, o: 0 }, f: { pa: last.dataset.pa!, o: plen(this.host.para(last.dataset.pa!)!.runs) } } : all
     this.restore(dom)
     this.override = { model: all, dom: this.readSel() ?? dom }
-    this.userMoved = false
     this.host.onSelection?.(all)
     return true
   }
@@ -688,7 +684,6 @@ export class RichInput {
     if (e.isComposing || this.composing) return
     const mod = e.metaKey || e.ctrlKey
     const k = e.key.toLowerCase()
-    if (!MODIFIER_KEYS.has(e.key) && !(mod && k === 'a')) this.userMoved = true
     if (this.host.shortcut?.(e)) {
       e.preventDefault()
       return
@@ -732,7 +727,6 @@ export class RichInput {
   /** a click moves the caret: what an edit asked for no longer holds */
   private onMouseDown = () => {
     this.expected = null
-    this.userMoved = true
   }
 
   private onCopy = (e: ClipboardEvent) => {
@@ -749,9 +743,8 @@ export class RichInput {
       const control = this.activeHost()
       const ov = this.override
       const active = (this.root?.getRootNode() as Document | ShadowRoot | undefined)?.activeElement
-      // select all stays until the user moves the selection: the pages rendered around it change as the view scrolls
-      // and re-renders, and the DOM selection with them, so a DOM selection that differs is no reason to drop it
-      if (ov && ((control && !!this.formatTarget) || !this.userMoved || (dom ? sameSel(dom, ov.dom) : this.root === active))) {
+      // select all stays until the selection moves somewhere else (losing it to a re-render keeps it, like lastSel)
+      if (ov && ((control && !!this.formatTarget) || (dom ? sameSel(dom, ov.dom) : this.root === active))) {
         this.formatTarget = ov.model
         this.host.onSelection?.(ov.model)
         return
