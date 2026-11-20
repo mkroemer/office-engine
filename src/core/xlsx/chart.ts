@@ -457,6 +457,8 @@ interface SeriesCtx {
   count: number
   /** radar: 'standard', 'marker' or 'filled' */
   radarStyle?: string
+  /** the group's own word on markers, for series that say nothing of theirs (a line chart's `c:marker`, a scatter style) */
+  markers: boolean
 }
 
 async function seriesOf(ser: XEl, i: number, type: ChartType, varyColors: boolean, sc: SeriesCtx): Promise<ChartSeries> {
@@ -480,8 +482,13 @@ async function seriesOf(ser: XEl, i: number, type: ChartType, varyColors: boolea
   let xs = scatter && catSrc ? catSrc.values.map(toNum) : undefined
   // hidden rows / columns are left out where the chart shows visible cells only
   const hidden = valSrc?.hidden
+  // the file's point index → the index among the points shown, when hidden ones are left out
+  let shownAt: ((k: number) => number | undefined) | undefined
   if (plotVisOnly && hidden?.some(Boolean)) {
     const keep = (_: unknown, k: number) => !hidden[k]
+    const map = new Map<number, number>()
+    for (let k = 0, j = 0; k < hidden.length; k++) if (!hidden[k]) map.set(k, j++)
+    shownAt = (k) => (k < hidden.length ? map.get(k) : k - hidden.length + map.size)
     values = values.filter(keep)
     cats = cats.filter(keep)
     xs = xs?.filter(keep)
@@ -507,7 +514,8 @@ async function seriesOf(ser: XEl, i: number, type: ChartType, varyColors: boolea
   const mk = kid(ser, 'marker')
   // a radar of style 'standard' has no markers; one of style 'marker' has them unless a series says none
   const markable = lined && !(type === 'radar' && sc.radarStyle === 'standard')
-  const symbol = val(kid(mk, 'symbol'), markable ? 'auto' : 'none')!
+  // a series without a symbol of its own follows its group (and a radar its style)
+  const symbol = val(kid(mk, 'symbol'), markable && sc.markers ? 'auto' : 'none')!
   const markerSpPr = kid(mk, 'spPr')
   const marker =
     symbol === 'none' || !markable
@@ -522,8 +530,10 @@ async function seriesOf(ser: XEl, i: number, type: ChartType, varyColors: boolea
   // pie slices (and the points of a single series told to vary its colors) get the style's colors in turn
   if (varyColors) values.forEach((_, k) => (points[k] = { color: style.color(k, values.length) }))
   for (const dPt of kids(ser, 'dPt')) {
-    const k = num(val(kid(dPt, 'idx')), -1)!
-    if (k < 0) continue
+    const idx = num(val(kid(dPt, 'idx')), -1)!
+    // a point's own look follows it when hidden points are left out; a hidden point's goes with it
+    const k = idx < 0 ? undefined : shownAt ? shownAt(idx) : idx
+    if (k === undefined) continue
     const c = fillOf(kid(dPt, 'spPr'), ctx)
     const pl = lookOf(kid(dPt, 'spPr'), ctx)
     points[k] = {
@@ -622,7 +632,10 @@ export async function readChart(root: XEl | undefined, opts: { theme: Theme; dat
     const series: ChartSeries[] = []
     // a pie shows its first series, a slice per point in its own color; other kinds vary colors for a lone series only
     const vary = varyColors && type !== 'surface' && type !== 'stock' && (type === 'pie' || type === 'doughnut' || kids(g, 'ser').length === 1)
-    const sc: SeriesCtx = { ctx, read: opts.read, plotVisOnly, date1904: opts.date1904, style, count, radarStyle }
+    // a line chart marks its points unless it says not to; a scatter chart of style line or smooth has no markers
+    const scatterStyle = val(kid(g, 'scatterStyle'))
+    const markers = type === 'scatter' ? scatterStyle !== 'line' && scatterStyle !== 'smooth' : on(kid(g, 'marker'), true)
+    const sc: SeriesCtx = { ctx, read: opts.read, plotVisOnly, date1904: opts.date1904, style, count, radarStyle, markers }
     for (const ser of kids(g, 'ser')) series.push(await seriesOf(ser, seriesIndex++, type, vary, sc))
     const groupLabels = labelsOf(kid(g, 'dLbls'), ctx)
     if (groupLabels) for (const s of series) s.labels ??= groupLabels

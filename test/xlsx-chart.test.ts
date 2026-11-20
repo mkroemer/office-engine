@@ -356,3 +356,53 @@ describe('xlsx charts: files that ask for more than they hold', () => {
     expect(heights[0]).toBeGreaterThan(heights[2])
   })
 })
+
+describe('xlsx charts: large series, log axes, hidden points, markers', () => {
+  const LINE = (extra = '') => `<c:lineChart><c:grouping val="standard"/>${ser(0, 'B', numRef('Data!$B$2:$B$4', [1, 1, 1]))}${extra}<c:axId val="1"/><c:axId val="2"/></c:lineChart>${AXES}`
+
+  test('three series of 50,000 points each are drawn (no spread past the argument limit)', async () => {
+    const { model } = await modelOf(await withChart(CLUSTERED))
+    const g = model!.groups[0]
+    const big = Array.from({ length: 50_000 }, (_, k) => k % 97)
+    g.series = [0, 1, 2].map((i) => ({ ...g.series[i % g.series.length], values: big, cats: big.map(String) }))
+    expect(() => renderChart(model!, 400, 260)).not.toThrow()
+  })
+
+  test('a log X axis places 10 halfway between 1 and 100', async () => {
+    const xy = `<c:ser><c:idx val="0"/><c:order val="0"/><c:tx>${strRef('Data!$B$1', ['y'])}</c:tx><c:marker><c:symbol val="circle"/></c:marker><c:xVal>${numRef('Data!$B$2:$B$4', [0, 0, 0])}</c:xVal><c:yVal>${numRef('Data!$C$2:$C$4', [0, 0, 0])}</c:yVal></c:ser>`
+    const plot = `<c:scatterChart><c:scatterStyle val="marker"/>${xy}<c:axId val="1"/><c:axId val="2"/></c:scatterChart><c:valAx><c:axId val="1"/><c:scaling><c:logBase val="10"/></c:scaling><c:axPos val="b"/><c:crossAx val="2"/></c:valAx><c:valAx><c:axId val="2"/><c:axPos val="l"/><c:crossAx val="1"/></c:valAx>`
+    const { model } = await modelOf(await withChart(plot))
+    model!.groups[0].series[0].xs = [1, 10, 100]
+    model!.legend = undefined
+    const xs = [...renderChart(model!, 400, 260).matchAll(/<circle cx="([\d.]+)"/g)].map((m) => Number(m[1]))
+    expect(xs.length).toBe(3)
+    expect(Math.abs(xs[1] - (xs[0] + xs[2]) / 2)).toBeLessThan(1)
+  })
+
+  test('a log value axis takes its bounds from the positive values; zero is left out', async () => {
+    const { model } = await modelOf(await withChart(LINE()))
+    model!.groups[0].series[0].values = [0, 10, 100]
+    model!.axes.find((a) => a.kind === 'val')!.logBase = 10
+    const svg = renderChart(model!, 400, 260)
+    expect(svg).not.toMatch(/E-1[0-2]</)
+    expect(svg).toContain('>10<')
+  })
+
+  test('a point\'s own color follows it when a hidden row before it is left out', async () => {
+    const pt = `<c:dPt><c:idx val="2"/><c:spPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></c:spPr></c:dPt>`
+    const plot = `<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>${ser(0, 'B', numRef('Data!$B$2:$B$4', [1, 1, 1]), pt)}<c:axId val="1"/><c:axId val="2"/></c:barChart>${AXES}`
+    // row 3 holds Q2, the second point: Q3 (point 2 in the file) becomes the second point shown
+    const { model } = await modelOf(await withChart(plot, { hideRow: 3 }))
+    const s = model!.groups[0].series[0]
+    expect(s.values).toEqual([10, 15])
+    expect(s.points[1]?.color?.toLowerCase()).toBe('#ff0000')
+    expect(s.points[2]).toBeUndefined()
+  })
+
+  test('a line chart that turns its markers off has none on series without their own', async () => {
+    const { model } = await modelOf(await withChart(LINE('<c:marker val="0"/>')))
+    expect(model!.groups[0].series[0].marker).toBeNull()
+    const { model: on } = await modelOf(await withChart(LINE()))
+    expect(on!.groups[0].series[0].marker).not.toBeNull()
+  })
+})

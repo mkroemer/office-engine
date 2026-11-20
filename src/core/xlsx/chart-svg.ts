@@ -44,6 +44,20 @@ const linePaint = (l: LineLook): Paint => ({ stroke: l.color, sw: Math.max(0.75,
 
 const fmt = (v: number, f: string | undefined, date1904: boolean) => formatValue(v, f || 'General', date1904).text
 
+// a chart's values run to tens of thousands: spread into Math.min / Math.max they exceed the engine's argument limit
+/** the smallest of `xs` (Infinity for none), as Math.min */
+function lowest(xs: readonly number[]): number {
+  let m = Infinity
+  for (const x of xs) if (x < m) m = x
+  return m
+}
+/** the largest of `xs` (-Infinity for none), as Math.max */
+function highest(xs: readonly number[]): number {
+  let m = -Infinity
+  for (const x of xs) if (x > m) m = x
+  return m
+}
+
 /** Excel's automatic bounds: zero kept in view unless the values sit far from it, a step of 1, 2 or 5 × 10ⁿ */
 export function niceScale(lo: number, hi: number, opts: { min?: number; max?: number; major?: number; zero?: boolean; ticks?: number } = {}): Scale {
   if (!Number.isFinite(lo) || !Number.isFinite(hi)) (lo = 0), (hi = 1)
@@ -81,6 +95,15 @@ function logScale(lo: number, hi: number, base: number, opts: { min?: number; ma
   for (let v = p0; v <= p1 * 1.0001 && ticks.length < 60; v *= b) ticks.push(v)
   return { min: p0, max: p1, ticks, log: b }
 }
+
+/** a log axis over `values`: its bounds from the positive ones alone (a log axis has no place for zero or less) */
+function logFor(values: readonly (number | null)[], base: number, opts: { min?: number; max?: number }): Scale {
+  const pos = values.filter((v): v is number => v !== null && v > 0)
+  return logScale(pos.length ? lowest(pos) : 1, pos.length ? highest(pos) : base, base, opts)
+}
+
+/** a value a scale can place: anything on a linear one, only positive values on a log one */
+const placeable = (s: Scale, v: number) => !s.log || v > 0
 
 /** a value's position along an axis: 0 at its minimum, 1 at its maximum */
 function frac(s: Scale, v: number): number {
@@ -301,7 +324,7 @@ function drawLegend(svg: Svg, entries: LegendEntry[], box: Box, vertical: boolea
 function legendSize(entries: LegendEntry[], vertical: boolean, size: number, maxW: number, bold?: boolean): { w: number; h: number } {
   const lh = lineHeight(size) + 2
   const widths = entries.map((e) => size * 0.8 * (e.line || e.marker ? 1.6 : 1) + 4 + textWidth(e.label, size, bold) + 12)
-  if (vertical) return { w: Math.min(maxW, Math.max(0, ...widths)), h: entries.length * lh }
+  if (vertical) return { w: Math.min(maxW, Math.max(0, highest(widths))), h: entries.length * lh }
   let rows = 1
   let x = 0
   for (const w of widths) {
@@ -318,7 +341,7 @@ function drawPie(svg: Svg, m: ChartModel, g: ChartGroup, box: Box) {
   const rings = g.type === 'doughnut' ? g.series : g.series.slice(0, 1)
   const s0 = rings[0]
   // slices are exploded only where there is one ring
-  const exploded = rings.length === 1 ? Math.max(0, ...Object.values(s0.points).map((p) => p.explosion ?? 0)) : 0
+  const exploded = rings.length === 1 ? Math.max(0, highest(Object.values(s0.points).map((p) => p.explosion ?? 0))) : 0
   const outside = !!s0.labels && (s0.labels.pos === 'outEnd' || s0.labels.pos === 'bestFit')
   const r = Math.max(4, (Math.min(box.w, box.h) / 2) * (outside ? 0.75 : 0.92) / (1 + exploded / 100))
   const cx = box.x + box.w / 2
@@ -403,7 +426,7 @@ function extent(g: ChartGroup): [number, number] {
   if (isStacked(g) && g.type !== 'line') {
     let lo = 0
     let hi = 0
-    const n = Math.max(0, ...g.series.map((s) => s.values.length))
+    const n = Math.max(0, highest(g.series.map((s) => s.values.length)))
     for (let k = 0; k < n; k++) {
       let p = 0
       let q = 0
@@ -419,8 +442,8 @@ function extent(g: ChartGroup): [number, number] {
   }
   const all = g.series.flatMap((s) => (isStacked(g) ? cumulative(g, s) : s.values)).filter((v): v is number => v !== null)
   if (!all.length) return [0, 1]
-  const lo = Math.min(...all)
-  const hi = Math.max(...all)
+  const lo = lowest(all)
+  const hi = highest(all)
   return g.type === 'bubble' ? bubbleRoom(lo, hi) : [lo, hi]
 }
 
@@ -518,35 +541,44 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
   const valIds = [...new Set(groups.map((g) => g.axIds[1]).filter(Boolean))]
   const plans = new Map<string, AxisPlan>()
   const cats = groups.find((g) => !xValued(g))?.series[0]?.cats ?? []
-  const n = Math.max(1, ...groups.filter((g) => !xValued(g)).flatMap((g) => g.series.map((s) => s.values.length)))
+  const n = Math.max(1, highest(groups.filter((g) => !xValued(g)).flatMap((g) => g.series.map((s) => s.values.length))))
   const valLen = horizontal ? area.w : area.h
   for (const id of valIds) {
     const a = axis(id)
     const on = groups.filter((g) => g.axIds[1] === id)
     const ext = on.map(extent)
-    const lo = Math.min(...ext.map((e) => e[0]))
-    const hi = Math.max(...ext.map((e) => e[1]))
+    const lo = lowest(ext.map((e) => e[0]))
+    const hi = highest(ext.map((e) => e[1]))
     const pct = on.some((g) => g.grouping === 'percentStacked')
     // an axis of 100% stacks alone ends at 100% (and -100%), with no headroom above
     const whole = on.every((g) => g.grouping === 'percentStacked')
     const scale = a?.logBase
-      ? logScale(lo, hi, a.logBase, a)
+      ? logFor(on.flatMap((g) => g.series.flatMap((s) => s.values)), a.logBase, a)
       : niceScale(lo, hi, { min: a?.min ?? (whole ? lo : undefined), max: a?.max ?? (whole ? hi : undefined), major: a?.major, ticks: Math.round(valLen / 40) })
     const f = a?.format ?? (pct ? '0%' : on[0]?.series.find((s) => s.format)?.format)
     plans.set(id, { axis: a ?? fallbackAxis(id, horizontal ? 'b' : 'l'), scale: { ...scale, format: f }, labels: scale.ticks.map((t) => fmt(t, f, m.date1904)) })
   }
-  // scatter and bubbles: their x axis is a value axis too
+  // scatter and bubbles: their x axis is a value axis too, a scale per axis (a secondary group can have its own)
   const scatter = groups.find(xValued)
-  let xPlan: AxisPlan | null = null
-  if (scatter) {
-    const xs = scatter.series.flatMap((s) => (s.xs ?? []).filter((v): v is number => v !== null))
-    const a = axis(scatter.axIds[0])
-    const known = xs.length ? xs : scatter.series[0].values.map((_, k) => k + 1)
-    const [lo, hi] = scatter.type === 'bubble' ? bubbleRoom(Math.min(...known), Math.max(...known)) : [Math.min(...known), Math.max(...known)]
-    const sc = niceScale(lo, hi, { min: a?.min, max: a?.max, major: a?.major, ticks: Math.round(area.w / 70) })
-    const f = a?.format ?? scatter.series[0]?.format
-    xPlan = { axis: a ?? fallbackAxis(scatter.axIds[0], 'b'), scale: { ...sc, format: f }, labels: sc.ticks.map((t) => fmt(t, f, m.date1904)) }
+  const xPlans = new Map<string, AxisPlan>()
+  for (const g of groups.filter(xValued)) {
+    const id = g.axIds[0]
+    if (xPlans.has(id)) continue
+    const on = groups.filter((x) => xValued(x) && x.axIds[0] === id)
+    const a = axis(id)
+    // a series without X values is numbered 1, 2, 3, ...
+    const xs = on.flatMap((x) => x.series.flatMap((s) => s.xs ?? s.values.map((_, k) => k + 1))).filter((v): v is number => v !== null)
+    let sc: Scale
+    if (a?.logBase) sc = logFor(xs, a.logBase, a)
+    else {
+      const [lo, hi] = on.some((x) => x.type === 'bubble') ? bubbleRoom(lowest(xs), highest(xs)) : [lowest(xs), highest(xs)]
+      sc = niceScale(lo, hi, { min: a?.min, max: a?.max, major: a?.major, ticks: Math.round(area.w / 70) })
+    }
+    const f = a?.format ?? on[0].series[0]?.format
+    xPlans.set(id, { axis: a ?? fallbackAxis(id, 'b'), scale: { ...sc, format: f }, labels: sc.ticks.map((t) => fmt(t, f, m.date1904)) })
   }
+  // the first group's X axis is the one drawn
+  const xPlan = scatter ? (xPlans.get(scatter.axIds[0]) ?? null) : null
   const catAxis = axis(groups.find((g) => !xValued(g))?.axIds[0] ?? '')
   const showCats = !!cats.length && !scatter && !(catAxis?.deleted ?? false) && (catAxis?.labels ?? true)
   const primary = valIds.find((id) => !['r', 't'].includes(plans.get(id)!.axis.pos)) ?? valIds[0]
@@ -559,11 +591,11 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
 
   // room for labels and axis titles
   const shows = (p: AxisPlan | undefined) => !!p && !p.axis.deleted && p.axis.labels
-  const valW = (p: AxisPlan | undefined) => (shows(p) ? Math.max(...p!.labels.map((l) => textWidth(l, look(p!.axis).size, look(p!.axis).bold))) + 6 : 0)
-  const catW = showCats ? Math.min(area.w * 0.35, Math.max(...cats.map((c) => textWidth(c, catT.size, catT.bold)))) + 6 : 0
+  const valW = (p: AxisPlan | undefined) => (shows(p) ? highest(p!.labels.map((l) => textWidth(l, look(p!.axis).size, look(p!.axis).bold))) + 6 : 0)
+  const catW = showCats ? Math.min(area.w * 0.35, highest(cats.map((c) => textWidth(c, catT.size, catT.bold)))) + 6 : 0
   const titleH = (a: ChartAxis | undefined) => (a?.title && !a.deleted ? lineHeight(a.title.size * PX) + 4 : 0)
   // category labels too wide to stand side by side are tilted by 45°, as Excel does
-  const catTextW = showCats ? Math.max(...cats.map((c) => textWidth(c, catT.size, catT.bold))) : 0
+  const catTextW = showCats ? highest(cats.map((c) => textWidth(c, catT.size, catT.bold))) : 0
   const tilt = showCats && !horizontal && catTextW + 2 > (area.w * 0.85) / n
   const catBottom = tilt ? Math.min(area.h * 0.4, catTextW * Math.SQRT1_2 + catLh) : catLh + 4
   let inner: Box
@@ -601,7 +633,8 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
     const i = horizontal !== catReverse ? n - 1 - k : k
     return (horizontal ? inner.y : inner.x) + (i + 0.5) * band
   }
-  const xPos = (v: number) => inner.x + (xPlan!.axis.reverse ? 1 - frac(xPlan!.scale, v) : frac(xPlan!.scale, v)) * inner.w
+  const xPosOf = (pl: AxisPlan) => (v: number) => inner.x + (pl.axis.reverse ? 1 - frac(pl.scale, v) : frac(pl.scale, v)) * inner.w
+  const xPos = xPlan ? xPosOf(xPlan) : () => inner.x
 
   // gridlines and value labels
   for (const id of valIds) {
@@ -689,8 +722,11 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
     else if (g.type === 'area') drawArea(svg, g, p, { valPos, catMid })
     else if (g.type === 'line') drawLines(svg, m, g, p, { valPos, catMid, size })
     else if (g.type === 'stock') drawStock(svg, m, g, p, { valPos, catMid, band, size })
-    else if (g.type === 'scatter' && xPlan) drawScatter(svg, m, g, p, { valPos, xPos, size })
-    else if (g.type === 'bubble' && xPlan) drawBubbles(svg, m, g, p, { valPos, xPos, size, plot: inner })
+    else if (xValued(g) && xPlans.has(g.axIds[0])) {
+      const xp = xPlans.get(g.axIds[0])!
+      if (g.type === 'scatter') drawScatter(svg, m, g, p, { valPos, xPos: xPosOf(xp), xLog: !!xp.scale.log, size })
+      else drawBubbles(svg, m, g, p, { valPos, xPos: xPosOf(xp), xLog: !!xp.scale.log, size, plot: inner })
+    }
   }
   svg.raw('</g>')
 }
@@ -730,7 +766,7 @@ function drawBars(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo 
   const w = band / (n - (n - 1) * ov + g.gapWidth / 100)
   const total = n * w - (n - 1) * w * ov
   const base = baseline(p.scale)
-  const len = Math.max(...g.series.map((s) => s.values.length))
+  const len = highest(g.series.map((s) => s.values.length))
   // one gradient or pattern per series (and per point with its own), shared by its bars
   const paints = g.series.map((s) => fillPaint(svg, s.fill, s.look))
   for (let k = 0; k < len; k++) {
@@ -739,7 +775,7 @@ function drawBars(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo 
     const tot = g.grouping === 'percentStacked' ? g.series.reduce((a, s) => a + Math.abs(s.values[k] ?? 0), 0) || 1 : 1
     g.series.forEach((s, i) => {
       const raw = s.values[k]
-      if (raw === null || raw === undefined) return
+      if (raw === null || raw === undefined || !placeable(p.scale, raw)) return
       const v = raw / tot
       let from = base
       let to = v
@@ -785,8 +821,8 @@ function drawArea(svg: Svg, g: ChartGroup, p: AxisPlan, geo: Geo) {
 function drawLines(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo & { size: number }) {
   const { valPos, catMid } = geo
   for (const s of g.series) {
-    const vals = isStacked(g) ? cumulative(g, s) : s.values
-    // empty cells leave a gap in the line
+    // empty cells leave a gap in the line, as do values a log axis cannot place
+    const vals = (isStacked(g) ? cumulative(g, s) : s.values).map((v) => (v !== null && placeable(p.scale, v) ? v : null))
     const runs: Pt[][] = [[]]
     vals.forEach((v, k) => {
       if (v === null) runs.push([])
@@ -807,12 +843,12 @@ function drawLines(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo
 /** a stock chart: each category's high-low line, its up-down bar from the first series to the last, then the series */
 function drawStock(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo & { band: number; size: number }) {
   const { valPos, catMid, band } = geo
-  const n = Math.max(0, ...g.series.map((s) => s.values.length))
+  const n = Math.max(0, highest(g.series.map((s) => s.values.length)))
   for (let k = 0; k < n; k++) {
     const vs = g.series.map((s) => s.values[k]).filter((v): v is number => v !== null && v !== undefined)
     if (!vs.length) continue
     const x = catMid(k)
-    if (g.hiLow) svg.line(x, valPos(p, Math.max(...vs)), x, valPos(p, Math.min(...vs)), linePaint(g.hiLow))
+    if (g.hiLow) svg.line(x, valPos(p, highest(vs)), x, valPos(p, lowest(vs)), linePaint(g.hiLow))
     const open = g.series[0]?.values[k]
     const close = g.series.at(-1)?.values[k]
     if (g.upDown && g.series.length > 1 && open !== null && open !== undefined && close !== null && close !== undefined) {
@@ -826,8 +862,8 @@ function drawStock(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo
   drawLines(svg, m, g, p, geo)
 }
 
-function drawScatter(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: { valPos: Geo['valPos']; xPos: (v: number) => number; size: number }) {
-  const { valPos, xPos } = geo
+function drawScatter(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: { valPos: Geo['valPos']; xPos: (v: number) => number; xLog: boolean; size: number }) {
+  const { valPos, xPos, xLog } = geo
   const lines = g.scatterStyle !== 'marker' && g.scatterStyle !== 'none'
   for (const s of g.series) {
     const pts: (Pt & { k: number })[] = []
@@ -835,6 +871,8 @@ function drawScatter(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: {
       // without X values the points are numbered; with them, a point missing its X is not drawn
       const xv = s.xs ? s.xs[k] : k + 1
       if (v === null || xv === null || xv === undefined) return
+      // a log axis has no place for zero or less
+      if (!placeable(p.scale, v) || (xLog && xv <= 0)) return
       pts.push({ x: xPos(xv), y: valPos(p, v), k })
     })
     if (lines && s.line && pts.length > 1) svg.path(linePath(pts, s.smooth || g.scatterStyle === 'smooth' || g.scatterStyle === 'smoothMarker'), linePaint(s.line))
@@ -851,9 +889,9 @@ function drawScatter(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: {
  * (or width) in proportion; larger ones drawn first so smaller ones stay in view. A negative size is drawn as an
  * outline where the chart shows negative bubbles, else not at all.
  */
-function drawBubbles(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: { valPos: Geo['valPos']; xPos: (v: number) => number; size: number; plot: Box }) {
-  const { valPos, xPos, plot } = geo
-  const biggest = Math.max(0, ...g.series.flatMap((s) => (s.sizes ?? []).map((z) => Math.abs(z ?? 0))))
+function drawBubbles(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: { valPos: Geo['valPos']; xPos: (v: number) => number; xLog: boolean; size: number; plot: Box }) {
+  const { valPos, xPos, xLog, plot } = geo
+  const biggest = Math.max(0, highest(g.series.flatMap((s) => (s.sizes ?? []).map((z) => Math.abs(z ?? 0)))))
   if (!biggest) return
   const maxR = ((Math.min(plot.w, plot.h) / 4) * ((g.bubbleScale ?? 100) / 100)) / 2
   const radius = (z: number) => (g.sizeRepresents === 'w' ? (maxR * Math.abs(z)) / biggest : maxR * Math.sqrt(Math.abs(z) / biggest))
@@ -865,6 +903,7 @@ function drawBubbles(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: {
       const z = s.sizes?.[k]
       if (v === null || xv === null || xv === undefined || z === null || z === undefined || z === 0) return
       if (z < 0 && !g.showNegBubbles) return
+      if (!placeable(p.scale, v) || (xLog && xv <= 0)) return
       pts.push({ x: xPos(xv), y: valPos(p, v), r: Math.max(1, radius(z)), k, neg: z < 0 })
     })
     pts.sort((a, b) => b.r - a.r)
@@ -885,16 +924,16 @@ function drawRadar(svg: Svg, m: ChartModel, g: ChartGroup, box: Box, size: numbe
   const a = m.axes.find((x) => x.id === g.axIds[1])
   const catAxis = m.axes.find((x) => x.id === g.axIds[0])
   const cats = g.series[0]?.cats ?? []
-  const n = Math.max(3, ...g.series.map((s) => s.values.length))
+  const n = Math.max(3, highest(g.series.map((s) => s.values.length)))
   const catT = textOf(m, catAxis?.text)
   const valT = textOf(m, a?.text)
   const showCats = !(catAxis?.deleted ?? false) && (catAxis?.labels ?? true)
-  const labelW = showCats ? Math.max(0, ...cats.map((c) => textWidth(c, catT.size, catT.bold))) : 0
+  const labelW = showCats ? Math.max(0, highest(cats.map((c) => textWidth(c, catT.size, catT.bold)))) : 0
   const R = Math.max(10, Math.min(box.w / 2 - labelW - 8, box.h / 2 - lineHeight(catT.size) - 6))
   const cx = box.x + box.w / 2
   const cy = box.y + box.h / 2
   const all = g.series.flatMap((s) => s.values).filter((v): v is number => v !== null)
-  const scale = niceScale(all.length ? Math.min(...all) : 0, all.length ? Math.max(...all) : 1, { min: a?.min, max: a?.max, major: a?.major, ticks: Math.max(2, Math.round(R / 30)) })
+  const scale = niceScale(all.length ? lowest(all) : 0, all.length ? highest(all) : 1, { min: a?.min, max: a?.max, major: a?.major, ticks: Math.max(2, Math.round(R / 30)) })
   const f = a?.format ?? g.series.find((s) => s.format)?.format
   const ang = (k: number) => -Math.PI / 2 + (2 * Math.PI * k) / n
   const at = (k: number, v: number): [number, number] => {
@@ -947,7 +986,7 @@ interface Band {
 function surfaceBands(g: ChartGroup, m: ChartModel): Band[] {
   const a = m.axes.find((x) => x.kind === 'val' && g.axIds.includes(x.id))
   const all = g.series.flatMap((s) => s.values).filter((v): v is number => v !== null)
-  const s = niceScale(all.length ? Math.min(...all) : 0, all.length ? Math.max(...all) : 1, { min: a?.min, max: a?.max, major: a?.major, ticks: 6 })
+  const s = niceScale(all.length ? lowest(all) : 0, all.length ? highest(all) : 1, { min: a?.min, max: a?.max, major: a?.major, ticks: 6 })
   const f = a?.format ?? g.series.find((x) => x.format)?.format
   const out: Band[] = []
   for (let k = 0; k + 1 < s.ticks.length && out.length < SURFACE_BANDS; k++) {
@@ -966,7 +1005,7 @@ function drawSurface(svg: Svg, m: ChartModel, g: ChartGroup, area: Box, fixed: B
   const bands = surfaceBands(g, m)
   if (!bands.length) return
   const rows = g.series.map((s) => s.values.map((v) => v ?? 0))
-  const cols = Math.max(1, ...rows.map((r) => r.length))
+  const cols = Math.max(1, highest(rows.map((r) => r.length)))
   // a single row or column is stretched into a strip
   const grid = rows.length > 1 ? rows : [rows[0] ?? [], rows[0] ?? []]
   const z = grid.map((r) => (cols > 1 ? Array.from({ length: cols }, (_, c) => r[c] ?? 0) : [r[0] ?? 0, r[0] ?? 0]))
@@ -980,7 +1019,7 @@ function drawSurface(svg: Svg, m: ChartModel, g: ChartGroup, area: Box, fixed: B
   const showSer = !(serAxis?.deleted ?? false) && (serAxis?.labels ?? true)
   const names = g.series.map((s) => s.name)
   const cats = g.series[0]?.cats ?? []
-  const left = showSer ? Math.max(0, ...names.map((x) => textWidth(x, serT.size, serT.bold))) + 8 : 0
+  const left = showSer ? Math.max(0, highest(names.map((x) => textWidth(x, serT.size, serT.bold)))) + 8 : 0
   const bottom = showCats ? lineHeight(catT.size) + 6 : 0
   const inner = fixed ?? { x: area.x + left, y: area.y + lineHeight(size) / 2, w: Math.max(10, area.w - left - 8), h: Math.max(10, area.h - bottom - lineHeight(size) / 2) }
   plotArea(svg, m, inner)
@@ -1032,7 +1071,7 @@ function drawSurface(svg: Svg, m: ChartModel, g: ChartGroup, area: Box, fixed: B
   }
   const o = (t: { size: number; color: string; bold?: boolean }) => ({ size: t.size, color: t.color, bold: t.bold })
   if (showCats) {
-    const every = Math.max(1, Math.ceil((Math.max(0, ...cats.map((c) => textWidth(c, catT.size))) + 6) / (inner.w / Math.max(1, nx - 1))))
+    const every = Math.max(1, Math.ceil((Math.max(0, highest(cats.map((c) => textWidth(c, catT.size)))) + 6) / (inner.w / Math.max(1, nx - 1))))
     cats.forEach((c, i) => i % every || i >= nx || svg.text(X(i), inner.y + inner.h + 4 + lineHeight(catT.size) / 2, c, { ...o(catT), anchor: 'middle' }))
   }
   if (showSer && rows.length > 1) names.forEach((s, j) => svg.text(inner.x - 4, Y(j), s, { ...o(serT), anchor: 'end' }))
