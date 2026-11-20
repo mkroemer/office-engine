@@ -117,13 +117,15 @@ describe('DOCX conversion state notifications (#19)', () => {
     expect(ed.para(sel.a.pa)?.ps.align).toBe('right')
   })
 
-  test('an edit with no returned conversion or marker changes keeps its synchronous notification', async () => {
+  test('an edit with no returned conversion or marker changes keeps its synchronous notification; its answer only ends busy (#29)', async () => {
     const { ed, states } = await editor()
     ed.toggle('b')
     const count = states.length
+    expect(states.at(-1)).toMatchObject({ state: { b: true }, busy: true })
     await settle(ed)
-    expect(states).toHaveLength(count)
-    expect(states.at(-1)?.state?.b).toBe(true)
+    // the same formatting, told once more so that the toolbar does not stay busy
+    expect(states).toHaveLength(count + 1)
+    expect(states.at(-1)).toEqual({ state: states.at(-2)!.state, busy: false })
   })
 })
 
@@ -204,8 +206,12 @@ describe('DOCX conversion answers that cross other edits (#26, #29)', () => {
     await settle(ed)
     const p = ed.para(sel.a.pa)!
     expect([p.ps.align, p.lst, p.marker?.text]).toEqual(['right', 'bullet', '•'])
-    // published with the second answer (the first one still on its way); the first one, obsolete, publishes nothing
-    expect(states.at(-1)).toMatchObject({ state: { align: 'right', lst: 'bullet' }, busy: true })
+    // published with the second answer (the first one still on its way); the first one, obsolete and the last in,
+    // tells the same state once more, no longer busy (#29)
+    expect(states.slice(-2)).toEqual([
+      { state: expect.objectContaining({ align: 'right', lst: 'bullet' }), busy: true },
+      { state: expect.objectContaining({ align: 'right', lst: 'bullet' }), busy: false },
+    ])
   })
 
   test('an obsolete list answer publishes nothing: a list turned on and undone never shows as on (#29)', async () => {
@@ -222,6 +228,27 @@ describe('DOCX conversion answers that cross other edits (#26, #29)', () => {
       { lst: undefined, busy: true },
       { lst: undefined, busy: false },
     ])
+    expect(ed.para(sel.a.pa)?.lst).toBeUndefined()
+    expect(ed.para(sel.a.pa)?.marker).toBeUndefined()
+  })
+
+  test('the undo answered before the list it undoes: no list shown, and the last notification is not busy (#29)', async () => {
+    const { client, ed, sel, states } = await editor()
+    const pending = holdEdits(client)
+    ed.toggleList('bullet')
+    ed.undo()
+    await deliver(pending, 1)
+    await deliver(pending, 0)
+    await settle(ed)
+    // the list asked for, the undo, the undo's conversion (the list's answer still out), then that obsolete answer,
+    // the last in: the model as it stands, no longer busy
+    expect(states.map((s) => ({ lst: s.state?.lst, busy: s.busy }))).toEqual([
+      { lst: undefined, busy: true },
+      { lst: undefined, busy: true },
+      { lst: undefined, busy: true },
+      { lst: undefined, busy: false },
+    ])
+    expect(states.at(-1)).toEqual({ state: ed.state(sel), busy: false })
     expect(ed.para(sel.a.pa)?.lst).toBeUndefined()
     expect(ed.para(sel.a.pa)?.marker).toBeUndefined()
   })
@@ -287,7 +314,8 @@ describe('DOCX conversion answers during an IME composition (#28)', () => {
     const count = states.length
     await deliver(pending, 0)
     expect(ed.input.isComposing).toBe(true)
-    // nothing rebuilt under the composition, nothing published
+    // nothing rebuilt under the composition, nothing published (not even "no longer busy": the answer is not taken in)
+    expect(ed.busy).toBe(false)
     expect(ed.para(hire)?.lst).toBe('number')
     expect(states).toHaveLength(count)
     ime.end('ă')
@@ -298,8 +326,11 @@ describe('DOCX conversion answers during an IME composition (#28)', () => {
     // the composed text, then the answer applied at its end
     expect(states).toHaveLength(count + 2)
     expect(states.at(-1)).toEqual({ state: ed.state(ed.input.sel()), busy: true })
+    // the composed text's own answer, the last in, ends busy
     await deliver(pending, 1)
     await settle(ed)
+    expect(states).toHaveLength(count + 3)
+    expect(states.at(-1)).toEqual({ state: ed.state(ed.input.sel()), busy: false })
     expect(lists(st.blocks)).toEqual(lists((await editor(await client.call('save'))).st.blocks))
   })
 })

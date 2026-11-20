@@ -544,8 +544,10 @@ export class DocxEditor implements RichHost<Paragraph> {
       .finally(() => this.inflight--)
       .then((res) => {
         // Conversion can change the look after replace's optimistic notification. Use the selection now,
-        // after completing the edit, so the toolbar also sees the current history and busy state.
-        if (this.applyResult(res, seq)) this.emitState(this.input.sel())
+        // after completing the edit, so the toolbar also sees the current history and busy state. The last answer
+        // in is told even when it changed nothing (an obsolete one): what is published then is the model as it
+        // stands, no longer busy, never the look of an obsolete answer.
+        if (this.applyResult(res, seq) || this.settled) this.emitState(this.input.sel())
       })
       // (a listener that throws included: reported here, not left as an unhandled rejection)
       .catch((e) => console.error('[office-engine] edit failed', e))
@@ -553,6 +555,14 @@ export class DocxEditor implements RichHost<Paragraph> {
 
   get busy() {
     return this.inflight > 0
+  }
+
+  /**
+   * Every write answered and taken in. An answer held for an IME composition is not: the state is published when the
+   * composition ends and the answer is applied (composed), not before, with the look it is about to replace.
+   */
+  private get settled() {
+    return !this.inflight && !this.held.length
   }
 
   /**
@@ -763,7 +773,7 @@ export class DocxEditor implements RichHost<Paragraph> {
   composed() {
     let applied = false
     for (const { res, seq } of this.held.splice(0)) applied = this.applyResult(res, seq) || applied
-    if (applied) this.emitState(this.input.sel())
+    if (applied || this.settled) this.emitState(this.input.sel())
   }
 
   // ---------------------------------------------------------------- history
