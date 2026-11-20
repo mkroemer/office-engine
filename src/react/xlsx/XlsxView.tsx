@@ -1198,7 +1198,9 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
       const res = await p
       store.applied(res, meta)
       const h = store.history
-      if (res) {
+      // the worker's own count where it gives one: an edit that changed nothing records no step
+      if (res?.history) store.history = res.history
+      else if (res) {
         if (kind === 'edit') store.history = { undo: h.undo + 1, redo: 0 }
         else if (kind === 'undo') store.history = { undo: Math.max(0, h.undo - 1), redo: h.redo + 1 }
         else store.history = { undo: h.undo + 1, redo: Math.max(0, h.redo - 1) }

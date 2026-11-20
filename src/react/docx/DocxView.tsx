@@ -767,6 +767,11 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   // the heading jumped to counts as current while its page is the one in view, though it may sit
   // below headings further up that page
   const [jumpBi, setJumpBi] = useState(-1)
+  // until the caret goes somewhere else on that page: then the heading above the caret is current again
+  useEffect(() => {
+    if (caretBi >= 0 && caretBi !== jumpBi) setJumpBi(-1)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [caretBi])
   const curPage = pages[Math.max(0, cur - 1)]
   const topBlock = curPage?.start ?? 0
   const jumped = curPage && jumpBi >= curPage.start && jumpBi < curPage.end ? jumpBi : -1
@@ -925,7 +930,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
           </div>
         )}
       </div>
-      {outline && (
+      {outline && !headless && (
         <nav className="de-outline" aria-label={str.docx.outline}>
           <div className="de-outline-head">
             <span>{str.docx.outlineHead}</span>
