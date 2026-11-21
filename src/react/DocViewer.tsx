@@ -19,6 +19,8 @@ import { injectStyles } from './injectStyles'
 import { isTextEntry, useSize } from './common/hooks'
 import { useThemeRoot, type Theme } from './theme'
 import { SourceEditor } from './source/SourceEditor'
+import { CodeView } from './source/CodeView'
+import { LANGUAGE_EXT, LANGUAGE_NAME, languageOf } from '../core/syntax'
 import { PictureView } from './picture/PictureView'
 import { PptxView } from './pptx/PptxView'
 import { useDocument } from './useDocument'
@@ -28,17 +30,27 @@ import { CollabBar, PeerOverlay, useCollab } from '../collab/react'
 import { CommentsContext, CommentsCtl, useCommentsState, type CommentOptions } from './comments/Comments'
 import { COMMENT_KEYS, CommentsPanel } from './comments/CommentsPanel'
 import { formatBytes, StringsProvider, useStrings, type Locale, type StringsOverride } from './strings'
+import { LocaleContext } from './common/locale'
+import { inputLocale } from '../core/number-input'
+import type { FontSource } from '../core/fonts'
+import { FontsContext, useHostFonts } from './common/fonts'
 
 export interface DocViewerProps {
   /**
    * File, Blob, ArrayBuffer, Uint8Array or URL (HTTP Range requests are used when the server supports them): an Office file,
    * an Apple Pages / Keynote / Numbers file or a Microsoft Visio drawing (view only), CSV / TSV / text / Markdown / HTML (opened as a
    * workbook / document),
-   * an SVG picture or a Mermaid / PlantUML / Graphviz diagram.
+   * an SVG picture, a Mermaid / PlantUML / Graphviz diagram, or a source file (main.ts, script.py, config.json…: shown as code).
    */
   src: DocSource | null | undefined
   /** Display name (defaults to File.name or the URL's last segment); its extension also tells the format of a source without one. */
   name?: string
+  /**
+   * The file is source code in this language ("typescript", "ts", "python", "c++"…): a text file opens in the code
+   * view, colored in it, whatever its name and MIME type say (a language the viewer does not color is shown plain).
+   * Without it, a source file is told by its name's extension or its MIME type.
+   */
+  language?: string
   className?: string
   style?: CSSProperties
   /** Show the top bar (name, status, progress). Default true. */
@@ -119,7 +131,11 @@ export interface DocViewerProps {
    * dialogs instead of the built-in ones; each one left out keeps the built-in one. See docs/theming.md.
    */
   components?: Partial<UIComponents>
-  /** BCP 47 number/date formatting tag; defaults to the enclosing table or browser. Does not select UI texts. */
+  /**
+   * BCP 47 tag for number/date display and typed numbers ("de-DE" reads 1,5). An explicitly supplied tag
+   * takes precedence over the table or enclosing StringsProvider. No tag uses a decimal point for input.
+   * This does not select UI texts or change formulas or saved values.
+   */
   locale?: Locale
   /** Texts replacing the enclosing provider's or English texts, key by key (see `Strings`): a group may be given in part, e.g. `{ file: { menu: 'Datei' } }`. */
   strings?: StringsOverride
@@ -134,12 +150,35 @@ export interface DocViewerProps {
    * set explicitly. Default false.
    */
   headless?: boolean
+  /**
+   * Font files the host supplies (the library ships none): `{ family, src, weight?, style?, unicodeRange? }`, `src` a URL
+   * or the bytes. A file is loaded when a document's text names its family, directly (`Calibri`) or as the fallback
+   * the font list puts after it (`Carlito` for Calibri, `Caladea` for Cambria, `Liberation Sans / Serif / Mono` for
+   * Arial, Times New Roman, Courier New); documents are laid out once it is there. One that fails is reported to
+   * `onError`, one slower than 3 s is waited for no longer: the text is shown in the next font of its list, and laid
+   * out again when it arrives.
+   */
+  fonts?: readonly FontSource[]
 }
 
 const EXT: Record<string, string> = { docx: '.docx', xlsx: '.xlsx', pptx: '.pptx' }
-const IMPORTED_BADGE: Record<PlainFormat, string> = { csv: 'csv', tsv: 'tsv', text: 'txt', markdown: 'md', html: 'html', svg: 'svg', mermaid: 'mmd', plantuml: 'puml', graphviz: 'dot' }
-/** plain formats saved back as themselves: Markdown and HTML built again from the document when it was edited, SVG from its text */
-const SAVES_SOURCE = new Set<PlainFormat>(['markdown', 'html', 'svg'])
+const IMPORTED_BADGE: Record<PlainFormat, string> = { csv: 'csv', tsv: 'tsv', text: 'txt', markdown: 'md', html: 'html', svg: 'svg', mermaid: 'mmd', plantuml: 'puml', graphviz: 'dot', code: 'code' }
+/** plain formats saved back as themselves: Markdown and HTML built again from the document when it was edited, SVG and source files from their text */
+const SAVES_SOURCE = new Set<PlainFormat>(['markdown', 'html', 'svg', 'code'])
+/** the language of each plain format shown in the source pane, and what the pane calls it */
+const SOURCE_LANG: Partial<Record<PlainFormat, [string, string]>> = {
+  markdown: ['markdown', 'Markdown'],
+  html: ['html', 'HTML'],
+  svg: ['xml', 'SVG'],
+  mermaid: ['mermaid', 'Mermaid'],
+  plantuml: ['plantuml', 'PlantUML'],
+  graphviz: ['graphviz', 'Graphviz'],
+}
+/** a Word document of source code: one code paragraph in its language (the colors are drawn, not stored) */
+function codeDocx(text: string, language: string): Promise<Blob> {
+  const code = text.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
+  return parasToDocx([{ runs: code ? [{ text: code }] : [], code: language }])
+}
 
 /** a key per opened client: a view is built again for each (the edited source's previews have one name) */
 const clientIds = new WeakMap<object, number>()
@@ -168,7 +207,9 @@ function Viewer(props: DocViewerProps) {
   const ownCtl = useMemo(() => createViewerController(), [])
   const controller = internalController(props.controller ?? ownCtl)
   const ctl = useMemo(() => controller.createBinding(), [controller])
+  const locale = inputLocale(t.locale)
   const root = useThemeRoot(theme, style)
+  const fonts = useHostFonts(props.fonts, onError)
   const { allowEdit = true, allowSave = true, allowDownload = true, fileMenu = true, allowOpen = true, captureSelectAll = true, onSave, onDirtyChange } = props
   const [editing, setEditing] = useState(!!props.editable)
   useEffect(() => {
@@ -191,7 +232,8 @@ function Viewer(props: DocViewerProps) {
   const loadName = opened ? opened.name : name
   // the name is part of what is loaded: Rename only changes what is shown and saved
   // a preview of the edited source keeps the one shown until it is ready
-  const { client, error, loading, progress } = useDocument(opened ? opened.src : src, { name: loadName, headers, credentials, worker }, !!opened?.live)
+  // (the host's language hint is for its own file, not one opened from the File menu)
+  const { client, error, loading, progress } = useDocument(opened ? opened.src : src, { name: loadName, headers, credentials, worker, language: opened ? undefined : props.language }, !!opened?.live)
   // Save ownership follows the document, including a source change before its client is ready.
   const saveSession = useMemo(() => ({ live: true, saving: false, revision: 0 }), [client, src, opened])
   useEffect(() => {
@@ -207,14 +249,18 @@ function Viewer(props: DocViewerProps) {
   const srcFormat = client?.info?.imported
   // an SVG file: the picture alone, read only (its text is edited in the source pane)
   const isPicture = srcFormat === 'svg'
+  // a source file: its code, colored, edited as text (with collaboration: read only, the session shares the document)
+  const isCode = srcFormat === 'code'
+  const codeLang = client?.info?.language ?? ''
   // converted from another format (Apple Pages, Keynote, Numbers, Microsoft Visio): view only
-  const readOnly = !!client?.info?.from || isPicture
+  const readOnly = !!client?.info?.from || isPicture || (isCode && !!props.collab)
   // with collaboration, editing waits for the shared history (offline edits sync on reconnect)
   const canEdit = !readOnly && (!props.collab || collab.status === 'live' || collab.status === 'offline')
   const [statusEl, setStatusEl] = useState<HTMLSpanElement | null>(null)
 
   // ---- source (Markdown, HTML, SVG, diagrams): edited side by side with the document built from it ----
-  const hasSource = !!srcFormat && HAS_SOURCE.has(srcFormat)
+  // (a source file's code is the view itself)
+  const hasSource = !!srcFormat && HAS_SOURCE.has(srcFormat) && !isCode
   const [codeOpen, setCodeOpen] = useState(false)
   const codeShown = codeOpen && hasSource
   // Markdown / HTML / SVG files are saved in their own format; Markdown and HTML are built again from an edited document
@@ -225,6 +271,7 @@ function Viewer(props: DocViewerProps) {
   const fileOps = useRef<FileOps | null>(null)
   const [code, setCode] = useState<string | null>(null)
   const sourceEdited = useRef(false)
+  const crlf = useRef(false)
   const reloadTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => () => clearTimeout(reloadTimer.current), [])
   // another document (not a preview of the edited source): its own source
@@ -237,7 +284,7 @@ function Viewer(props: DocViewerProps) {
   }, [src, opened])
   // the source shown: the file's text, or (Markdown / HTML edited as a document) the text built from the document
   useEffect(() => {
-    if (!client || !codeShown) return
+    if (!client || (!codeShown && !isCode)) return
     const stale = rebuilds && lastEdit.current === 'doc'
     if (code !== null && !stale) return
     let live = true
@@ -255,6 +302,8 @@ function Viewer(props: DocViewerProps) {
         (t) => {
           if (!live) return
           if (stale) lastEdit.current = null
+          // a source file in CRLF: the text edited (LF, as a textarea gives it) is saved in CRLF too
+          if (isCode && code === null) crlf.current = !!t && /\r\n/.test(t) && !/(^|[^\r])\n/.test(t)
           setCode(t ?? '')
         },
         () => {},
@@ -262,7 +311,7 @@ function Viewer(props: DocViewerProps) {
     return () => {
       live = false
     }
-  }, [client, codeShown, code, rebuilds, saveFormat])
+  }, [client, codeShown, isCode, code, rebuilds, saveFormat])
   const [bodyRef, bodySize] = useSize<HTMLDivElement>()
   const mainRef = useRef<HTMLDivElement>(null)
   const stacked = bodySize.w > 0 && bodySize.w < 720
@@ -290,7 +339,7 @@ function Viewer(props: DocViewerProps) {
   }, [client])
 
   // ---- comments ----
-  const cmOn = props.comments !== false && !isPicture
+  const cmOn = props.comments !== false && !isPicture && !isCode
   const cmCtl = useMemo(() => (client && cmOn ? new CommentsCtl(client) : null), [client, cmOn])
   useEffect(() => () => cmCtl?.dispose(), [cmCtl])
   const cmOpts = props.comments || {}
@@ -356,8 +405,10 @@ function Viewer(props: DocViewerProps) {
   // the Office file as it is saved: a workbook with macros stays an .xlsm, a template an .xltx (named otherwise, Excel refuses it)
   const officeExt = client ? (client.info?.ext ? `.${client.info.ext}` : EXT[client.kind]) : ''
   const fileName = baseName + officeExt
-  // what Save writes: the Office file, or a Markdown / HTML / SVG file in its own format
-  const saveExt = saveFormat ? `.${PLAIN_FILE[saveFormat].ext}` : officeExt
+  // what Save writes: the Office file, or a Markdown / HTML / SVG / source file in its own format (a source file keeps its extension)
+  const codeLanguage = LANGUAGE_NAME[languageOf(codeLang) ?? ''] ?? codeLang
+  const codeExt = isCode ? extOf(unpackedName(client?.name ?? '') ?? client?.name) || LANGUAGE_EXT[languageOf(codeLang) ?? ''] || 'txt' : ''
+  const saveExt = isCode ? `.${codeExt}` : saveFormat ? `.${PLAIN_FILE[saveFormat].ext}` : officeExt
   const saveName = baseName + saveExt
   /** the text of a file saved in its own format: the source as edited, or built from the edited document */
   const sourceText = useCallback(async (): Promise<string> => {
@@ -368,8 +419,9 @@ function Viewer(props: DocViewerProps) {
       setCode(text)
       return text
     }
-    return code ?? ((await client.call('plain.source')) as string | null) ?? ''
-  }, [client, rebuilds, saveFormat, code])
+    const text = code ?? ((await client.call('plain.source')) as string | null) ?? ''
+    return isCode && crlf.current ? text.replace(/\r?\n/g, '\r\n') : text
+  }, [client, rebuilds, saveFormat, code, isCode])
   // saving without onSave means downloading
   const canSave = allowSave && (!!onSave || allowDownload)
   const saveFile = useCallback(async (original = false) => {
@@ -380,7 +432,16 @@ function Viewer(props: DocViewerProps) {
       await fileOps.current?.flush?.()
       if (!saveSession.live) return
       const revision = saveSession.revision
-      const blob = !original && saveFormat ? new Blob([await sourceText()], { type: `${PLAIN_FILE[saveFormat].mime};charset=utf-8` }) : await client.call('save')
+      // a source file not edited: its bytes as they came (its encoding, byte order mark and line breaks);
+      // as a Word document: its code as it is now, one code paragraph
+      const kept = !isCode
+        ? null
+        : original
+          ? await codeDocx(await sourceText(), codeLang)
+          : !sourceEdited.current
+            ? ((await client.call('plain.original')) as Blob | null)
+            : null
+      const blob = kept ?? (!original && saveFormat ? new Blob([await sourceText()], { type: `${PLAIN_FILE[saveFormat].mime};charset=utf-8` }) : await client.call('save'))
       if (!saveSession.live) return
       if (!original && onSave) await onSave(blob, saveName)
       else download(blob, original ? fileName : saveName)
@@ -394,7 +455,7 @@ function Viewer(props: DocViewerProps) {
       saveSession.saving = false
       if (saveSession.live) setSaving(false)
     }
-  }, [client, saveSession, canSave, allowDownload, onSave, fileName, saveName, saveFormat, sourceText, setDirty, onError])
+  }, [client, saveSession, canSave, allowDownload, onSave, fileName, saveName, saveFormat, sourceText, setDirty, onError, isCode, codeLang])
   const save = useCallback(() => saveFile(), [saveFile])
   // an edit in the document: its source (Markdown / HTML) is built again when shown or saved
   const setDocDirty = useCallback(
@@ -405,8 +466,8 @@ function Viewer(props: DocViewerProps) {
     [setDirty],
   )
   const selectAll = useRef<(() => void) | null>(null)
-  // next to its source, the document is a preview: it is edited through the source
-  const docEditable = editing && canEdit && !codeShown
+  // next to its source, the document is a preview: it is edited through the source (a source file's code is edited as text)
+  const docEditable = editing && canEdit && !codeShown && !isCode
   const api = useMemo<ViewerApi>(
     () => ({ bar: barEl, editable: docEditable, setDirty: setDocDirty, save, canDownload: allowDownload, client, fileOps, selectAll, ctl: viewCtl, headless }),
     [barEl, docEditable, setDocDirty, save, allowDownload, client, viewCtl, headless],
@@ -429,6 +490,14 @@ function Viewer(props: DocViewerProps) {
       openedDirty.current = true
       setOpened({ src: new Blob([text], { type: PLAIN_FILE[fmt].mime }), name: n, converted: true, live: true })
     }, 350)
+  }
+  // a source file's code as shown and edited: in LF, as a textarea holds it (saved in the file's own line breaks)
+  const shownCode = useMemo(() => (isCode && code !== null ? code.replace(/\r\n?/g, '\n') : null), [isCode, code])
+  /** an edit of a source file's code: what is saved (nothing is built from it) */
+  const editCode = (text: string) => {
+    setCode(text)
+    sourceEdited.current = true
+    setDirty(true)
   }
   const sourceName = () => `${(renamed ?? client?.name ?? docName ?? 'document').replace(/\.[^.]+$/, '')}.${PLAIN_FILE[srcFormat ?? 'text'].ext}`
   const dragSplit = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -605,17 +674,43 @@ function Viewer(props: DocViewerProps) {
       <div className="de-center">{t.bar.noDocument}</div>
     )
   } else if (isPicture) body = <PictureView key={clientKey(client)} client={client} />
+  else if (isCode)
+    body =
+      code === null || shownCode === null ? (
+        <div className="de-center">
+          <div className="de-spinner" />
+        </div>
+      ) : (
+        <CodeView
+          key={clientKey(client)}
+          text={shownCode}
+          language={codeLang}
+          readOnly={!(editing && canEdit && allowEdit)}
+          onChange={editCode}
+          onCopy={() =>
+            navigator.clipboard?.writeText(code).then(
+              () => setToast(t.bar.codeCopied),
+              () => setToast(t.bar.cannotCopy),
+            )
+          }
+        />
+      )
   else if (client.kind === 'docx') body = <DocxView key={clientKey(client)} client={client} initialZoom={zoom} />
   else if (client.kind === 'xlsx') body = <XlsxView client={client} />
   else body = <PptxView client={client} initialZoom={zoom} thumbnails={thumbnails} />
 
   return (
+    <LocaleContext.Provider value={locale}>
     <IconsProvider icons={props.icons}>
     <UIComponentsProvider components={props.components}>
     <div ref={rootRef} className={root.className + (headless ? ' de-headless' : '') + (className ? ` ${className}` : '')} style={root.style} onKeyDown={onKeyDown}>
       {toolbar && (
         <div className="de-bar">
-          {client && <span className={`de-badge de-badge-${client.kind}`}>{client.info?.from ?? client.info?.converted ?? (client.info?.imported ? IMPORTED_BADGE[client.info.imported] : client.kind)}</span>}
+          {client && (
+            <span className={`de-badge de-badge-${client.kind}`}>
+              {client.info?.from ?? client.info?.converted ?? (isCode ? codeExt : client.info?.imported ? IMPORTED_BADGE[client.info.imported] : client.kind)}
+            </span>
+          )}
           {fileMenu && <FileMenu actions={fileActions} />}
           <span className="de-title" title={title}>
             {title}
@@ -677,7 +772,8 @@ function Viewer(props: DocViewerProps) {
             ) : (
               <SourceEditor
                 text={code}
-                format={srcFormat!}
+                language={SOURCE_LANG[srcFormat!]?.[0] ?? 'text'}
+                label={SOURCE_LANG[srcFormat!]?.[1]}
                 onChange={editSource}
                 readOnly={!allowEdit || !!props.collab}
                 notice={
@@ -718,7 +814,9 @@ function Viewer(props: DocViewerProps) {
         <div className="de-main" ref={mainRef}>
           <ViewerContext.Provider value={api}>
             <CommentsContext.Provider value={cmCtl}>
-              <StatusContext.Provider value={statusEl}>{body}</StatusContext.Provider>
+              <StatusContext.Provider value={statusEl}>
+                <FontsContext.Provider value={fonts}>{body}</FontsContext.Provider>
+              </StatusContext.Provider>
             </CommentsContext.Provider>
           </ViewerContext.Provider>
         </div>
@@ -755,9 +853,11 @@ function Viewer(props: DocViewerProps) {
                 ? t.details.viewOnly(t.from[client.info.from])
                 : client.info?.converted
                   ? t.details.openedAs(t.converted[client.info.converted], t.kind[client.kind])
-                  : client.info?.imported
-                    ? t.details.openedAs(t.imported[client.info.imported], t.kind[client.kind])
-                    : t.kind[client.kind],
+                  : isCode
+                    ? codeLanguage ? `${t.imported.code} (${codeLanguage})` : t.imported.code
+                    : client.info?.imported
+                      ? t.details.openedAs(t.imported[client.info.imported], t.kind[client.kind])
+                      : t.kind[client.kind],
             ],
             ...(client.size > 0 ? [[t.details.fileSize, fmtBytes(client.size)] as [string, string]] : []),
             ...(dirty ? [[t.details.status, t.details.unsaved] as [string, string]] : []),
@@ -769,5 +869,6 @@ function Viewer(props: DocViewerProps) {
     </div>
     </UIComponentsProvider>
     </IconsProvider>
+    </LocaleContext.Provider>
   )
 }

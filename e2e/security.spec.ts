@@ -3,7 +3,8 @@
  * browser request nothing, and a link that would run script is not opened.
  */
 import { describe, expect, test } from 'bun:test'
-import { PROBE_HOST, probeDocx, probePptx, probeVisio, probeXlsx, scriptLinkDocx } from '../test/probes'
+import { PROBE_HOST, probeDocx, probeFontsDocx, probePptx, probeVisio, probeXlsx, scriptLinkDocx } from '../test/probes'
+import { testFont } from '../test/font-builder'
 import { plainToOffice } from '../src/core/plain'
 import { READY, useBrowser, viewer, type Viewer } from './harness'
 
@@ -84,6 +85,27 @@ describe('a crafted file', () => {
       expect(v.errors).toEqual([])
     })
   }
+
+  test('docx: a font is fetched only from where the host said, never from the file', async () => {
+    const asked: string[] = []
+    const font = Buffer.from(testFont({ family: 'Probe Font' }))
+    const v = await viewer(
+      { src: 'samples/sample.xlsx', fonts: JSON.stringify([{ family: 'Probe Font', src: '/host-fonts/probe.ttf' }]) },
+      { setup: (v) => v.ctx.route('**/host-fonts/**', (r) => (asked.push(new URL(r.request().url()).pathname), r.fulfill({ body: font, contentType: 'font/ttf' }))) },
+    )
+    const requests = await outbound(v)
+    // the workbook is not set in it: not fetched
+    expect(asked).toEqual([])
+    // a document that embeds "Probe Font" (one file of it at an address) and names a font like CSS: the host's file
+    await openBytes(v, 'fonts.docx', await probeFontsDocx())
+    await v.page.getByText('probe css font').first().waitFor()
+    await v.page.waitForTimeout(1000)
+    expect(requests).toEqual([])
+    expect(asked).toEqual(['/host-fonts/probe.ttf'])
+    expect(await v.page.evaluate(() => [...document.fonts].map((f) => `${f.family.replace(/"/g, '')} ${f.status}`))).toEqual(['Probe Font loaded'])
+    // (the name that looks like CSS is in the pages' styles, as one quoted family name: requested by nobody)
+    expect(v.errors).toEqual([])
+  })
 
   test('docx: "Open link" does not open a link that would run script', async () => {
     const v = await viewer({ src: 'samples/sample.docx', editable: true })

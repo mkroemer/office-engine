@@ -3,7 +3,9 @@
  *   ?src=samples/sample.docx&editable=1&allowSave=0&onSave=1&items=1&close=1&collab=ws://…&room=r
  *   comments: &me=Ann&meId=u1 (author), &people=1 (mentions: Ann, Bob Stone, Cid), &comments=0 (hidden), &cmOpen=1
  *   &icons=1: every icon from a host resolver, as `<svg data-host-icon={name}>`
- *   texts: &locale=de-DE opts into the explicitly imported German table, &fileLabel=… overrides the File label
+ *   &locale=de-DE: the tag numbers typed are read in
+ *   &fonts=[{"family":"Carlito","src":"/fonts/carlito.ttf"}]: the host's fonts (JSON)
+ *   &texts=de: the optional German table; &fileLabel=… overrides the File label
  *   &components=1: the host's own Button, Separator, Dialog and Toast (`data-host-*` markers)
  *   &headless=1: the document alone; the viewer is driven through window.__ctl (its controller) either way
  */
@@ -31,7 +33,7 @@ const log = (e: Ev) => window.__events.push(e)
 
 const q = new URLSearchParams(location.search)
 const flag = (k: string) => (q.has(k) ? q.get(k) !== '0' : undefined)
-const texts = q.get('locale') === 'de-DE' || q.get('locale') === 'de' ? de : undefined
+const texts = q.get('texts') === 'de' ? de : undefined
 
 async function b64(blob: Blob) {
   const bytes = new Uint8Array(await blob.arrayBuffer())
@@ -91,6 +93,7 @@ const components: Partial<UIComponents> = {
 const initial: DocViewerProps = {
   src: q.get('src'),
   name: q.get('name') ?? undefined,
+  language: q.get('language') ?? undefined,
   style: { height: '100vh' },
   toolbar: flag('toolbar'),
   editable: flag('editable'),
@@ -103,7 +106,7 @@ const initial: DocViewerProps = {
   captureSelectAll: flag('captureSelectAll'),
   theme: (q.get('theme') as DocViewerProps['theme']) ?? undefined,
   injectStyles: flag('injectStyles'),
-  locale: (texts ? undefined : q.get('locale') as DocViewerProps['locale']) ?? undefined,
+  locale: q.get('locale') ?? undefined,
   strings: q.has('fileLabel') ? { ...texts, file: { ...(texts?.file ?? {}), menu: q.get('fileLabel')! } } : texts,
   headless: flag('headless'),
   controller: flag('controller') ? window.__ctl : undefined,
@@ -131,6 +134,7 @@ const initial: DocViewerProps = {
         </svg>
       )
     : undefined,
+  fonts: q.get('fonts') ? JSON.parse(q.get('fonts')!) : undefined,
   collab: q.get('collab') ? { transport: q.get('collab')!, room: q.get('room') ?? 'e2e', base: Number(q.get('base')) || 0, user: { name: q.get('user') ?? 'Tester' } } : undefined,
 }
 
