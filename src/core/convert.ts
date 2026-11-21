@@ -4,7 +4,7 @@
  */
 import { officeHex } from './color'
 import { dict } from './dict'
-import { HIGHLIGHT } from './docx/styles'
+import { codeStyleName, HIGHLIGHT } from './docx/styles'
 import type { RunSet } from './docx/types'
 import { escAttr, escText } from './raw'
 import { safeHref } from './url'
@@ -204,6 +204,11 @@ export interface ImportPara {
   list?: 'bullet' | 'number'
   align?: 'center'
   image?: ImportImage
+  /**
+   * A code block, in this language ('' for none): written in a "Source Code" paragraph style named after it, which
+   * the reader turns back into `Paragraph.code` (see codeStyleName)
+   */
+  code?: string
 }
 
 export interface DocxOptions {
@@ -495,6 +500,22 @@ function drawingXml(img: ImportImage, rid: string, id: number, maxW: number, max
   )
 }
 
+/**
+ * The paragraph styles of code blocks: "Source Code" (a code font, no proofing), and one based on it per language,
+ * named after it. The colors of the code are not in the document: they are drawn from the language when shown.
+ */
+function codeStylesXml(ids: Map<string, string>): string {
+  if (!ids.size) return ''
+  const font = 'Courier New'
+  let x =
+    `<w:style w:type="paragraph" w:customStyle="1" w:styleId="SourceCode"><w:name w:val="${codeStyleName('')}"/><w:basedOn w:val="Normal"/><w:uiPriority w:val="99"/>` +
+    `<w:rPr><w:rFonts w:ascii="${font}" w:hAnsi="${font}" w:eastAsia="${font}" w:cs="${font}"/><w:noProof/></w:rPr></w:style>`
+  for (const [lang, id] of ids) {
+    if (lang) x += `<w:style w:type="paragraph" w:customStyle="1" w:styleId="${escAttr(id)}"><w:name w:val="${escAttr(codeStyleName(lang))}"/><w:basedOn w:val="SourceCode"/><w:uiPriority w:val="99"/></w:style>`
+  }
+  return x
+}
+
 /** Builds a document (Letter, 1" margins, Calibri 11) from paragraphs of formatted runs and pictures. */
 export function parasToDocx(paras: ImportPara[], opts: DocxOptions = {}): Promise<Blob> {
   const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
@@ -504,11 +525,26 @@ export function parasToDocx(paras: ImportPara[], opts: DocxOptions = {}): Promis
   const images: string[] = []
   const links: string[] = []
   const nums: ('bullet' | 'number')[] = []
+  /** code paragraph styles by language: their ids */
+  const codeIds = new Map<string, string>()
+  const codeId = (lang: string) => {
+    let id = codeIds.get(lang)
+    if (id === undefined) {
+      // "SourceCode" is the style of code in no language, the others are based on it
+      const base = 'SourceCode' + (lang ? lang.replace(/[^A-Za-z0-9]/g, '').replace(/^[a-z]/, (c) => c.toUpperCase()) || 'Lang' : '')
+      const taken = new Set([...codeIds.values(), ...(lang ? ['SourceCode'] : [])])
+      id = base
+      for (let k = 2; taken.has(id); k++) id = base + k
+      codeIds.set(lang, id)
+    }
+    return id
+  }
   let prevList: 'bullet' | 'number' | undefined
   let body = ''
   for (const p of paras) {
     let pPr = ''
-    if (p.heading && p.heading >= 1 && p.heading <= 6) pPr += `<w:pStyle w:val="Heading${p.heading}"/>`
+    if (p.code !== undefined) pPr += `<w:pStyle w:val="${codeId(p.code)}"/>`
+    else if (p.heading && p.heading >= 1 && p.heading <= 6) pPr += `<w:pStyle w:val="Heading${p.heading}"/>`
     else if (p.list) pPr += '<w:pStyle w:val="ListParagraph"/>'
     if (p.list) {
       if (p.list !== prevList) nums.push(p.list)
@@ -546,6 +582,7 @@ export function parasToDocx(paras: ImportPara[], opts: DocxOptions = {}): Promis
     headingStyles() +
     '<w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/><w:basedOn w:val="Normal"/><w:uiPriority w:val="34"/><w:qFormat/><w:pPr><w:spacing w:after="40"/><w:ind w:left="720"/><w:contextualSpacing/></w:pPr></w:style>' +
     '<w:style w:type="character" w:default="1" w:styleId="DefaultParagraphFont"><w:name w:val="Default Paragraph Font"/><w:uiPriority w:val="1"/><w:semiHidden/></w:style>' +
+    codeStylesXml(codeIds) +
     '</w:styles>'
   const rels =
     `${XML}<Relationships xmlns="${PKG_REL}"><Relationship Id="rId1" Type="${REL}/styles" Target="styles.xml"/><Relationship Id="rId2" Type="${REL}/numbering" Target="numbering.xml"/>` +

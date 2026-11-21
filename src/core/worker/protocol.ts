@@ -27,6 +27,11 @@ export interface OpenParams {
    * Vietnamese text, else Windows-1252)
    */
   encoding?: string
+  /**
+   * The file is source code in this language ("typescript", "py", "c++"…): a text file opens in the code view,
+   * colored in it, whatever its name and type say. Without it, the name (main.ts) or MIME type tells a source file.
+   */
+  language?: string
 }
 
 export interface OpenResult {
@@ -37,6 +42,8 @@ export interface OpenResult {
   from?: 'pages' | 'keynote' | 'numbers' | 'visio'
   /** built from a plain file, editable: CSV / TSV (as xlsx), text / Markdown / HTML (as docx); saving writes the Office format */
   imported?: PlainFormat
+  /** a source file (`imported` 'code'): its language ("typescript", "python"…; a hint's own word when the language is not known) */
+  language?: string
   /**
    * converted from another format, editable: Word / Excel / PowerPoint 97-2003 (doc, xls, ppt), RTF, OpenDocument
    * (odt, ods, odp); saving writes the Office Open XML file (docx, xlsx, pptx)
@@ -55,8 +62,10 @@ export interface OpenResult {
 export interface Methods {
   open(src: Blob | ArrayBuffer | string, params: OpenParams): OpenResult
   part(path: string): Blob
-  /** the text of a plain file opened as a document (Markdown, HTML, diagrams), null otherwise */
+  /** the text of a plain file opened as a document (Markdown, HTML, diagrams, source code), null otherwise */
   'plain.source'(): string | null
+  /** a source file's bytes as they were opened (saved unchanged when its code was not edited), null otherwise */
+  'plain.original'(): Blob | null
   'docx.start'(): void
   'docx.edit'(op: EditOp): EditResult
   'docx.table'(op: TableOp): EditResult

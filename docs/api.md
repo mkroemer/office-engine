@@ -52,8 +52,9 @@ CSS is auto-injected, no import needed (or import `@p10node/office-engine/styles
 
 | Prop               | Type                                           | Default   | Notes                                                                                                                    |
 |--------------------|------------------------------------------------|-----------|--------------------------------------------------------------------------------------------------------------------------|
-| `src`              | `File \| Blob \| ArrayBuffer \| string \| URL` | –         | Office (also 97-2003); OpenDocument; RTF; Pages / Keynote / Numbers; Visio; CSV / TSV, text, Markdown, HTML, diagrams    |
+| `src`              | `File \| Blob \| ArrayBuffer \| string \| URL` | –         | Office (also 97-2003); OpenDocument; RTF; Pages/Keynote/Numbers; Visio; CSV/TSV, text, code, Markdown, HTML, diagrams    |
 | `name`             | `string`                                       | auto      | Display name; its extension also tells the format of a `Blob` / `ArrayBuffer`                                            |
+| `language`         | `string`                                       | –         | Source code in this language (`'typescript'`, `'ts'`, `'python'`, `'c++'`…): the code view, whatever the name says       |
 | `toolbar`          | `boolean`                                      | `true`    | Top bar (name, status, progress)                                                                                         |
 | `toolbarExtra`     | `ReactNode`                                    | –         | Extra buttons on the right of the toolbar                                                                                |
 | `zoom`             | `number \| 'fit'`                              | `'fit'`   | Initial zoom (docx/pptx)                                                                                                 |
@@ -77,7 +78,7 @@ CSS is auto-injected, no import needed (or import `@p10node/office-engine/styles
 | `fonts`            | `FontSource[]`                                 | –         | Font files for the documents' text (the library ships none), loaded when a document uses them; see [Fonts](#fonts)       |
 | `onRename`         | `(name) => void`                               | –         | File → Rename result (extension included)                                                                                |
 | `onClose`          | `() => void`                                   | –         | Adds File → Close                                                                                                        |
-| `onSave`           | `(blob, name) => void`                         | download  | Receives saved file (downloads by default): the Office file, or a Markdown / HTML / SVG file as itself                   |
+| `onSave`           | `(blob, name) => void`                         | download  | Receives saved file (downloads by default): the Office file, or a Markdown / HTML / SVG / source file as itself          |
 | `onDirtyChange`    | `(dirty) => void`                              | –         | Whether there are unsaved changes                                                                                        |
 | `collab`           | `CollabOptions`                                | –         | Real-time collaboration, see [collaboration](collaboration.md)                                                           |
 | `comments`         | `CommentOptions \| false`                      | `{}`      | Comments (see below); `false` hides them                                                                                 |
@@ -271,7 +272,7 @@ const fonts: FontSource[] = [
 </script>
 ```
 
-`<office-viewer>`: attributes `src`, `name`, `editable`, `toolbar="false"`, `thumbnails="false"`, `save="false"`, `download="false"`, `file-menu="false"`, `open="false"`, `capture-select-all="false"`, `theme="dark"` (or `"auto"`), `locale="de-DE"` (numbers typed, see [above](#numbers-typed-in-a-locale)), `collab` / `room` / `user` / `base` (real-time collaboration; `user` also writes the comments), `comments="false"`, `fonts` (a JSON list of `FontSource` with URLs: `fonts='[{"family":"Carlito","src":"/fonts/Carlito-Regular.ttf"}]'`); properties `.file = File`, `.icons` (map or resolver, as `icons` above) and `.fonts` (as `fonts` above, bytes too; it wins over the attribute); events `load`, `error`, `comment` (`detail`: a `CommentEvent`).
+`<office-viewer>`: attributes `src`, `name`, `language` (a source file's, as the prop), `editable`, `toolbar="false"`, `thumbnails="false"`, `save="false"`, `download="false"`, `file-menu="false"`, `open="false"`, `capture-select-all="false"`, `theme="dark"` (or `"auto"`), `locale="de-DE"` (numbers typed, see [above](#numbers-typed-in-a-locale)), `collab` / `room` / `user` / `base` (real-time collaboration; `user` also writes the comments), `comments="false"`, `fonts` (a JSON list of `FontSource` with URLs: `fonts='[{"family":"Carlito","src":"/fonts/Carlito-Regular.ttf"}]'`); properties `.file = File`, `.icons` (map or resolver, as `icons` above) and `.fonts` (as `fonts` above, bytes too; it wins over the attribute); events `load`, `error`, `comment` (`detail`: a `CommentEvent`).
 
 ## Core API (no React)
 
@@ -281,7 +282,8 @@ import { DocumentClient } from '@p10node/office-engine/core'
 const doc = await DocumentClient.open(fileOrUrl, { onProgress: console.log })
 doc.kind                                   // 'docx' | 'xlsx' | 'pptx'
 doc.info.from                              // 'pages' / 'keynote' / 'numbers' / 'visio': an Apple or Visio file, converted to docx / pptx / xlsx / pptx (view only)
-doc.info.imported                          // 'csv' / 'tsv' / 'text' / 'markdown' / 'html' / 'svg' / 'mermaid' / 'plantuml' / 'graphviz': a plain file, built as xlsx / docx (editable)
+doc.info.imported                          // 'csv' / 'tsv' / 'text' / 'markdown' / 'html' / 'svg' / 'mermaid' / 'plantuml' / 'graphviz' / 'code': a plain file, built as xlsx / docx (editable)
+doc.info.language                          // 'code' (a source file): its language, 'typescript' / 'python' / 'json'… (the hint's own word when it is not one the highlighter knows)
 doc.info.converted                         // 'doc' / 'xls' / 'ppt' / 'rtf' / 'odt' / 'ods' / 'odp': converted to docx / xlsx / pptx (editable, saved as such)
 doc.info.ext                               // 'xlsm' / 'xltx' / 'docm' / 'dotx' / 'pptm' / 'potx' / 'ppsx' …: the file is that variant, and is saved as it (undefined: plain docx / xlsx / pptx)
 doc.on('docx:blocks', (blocks) => {})      // docx: streamed blocks
@@ -300,13 +302,21 @@ await doc.call('xlsx.text', 0, ',') // the sheet as CSV (a Blob; '\t' for TSV), 
 // open(src, { residentCells: 12_000_000 }): cells of a CSV / TSV kept in memory; the other rows are read from the file as they are shown
 // open(src, { encoding: 'windows-1258' }): the encoding of a text file (CSV, TSV, text, Markdown, HTML…), a TextDecoder label; without it the
 // byte order mark, the declared charset, UTF-8, then (Vietnamese text) Windows-1258, then Windows-1252 decide. An unknown label is an error
+// open(src, { language: 'python' }): a text file is source code in this language (as the `language` prop)
 // the worker also emits `warning` ({ text }) when a file opened but not whole: a CSV with more than 16,384 columns (the viewer shows it as a message)
 const comments = await doc.call('comments.list')  // DocComment[]: threads are roots + replies (threadsOf)
 doc.on('comment', ({ id, c }) => {})       // a comment set / deleted (c null), here or by a collaborator
 await doc.call('comments.set', c.id, { ...c, done: true }) // XLSX / PPTX threads carry their place (`at`)
 const blob = await doc.call('save')        // edited file
-await doc.call('plain.source')             // text of a Markdown / HTML / diagram file (null for other files)
+await doc.call('plain.source')             // text of a Markdown / HTML / diagram / source file (null for other files)
+await doc.call('plain.original')           // a source file's bytes as opened (null for other files)
 doc.destroy()
+
+// syntax colors, DOM-free (the tokenizer of the code view, the Markdown code blocks and @p10node/markdown)
+import { highlight, highlightLines, languageOf } from '@p10node/office-engine/core'
+highlight('ts', 'const a = 1') // [['k', 'const'], ['', ' a = '], ['n', '1']]: c comment, k keyword, s string, n number / constant,
+                               // f function, y type, a attribute / property, t tag, m meta, o operator ('' plain)
+languageOf('c++')              // 'cpp' (undefined: a language it does not color)
 ```
 
 ## Standalone packages
@@ -320,6 +330,7 @@ renderPage() // <pre class="mermaid">, <code class="language-dot">… of the pag
 
 import { render as markdown } from '@p10node/markdown'
 el.innerHTML = markdown(text) // safe HTML; ```mermaid / ```plantuml / ```dot drawn
+el.innerHTML = markdown(text, { highlight: true }) // and code blocks colored: <span class="hl-keyword">…
 ```
 
 ## CSP

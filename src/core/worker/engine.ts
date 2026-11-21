@@ -4,7 +4,8 @@ import type { CanonStyle, EditOp, HFSet, PageSet, ParaSpec, StyleLook, TableOp }
 import { OpcPackage, type DocKind } from '../opc'
 import { PptxPresentation } from '../pptx/parser'
 import { BlobSource, openSource, type DocSource } from '../source'
-import { decodeText, HAS_SOURCE, isMhtml, mayBePlain, mhtmlToHtml, plainFormat, plainToOffice, ungzipped } from '../plain'
+import { decodeText, HAS_SOURCE, isMhtml, mayBePlain, mhtmlToHtml, plainFormat, plainToOffice, ungzipped, unpackedName } from '../plain'
+import { languageOf, languageOfFile } from '../syntax'
 import { knownEncoding } from '../encoding'
 import { XlsxWorkbook } from '../xlsx/workbook'
 import { XlsxEditor } from '../xlsx/editor'
@@ -44,6 +45,7 @@ export class Engine {
   private pptx?: PptxPresentation
   private abort = new AbortController()
   private plainText: string | null = null
+  private original: Blob | null = null
 
   constructor(private emit: Emit) {}
 
@@ -66,21 +68,26 @@ export class Engine {
       const bytes = await source.read(0, source.size)
       converted = legacy === 'cfb' ? await convertCfb(bytes) : legacy === 'rtf' ? await convertRtf(bytes) : legacy === 'biff' ? await convertBiff(bytes) : await convertFlatOdf(bytes)
     }
-    // CSV / TSV / text / Markdown / HTML / SVG / diagrams: converted to a workbook / document
-    const imported = head && !converted ? plainFormat(name, source.type, head, source.size <= 4096) : null
+    // CSV / TSV / text / Markdown / HTML / SVG / diagrams / source code: converted to a workbook / document
+    const imported = head && !converted ? plainFormat(name, source.type, head, source.size <= 4096, params.language?.trim() || undefined) : null
     // gzip-compressed (.svgz, .csv.gz): unpacked whole, then read like the file inside
     if (imported) source = await ungzipped(source)
     // CSV / TSV: an empty workbook whose sheet streams the rows in when it is loaded (the text is never read whole)
     const tabular = imported === 'csv' || imported === 'tsv'
-    let text = imported && !tabular ? decodeText(await source.read(0, source.size), source.type, params.encoding) : null
+    const bytes = imported && !tabular ? await source.read(0, source.size) : null
+    let text = bytes ? decodeText(bytes, source.type, params.encoding) : null
     // a web page saved as one file (MHTML, often named .doc): its HTML
     if (imported === 'html' && text && isMhtml(text)) text = mhtmlToHtml(text)
     // kept for the source view: formats whose text is worth reading next to the document
     this.plainText = imported && HAS_SOURCE.has(imported) ? text : null
+    // a source file: its language (the host's hint, else its name, else its type) and its bytes, saved as they are when not edited
+    const hint = params.language?.trim()
+    const language = imported === 'code' ? (hint ? (languageOf(hint) ?? hint.toLowerCase()) : (languageOfFile(unpackedName(name) ?? name, source.type) ?? '')) : undefined
+    this.original = imported === 'code' && bytes ? new Blob([bytes as BlobPart], { type: source.type || 'text/plain' }) : null
     let zip = converted
       ? await ZipArchive.open(new BlobSource(converted.file))
       : imported
-        ? await ZipArchive.open(new BlobSource(await plainToOffice(text ?? '', imported, name)))
+        ? await ZipArchive.open(new BlobSource(await plainToOffice(text ?? '', imported, name, language)))
         : await ZipArchive.open(source)
     // OpenDocument text / spreadsheet / presentation packages
     if (!converted && !imported) {
@@ -99,7 +106,7 @@ export class Engine {
     this.kind = main.kind
     const flavor = await pkg.flavor()
     const res: OpenResult = {
-      kind: main.kind, name, size, ...(from ? { from } : {}), ...(imported ? { imported } : {}), ...(converted ? { converted: converted.format } : {}),
+      kind: main.kind, name, size, ...(from ? { from } : {}), ...(imported ? { imported } : {}), ...(language !== undefined ? { language } : {}), ...(converted ? { converted: converted.format } : {}),
       ...(flavor ? { ext: flavor.ext } : {}),
     }
     if (main.kind === 'docx') this.docx = await DocxDocument.open(pkg, main.path)
@@ -137,6 +144,8 @@ export class Engine {
         return this.need(this.pkg).blob(args[0] as string)
       case 'plain.source':
         return this.plainText
+      case 'plain.original':
+        return this.original
       case 'docx.start': {
         const doc = this.need(this.docx)
         try {

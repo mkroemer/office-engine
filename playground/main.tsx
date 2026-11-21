@@ -22,6 +22,7 @@ const SAMPLES = [
   { label: 'sample.csv', url: 'samples/sample.csv' },
   { label: 'sample.md', url: 'samples/sample.md' },
   { label: 'sample.html', url: 'samples/sample.html' },
+  { label: 'sample.ts', url: 'samples/sample.ts' },
   { label: 'flowchart.mmd', url: 'samples/flowchart.mmd' },
   { label: 'sequence.puml', url: 'samples/sequence.puml' },
   { label: 'graph.dot', url: 'samples/graph.dot' },

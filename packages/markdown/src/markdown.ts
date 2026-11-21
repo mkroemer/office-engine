@@ -5,6 +5,7 @@
  * ```mermaid / ```plantuml / ```dot code blocks become SVG drawings.
  */
 import { DIAGRAM_NAME, FENCE_LANG, renderDiagrams } from '../../../src/core/diagram'
+import { highlight, languageOf } from '../../../src/core/syntax'
 import { safeHref } from '../../../src/core/url'
 
 export interface MarkdownOptions {
@@ -12,6 +13,8 @@ export interface MarkdownOptions {
   diagrams?: boolean
   /** `id` attributes on headings (from their text) so `#links` reach them. Default true. */
   headingIds?: boolean
+  /** Color code blocks in a known language: `<span class="hl-keyword">` and the like around their tokens. Default false. */
+  highlight?: boolean
 }
 
 interface Ctx {
@@ -19,6 +22,21 @@ interface Ctx {
   diagrams: boolean
   ids: boolean
   slugs: Map<string, number>
+  highlight: boolean
+}
+
+/** the class of each token kind (see src/core/syntax) */
+const HL: Record<string, string> = {
+  c: 'comment', k: 'keyword', s: 'string', n: 'number', o: 'operator', a: 'attr', t: 'tag', m: 'meta', f: 'function', y: 'type', h: 'heading', b: 'bold', i: 'italic',
+}
+
+/** a code block's text as HTML: escaped, its tokens in spans when it is in a language the highlighter knows */
+function codeHtml(body: string, lang: string, ctx: Ctx): string {
+  const id = languageOf(lang)
+  if (!ctx.highlight || !id || id === 'text') return esc(body)
+  return highlight(id, body)
+    .map(([c, t]) => (c && HL[c] ? `<span class="hl-${HL[c]}">${esc(t)}</span>` : esc(t)))
+    .join('')
 }
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
@@ -37,7 +55,7 @@ const label = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase()
 /** Markdown text → HTML. */
 export function markdownToHtml(md: string, opts: MarkdownOptions = {}): string {
   const lines = md.replace(/^﻿/, '').replace(/\r\n?/g, '\n').replace(/\t/g, '    ').split('\n')
-  const ctx: Ctx = { refs: new Map(), diagrams: opts.diagrams !== false, ids: opts.headingIds !== false, slugs: new Map() }
+  const ctx: Ctx = { refs: new Map(), diagrams: opts.diagrams !== false, ids: opts.headingIds !== false, slugs: new Map(), highlight: !!opts.highlight }
   // link reference definitions (outside code blocks) are read first and leave no text
   const kept: string[] = []
   let fence: string | null = null
@@ -270,7 +288,7 @@ function code(body: string, info: string, ctx: Ctx): string {
       )
     }
   }
-  return `<pre><code${lang ? ` class="language-${lang}"` : ''}>${esc(body)}${body ? '\n' : ''}</code></pre>`
+  return `<pre><code${lang ? ` class="language-${lang}"` : ''}>${codeHtml(body, lang, ctx)}${body ? '\n' : ''}</code></pre>`
 }
 
 /** URLs a picture may load: web, relative, and data: images */
