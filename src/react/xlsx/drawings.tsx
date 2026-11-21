@@ -5,6 +5,7 @@ import { renderChart } from '../../core/xlsx/chart-svg'
 import type { SheetDrawing } from '../../core/xlsx/drawings'
 import { MAX_COL, MAX_ROWS } from '../../core/xlsx/limits'
 import { Icon } from '../edit/Toolbar'
+import type { Strings } from '../strings'
 import type { Axis } from './axis'
 
 /** a sheet's drawing with its picture's object URL, where the browser can draw it */
@@ -54,16 +55,24 @@ export function useSheetDrawings(client: DocumentClient, sheet: number, edits = 
   return list
 }
 
-/** each chart's picture, drawn for the size it was last shown at */
+/** each chart's picture, drawn for the size it was last shown at ('' when it could not be drawn at that size) */
 const chartUrls = new WeakMap<ChartModel, { key: string; url: string }>()
 
-/** the chart drawn at `w` × `h` as an SVG picture's object URL (in an img: nothing in it runs) */
+/**
+ * The chart drawn at `w` × `h` as an SVG picture's object URL (in an img: nothing in it runs), or '' when drawing it
+ * failed: it is drawn in the grid's render, so a chart a crafted file breaks shows its placeholder box, not a blank view.
+ */
 function chartUrl(m: ChartModel, w: number, h: number): string {
   const key = `${Math.round(w)}x${Math.round(h)}`
   const had = chartUrls.get(m)
   if (had?.key === key) return had.url
-  if (had) URL.revokeObjectURL(had.url)
-  const url = URL.createObjectURL(new Blob([renderChart(m, Math.round(w), Math.round(h))], { type: 'image/svg+xml' }))
+  if (had?.url) URL.revokeObjectURL(had.url)
+  let url = ''
+  try {
+    url = URL.createObjectURL(new Blob([renderChart(m, Math.round(w), Math.round(h))], { type: 'image/svg+xml' }))
+  } catch (e) {
+    console.warn('[office-engine] chart not drawn:', (e as Error).message)
+  }
   chartUrls.set(m, { key, url })
   return url
 }
@@ -72,7 +81,7 @@ function releaseCharts(list: ShownDrawing[]) {
   for (const d of list) {
     const had = d.model && chartUrls.get(d.model)
     if (!had) continue
-    URL.revokeObjectURL(had.url)
+    if (had.url) URL.revokeObjectURL(had.url)
     chartUrls.delete(d.model!)
   }
 }
@@ -114,19 +123,17 @@ export function drawingExtent(list: SheetDrawing[], cols: Axis, rows: Axis): { r
   return { rows: r, cols: c }
 }
 
-const CHART_NAMES: Record<string, string> = {
-  column: 'Column chart', bar: 'Bar chart', line: 'Line chart', pie: 'Pie chart', doughnut: 'Doughnut chart', area: 'Area chart',
-  scatter: 'Scatter chart', bubble: 'Bubble chart', radar: 'Radar chart', stock: 'Stock chart', surface: 'Surface chart',
-}
-
 /**
  * A drawing as shown: the picture itself, a chart drawn at its size, or a box of its size saying what is there (a chart
- * of a kind not drawn, a picture the browser cannot draw).
+ * of a kind not drawn or that could not be drawn, a picture the browser cannot draw).
  */
-export function drawingEl(key: string, d: ShownDrawing, style: CSSProperties & { width: number; height: number }): ReactNode {
+export function drawingEl(key: string, d: ShownDrawing, style: CSSProperties & { width: number; height: number }, strings: Strings): ReactNode {
   if (d.url) return <img key={key} className="de-xl-pic" src={d.url} alt={d.title} style={style} draggable={false} />
-  if (d.model) return <img key={key} className="de-xl-pic de-xl-chart" src={chartUrl(d.model, style.width, style.height)} alt={d.title || 'Chart'} style={style} draggable={false} />
-  const what = d.kind === 'chart' ? CHART_NAMES[d.chart ?? ''] ?? 'Chart' : 'Picture'
+  const t = strings.xlsx.drawings
+  const drawn = d.model && chartUrl(d.model, style.width, style.height)
+  if (drawn) return <img key={key} className="de-xl-pic de-xl-chart" src={drawn} alt={d.title || t.chart} style={style} draggable={false} />
+  const chart = d.chart ?? ''
+  const what = d.kind === 'chart' ? (Object.hasOwn(t.charts, chart) ? t.charts[chart as keyof typeof t.charts] : t.chart) : t.picture
   return (
     <div key={key} className="de-xl-drawing" style={style} title={[what, d.title].filter(Boolean).join(': ')}>
       <Icon name={d.kind === 'chart' ? 'chart' : 'image'} size={24} />

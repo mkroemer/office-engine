@@ -41,3 +41,15 @@ test('a selection change after a re-attach is still followed (a cancelled frame 
   frames[1]()
   expect(seen.length).toBe(1) // and the host heard about it
 })
+
+test('a selection change whose frame a re-render cancelled is still followed (detach and attach of the same root)', () => {
+  const seen: unknown[] = []
+  const input = new RichInput({ onSelection: (s: unknown) => seen.push(s) } as never)
+  const el = root()
+  input.attach(el)
+  selChange!() // the selection moved (focus went to the page around the editor): a frame is pending
+  input.detach() // a re-render runs the editing effect again before that frame
+  input.attach(el)
+  for (const f of [...frames]) f()
+  expect(seen.length).toBe(1) // the host still heard where the selection is now
+})
