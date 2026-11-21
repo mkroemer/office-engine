@@ -72,7 +72,7 @@ describe('host-placed controls around a headless viewer', () => {
     await until(v, 's.editing')
     await v.selectText('document')
     await until(v, 's.format && s.format.size !== 12.5')
-    const size = v.page.locator('#host-chrome').getByLabel('Schriftgrad', { exact: true })
+    const size = v.page.locator('#host-chrome').getByRole('textbox', { name: 'Schriftgrad', exact: true })
     await size.fill('12,5')
     await size.press('Enter')
     await until(v, 's.format?.size === 12.5')
