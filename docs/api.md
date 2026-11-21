@@ -140,11 +140,11 @@ function Viewer({ file }: { file: File }) {
 Commands: `setEditing(on)`, `save()`, `undo()`, `redo()`, `zoomIn()`, `zoomOut()`, `setZoom('fit' | number)`,
 `goto(outlineId)`, `gotoPage(n)`, `present()` (a slideshow from the slide in view), `print()`, `fileAction(id)` (a File menu
 action: `pdf`, `html`, `text:md`, `details`, `rename`…), `toggleComments(open?)`. A command the open document has no use
-for does nothing. `subscribe(fn)` returns its unsubscribe; `snapshot()` the current state. Without `react`, `mount()`
+for does nothing. `subscribe(fn)` returns its unsubscribe; `snapshot()` the current state. Keep a subscription active to receive the complete DOCX headings and PPTX slide titles. Without `react`, `mount()`
 returns the controller (`mounted.controller`), and `<office-viewer headless>` has it as `element.controller`.
 
 Controller actions obey `allowSave`, `allowDownload` and `allowOpen` even when the File menu is hidden.
-`fileMenu={false}` hides that menu and its keyboard shortcuts; it does not disable a host's controller controls.
+`fileMenu={false}` hides the menu and disables its Open and Print shortcuts. Ctrl/⌘+S and host controller commands remain available, subject to their own permissions.
 `allowEdit` controls the Edit/View toggle and CSV import; `editable` and `setEditing()` control edit mode, including when the toggle is hidden.
 Prevent the default mouse-down action on host outline buttons (as above) to preserve the editor focus and an open XLSX formula while switching sheets.
 New/Open replace the document and remain available for a read-only file when `allowOpen` permits them.
