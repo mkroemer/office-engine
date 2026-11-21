@@ -514,6 +514,9 @@ export const en = {
 
   source: {
     source: 'Source',
+    language: 'Language',
+    lineCount: 'Lines',
+    characterCount: 'Characters',
     lines: (n: number, locale: string | undefined = undefined) => `${n.toLocaleString(locale)} ${n === 1 ? 'line' : 'lines'}`,
     copy: 'Copy the source',
     download: 'Download the source',

@@ -122,6 +122,17 @@ describe('syntax highlighting', () => {
     expect(v.errors).toEqual([])
   })
 
+  test('source file details use the active text table', async () => {
+    const v = await viewer({ src: 'samples/sample.ts', texts: 'de' })
+    await v.page.getByTestId('de-code').waitFor()
+    await v.menu('Dokumenteigenschaften')
+    const details = v.page.getByRole('dialog', { name: 'Dokumenteigenschaften' })
+    for (const label of ['Sprache', 'Zeilen', 'Zeichen', 'TypeScript']) {
+      await details.getByText(label, { exact: true }).waitFor()
+    }
+    expect(v.errors).toEqual([])
+  })
+
   test('a .ts file opens in the code view: colored, edited as text, saved as it is', async () => {
     const v = await viewer({ src: 'samples/sample.ts', onSave: true })
     const { page } = v

@@ -500,6 +500,9 @@ export const de: Strings = {
 
   source: {
     source: 'Quelltext',
+    language: 'Sprache',
+    lineCount: 'Zeilen',
+    characterCount: 'Zeichen',
     lines: (n: number, locale: string | undefined = undefined) => `${n.toLocaleString(locale)} ${n === 1 ? 'Zeile' : 'Zeilen'}`,
     copy: 'Quelltext kopieren',
     download: 'Quelltext herunterladen',

@@ -1,6 +1,7 @@
 import { HIGHLIGHT_MAX, highlightLines, LANGUAGE_NAME, languageOf } from '../../core/syntax'
 import { useFileOps } from '../common/Slots'
 import { mdFence } from '../file/text'
+import { formatCount, useStrings } from '../strings'
 import { SourceEditor, type SourceEditorProps } from './SourceEditor'
 
 export type CodeViewProps = Omit<SourceEditorProps, 'full'>
@@ -11,6 +12,7 @@ export type CodeViewProps = Omit<SourceEditorProps, 'full'>
  */
 export function CodeView(props: CodeViewProps) {
   const { text, language } = props
+  const strings = useStrings()
   const id = languageOf(language)
   useFileOps({
     printable: async () => {
@@ -37,9 +39,9 @@ export function CodeView(props: CodeViewProps) {
       let n = 1
       for (let i = text.indexOf('\n'); i >= 0; i = text.indexOf('\n', i + 1)) n++
       return [
-        ['Language', (id && LANGUAGE_NAME[id]) || language || 'Plain text'],
-        ['Lines', n.toLocaleString()],
-        ['Characters', text.length.toLocaleString()],
+        [strings.source.language, id === 'text' ? strings.imported.text : (id && LANGUAGE_NAME[id]) || language || strings.imported.text],
+        [strings.source.lineCount, formatCount(strings, n)],
+        [strings.source.characterCount, formatCount(strings, text.length)],
       ]
     },
   })
