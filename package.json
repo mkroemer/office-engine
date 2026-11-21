@@ -1,7 +1,7 @@
 {
   "name": "@p10node/office-engine",
   "version": "0.1.0",
-  "description": "Browser engine to view DOCX, XLSX, PPTX progressively (worker-based, range-loading, virtualized React views)",
+  "description": "Browser engine to view & edit DOCX, XLSX, PPTX, DOC, XLS, PPT, RTF, ODT, ODS, ODP, CSV, TXT, Markdown, HTML, SVG, Mermaid, PlantUML, Graphviz. View-only: Pages, Keynote, Numbers, Visio (VSDX). Zero deps, no server, real-time collab, saves to original format. One-line React embed.",
   "type": "module",
   "license": "MIT",
   "files": [
@@ -22,6 +22,10 @@
     "./embed": {
       "types": "./dist/types/embed.d.ts",
       "import": "./dist/embed.js"
+    },
+    "./locales/de": {
+      "types": "./dist/types/locales/de.d.ts",
+      "import": "./dist/locales/de.js"
     },
     "./worker": "./dist/office-engine.worker.js",
     "./embed.js": "./dist/office-engine.embed.js",

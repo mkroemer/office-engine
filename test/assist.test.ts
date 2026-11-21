@@ -8,11 +8,13 @@ const ctx = (t: string, caret = t.length) => formulaContext(t, caret)
 describe('formula catalog', () => {
   test('covers every implemented function', () => {
     const names = new Set(functionCatalog().map((f) => f.name))
-    const missing = supportedFunctions().filter((n) => n !== 'SINGLE' && !names.has(n))
+    // (SINGLE and ANCHORARRAY are how a file writes the operators @ and #)
+    const missing = supportedFunctions().filter((n) => n !== 'SINGLE' && n !== 'ANCHORARRAY' && !names.has(n))
     expect(missing).toEqual([])
   })
   test('prefix suggestions', () => {
-    expect(suggestFunctions('su').map((f) => f.name)).toEqual(['SUBSTITUTE', 'SUM', 'SUMIF', 'SUMIFS', 'SUMPRODUCT'])
+    expect(suggestFunctions('su').map((f) => f.name)).toEqual(['SUBSTITUTE', 'SUBTOTAL', 'SUM', 'SUMIF', 'SUMIFS', 'SUMPRODUCT', 'SUMSQ', 'SUMX2MY2', 'SUMX2PY2', 'SUMXMY2'])
+    expect(suggestFunctions('sumi', 8).map((f) => f.name)).toEqual(['SUMIF', 'SUMIFS'])
     expect(suggestFunctions('')).toEqual([])
     expect(suggestFunctions('zz')).toEqual([])
   })

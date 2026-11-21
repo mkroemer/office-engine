@@ -6,7 +6,7 @@ import type { XOp } from '../../collab/xlsx-ops'
 import type { POp } from '../../collab/pptx-ops'
 import type { PptxCollabResult } from '../../collab/pptx-worker'
 import type { CanonStyle, DocxMeta, Block, EditOp, EditResult, HFSet, HFSetResult, PageSet, PageSetResult, ParaSpec, StyleInfo, StyleLook, StyleSetResult, TableOp } from '../docx/types'
-import type { BlockOut, BookOp, CellDetail, CellInput, FindMatch, FindOptions, FmtPatch, Range, SheetOp, SheetProgress, WorkbookMeta, XlsxClip, XlsxEditResult } from '../xlsx/types'
+import type { BlockOut, BookOp, CellDetail, CellInput, FindMatch, FindOptions, FmtPatch, Range, SetOptions, SheetOp, SheetProgress, WorkbookMeta, XlsxClip, XlsxEditResult } from '../xlsx/types'
 import type { SheetDrawing } from '../xlsx/drawings'
 import type { PParaSpec, PresentationMeta, ShapeOp, SlideModel, SlideOp } from '../pptx/types'
 
@@ -27,6 +27,11 @@ export interface OpenParams {
    * Vietnamese text, else Windows-1252)
    */
   encoding?: string
+  /**
+   * The file is source code in this language ("typescript", "py", "c++"…): a text file opens in the code view,
+   * colored in it, whatever its name and type say. Without it, the name (main.ts) or MIME type tells a source file.
+   */
+  language?: string
 }
 
 export interface OpenResult {
@@ -37,6 +42,8 @@ export interface OpenResult {
   from?: 'pages' | 'keynote' | 'numbers' | 'visio'
   /** built from a plain file, editable: CSV / TSV (as xlsx), text / Markdown / HTML (as docx); saving writes the Office format */
   imported?: PlainFormat
+  /** a source file (`imported` 'code'): its language ("typescript", "python"…; a hint's own word when the language is not known) */
+  language?: string
   /**
    * converted from another format, editable: Word / Excel / PowerPoint 97-2003 (doc, xls, ppt), RTF, OpenDocument
    * (odt, ods, odp); saving writes the Office Open XML file (docx, xlsx, pptx)
@@ -55,11 +62,13 @@ export interface OpenResult {
 export interface Methods {
   open(src: Blob | ArrayBuffer | string, params: OpenParams): OpenResult
   part(path: string): Blob
-  /** the text of a plain file opened as a document (Markdown, HTML, diagrams), null otherwise */
+  /** the text of a plain file opened as a document (Markdown, HTML, diagrams, source code), null otherwise */
   'plain.source'(): string | null
+  /** a source file's bytes as they were opened (saved unchanged when its code was not edited), null otherwise */
+  'plain.original'(): Blob | null
   'docx.start'(): void
   'docx.edit'(op: EditOp): EditResult
-  'docx.table'(op: TableOp): void
+  'docx.table'(op: TableOp): EditResult
   'docx.image'(bytes: ArrayBuffer, ext: string): { rid: string; path: string }
   'docx.link'(url: string): string
   /** id of a built-in paragraph style, created in styles.xml when missing */
@@ -90,7 +99,8 @@ export interface Methods {
   'xlsx.text'(sheet: number, sep: string): Blob
   /** replaces text in matching cells (or only `at`); null when nothing changed */
   'xlsx.replace'(sheet: number, query: string, by: string, opts?: FindOptions, at?: { r: number; c: number }): XlsxEditResult | null
-  'xlsx.set'(sheet: number, cells: CellInput[]): XlsxEditResult
+  /** what was typed into cells; `opts.locale`: the BCP 47 tag numbers were typed in (`1,5` in `de-DE`), a decimal point without one */
+  'xlsx.set'(sheet: number, cells: CellInput[], opts?: SetOptions): XlsxEditResult
   /** the block of filled cells a range is part of (the table around it), and whether its first row reads as a header */
   'xlsx.region'(sheet: number, range: Range): { range: Range; header: boolean }
   /** the cells of a range as they are (values, formulas, formats) for the `paste` sheet operation, and as text for the clipboard; rows not shown yet included */
@@ -106,6 +116,8 @@ export interface Methods {
   'xlsx.undo'(): XlsxEditResult | null
   'xlsx.redo'(): XlsxEditResult | null
   'pptx.slide'(index: number): SlideModel
+  /** every slide's title placeholder text ('' where there is none), read without laying out the slides */
+  'pptx.titles'(): string[]
   /** `cell`: [row, column] of a table cell (`sid` is then the table's graphic frame) */
   'pptx.setText'(index: number, sid: number, paras: PParaSpec[], cell?: [number, number]): SlideModel
   'pptx.shapes'(index: number, ops: ShapeOp[]): SlideModel

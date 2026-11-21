@@ -1,0 +1,196 @@
+/** Host formatting through the emitted library and real worker, including save/reopen. */
+import { expect, test } from 'bun:test'
+import { strFromU8, unzipSync } from 'fflate'
+import { docxParas, fromB64, paraText, runsOf, useBrowser, viewer, xlsxSheet, type Viewer } from './harness'
+
+import { builtModule, useBuiltPackage } from './built-package'
+
+useBuiltPackage()
+useBrowser()
+
+async function select(v: Viewer, kind: 'docx' | 'xlsx' | 'pptx') {
+  if (kind === 'xlsx') await v.clickCell('B2')
+  else if (kind === 'docx') await v.selectText('document')
+  else {
+    await v.page.locator('.de-slide-frame').first().getByText('office-engine', { exact: true }).click()
+    await v.page.locator('.de-txt-edit').waitFor()
+    await v.page.keyboard.press('ControlOrMeta+a')
+  }
+  await v.page.waitForTimeout(150)
+}
+
+for (const kind of ['docx', 'xlsx', 'pptx'] as const) {
+  test(`built ${kind}: inline React host formatting preserves focus, history and saved/reopened values`, async () => {
+    const v = await viewer({}, { page: 'built-locale.html', wait: false })
+    await v.page.waitForFunction(() => !!(window as any).__builtRuntime)
+    await v.page.evaluate(async ({ pkg, kind }) => {
+      const { React: R, createRoot } = (window as any).__builtRuntime
+      const api = await import(/* @vite-ignore */ pkg)
+      const ctl = api.createViewerController()
+      window.__ctl = ctl
+      const root = createRoot(document.getElementById('built')!)
+      function Host() {
+        const f = api.useViewerState(ctl).format
+        const [props, setProps] = R.useState({ src: `/samples/sample.${kind}`, name: `sample.${kind}` })
+        window.__setProps = (p: any) => setProps((old: any) => ({ ...old, ...p }))
+        return R.createElement(R.Fragment, null,
+          R.createElement('input', { 'aria-label': 'Production size', type: 'number', disabled: !f,
+            onChange: (e: any) => ctl.format({ op: 'size', pt: e.currentTarget.valueAsNumber }) }),
+          R.createElement('button', { 'aria-label': 'Production undo', onClick: ctl.undo }, 'Undo'),
+          R.createElement(api.DocViewer, { ...props, controller: ctl, editable: true, headless: true,
+            onLoad: (c: any) => window.__events.push({ type: 'load', kind: c.kind }),
+            onError: (e: Error) => window.__events.push({ type: 'error', message: e.message }),
+            onSave: async (blob: Blob, name: string) => {
+              let raw = ''
+              for (const b of new Uint8Array(await blob.arrayBuffer())) raw += String.fromCharCode(b)
+              window.__events.push({ type: 'save', name, b64: btoa(raw) })
+            },
+          }))
+      }
+      root.render(R.createElement(Host))
+    }, { pkg: builtModule('index.js'), kind })
+    await v.ready(kind)
+    const cellBefore = kind === 'xlsx' ? await v.shown('B2') : undefined
+    const inputBefore = kind === 'xlsx' ? await v.formula('B2') : undefined
+    await select(v, kind)
+    const input = v.page.getByLabel('Production size', { exact: true })
+    await input.click()
+    await v.page.keyboard.type('14', { delay: 120 })
+    await v.page.waitForTimeout(200)
+    expect(await input.inputValue()).toBe('14')
+    expect(await input.evaluate((el) => el === document.activeElement)).toBe(true)
+    await v.page.keyboard.press('Backspace')
+    await v.page.waitForTimeout(150)
+    expect(await input.inputValue()).toBe('1')
+    expect(await input.evaluate((el) => el === document.activeElement)).toBe(true)
+    await v.page.keyboard.type('4')
+    await v.page.waitForTimeout(150)
+    expect(await v.page.evaluate(() => window.__ctl.snapshot().format?.size)).toBe(14)
+    await v.page.getByLabel('Production undo', { exact: true }).click()
+    await v.page.waitForTimeout(150)
+    expect(await v.page.evaluate(() => window.__ctl.snapshot().format?.size)).toBe(1)
+    if (kind !== 'xlsx') expect(await v.page.evaluate(() => document.activeElement?.matches('.de-pages, .de-txt-edit'))).toBe(true)
+    await v.page.evaluate(() => window.__ctl.redo())
+    await v.page.waitForTimeout(150)
+    expect(await v.page.evaluate(() => window.__ctl.snapshot().format?.size)).toBe(14)
+    // Main's save flush must include the last PPTX command without waiting for the text debounce.
+    await v.page.evaluate(() => window.__ctl.save())
+    const bytes = fromB64((await v.waitEvent('save')).b64 as string)
+    const part = kind === 'docx' ? 'word/document.xml' : kind === 'pptx' ? 'ppt/slides/slide1.xml' : 'xl/styles.xml'
+    const xml = strFromU8(unzipSync(bytes)[part])
+    expect(xml).toContain(kind === 'docx' ? 'w:sz w:val="28"' : kind === 'pptx' ? 'sz="1400"' : 'val="14"')
+    if (kind === 'docx') {
+      const p = (await docxParas(bytes)).find((p) => paraText(p).startsWith('This document'))!
+      expect(runsOf(p).find((r) => r.text === 'document')?.s.sz).toBe(14)
+    }
+    if (kind === 'xlsx') expect((await xlsxSheet(bytes)).cell('B2')).toBe(cellBefore!)
+    await v.page.evaluate((data) => window.__setProps({ src: new Blob([new Uint8Array(data)]), name: 'reopened.' + window.__ctl.snapshot().kind }), Array.from(bytes))
+    await v.waitEvent('load', 2)
+    await v.page.waitForTimeout(300)
+    await select(v, kind)
+    expect(await v.page.evaluate(() => window.__ctl.snapshot().format?.size)).toBe(14)
+    if (kind === 'xlsx') expect(await v.formula('B2')).toBe(inputBefore!)
+    if (kind !== 'xlsx') {
+      await v.page.evaluate(() => {
+        const root = document.getElementById('built')!
+        const wrapper = document.createElement('div')
+        wrapper.id = 'focusable-app'; wrapper.tabIndex = -1
+        root.before(wrapper); wrapper.append(root)
+        const text = document.createElement('p')
+        text.textContent = 'Host page background'
+        text.style.cssText = 'position:fixed;top:0;right:0;z-index:999999;background:white'
+        wrapper.append(text)
+      })
+      if (kind === 'docx') {
+        await v.page.evaluate(() => {
+          const { flushSync } = (window as any).__builtRuntime
+          const rerender = () => {
+            if (document.activeElement?.id !== 'focusable-app') return
+            document.removeEventListener('selectionchange', rerender)
+            // Change the inline onSave callback after the editor has queued its selection update.
+            flushSync(() => window.__setProps({}))
+            window.__events.push({ type: 'host-rerender' })
+          }
+          document.addEventListener('selectionchange', rerender)
+        })
+      }
+      await v.page.getByText('Host page background', { exact: true }).click()
+      expect(await v.page.evaluate(() => document.activeElement?.id)).toBe('focusable-app')
+      if (kind === 'docx') await v.waitEvent('host-rerender')
+      await v.page.waitForFunction(() => window.__ctl.snapshot().format === null, null, { timeout: 3000 })
+      await v.page.evaluate(() => window.__ctl.format({ op: 'toggle', mark: 'italic' }))
+      expect(await v.page.evaluate(() => window.__ctl.snapshot().dirty)).toBe(false)
+    }
+    expect(v.errors).toEqual([])
+  })
+}
+
+for (const keyboard of [false, true]) {
+  test(`built DOCX: consecutive commands from ${keyboard ? 'keyboard-activated' : 'plain mouse'} host buttons keep the selected text`, async () => {
+    const v = await viewer({}, { page: 'built-locale.html', wait: false })
+    await v.page.waitForFunction(() => !!(window as any).__builtRuntime)
+    await v.page.evaluate(async ({ pkg, keyboard }) => {
+      const { React: R, createRoot } = (window as any).__builtRuntime
+      const api = await import(/* @vite-ignore */ pkg)
+      const ctl = api.createViewerController()
+      window.__ctl = ctl
+      const root = createRoot(document.getElementById('built')!)
+      function Host() {
+        const f = api.useViewerState(ctl).format
+        const [props, setProps] = R.useState({ src: '/samples/sample.docx', name: 'sample.docx' })
+        window.__setProps = (p: any) => setProps((old: any) => ({ ...old, ...p }))
+        const commands = [
+          { op: 'toggle', mark: 'underline' },
+          { op: 'size', pt: 30 },
+          { op: 'color', color: '#00aa00' },
+        ]
+        return R.createElement(R.Fragment, null,
+          ...commands.map((c, i) => R.createElement('button', {
+            key: i, 'aria-label': `Host command ${i}`, disabled: !f,
+            'aria-pressed': i === 0 ? !!f?.underline : undefined,
+            onMouseDown: keyboard ? (e: any) => e.preventDefault() : undefined,
+            onClick: () => ctl.format(c),
+          }, String(i))),
+          R.createElement(api.DocViewer, { ...props, controller: ctl, editable: true, headless: true,
+            onLoad: (c: any) => window.__events.push({ type: 'load', kind: c.kind }),
+            onSave: async (blob: Blob) => {
+              let raw = ''
+              for (const b of new Uint8Array(await blob.arrayBuffer())) raw += String.fromCharCode(b)
+              window.__events.push({ type: 'save', b64: btoa(raw) })
+            },
+          }))
+      }
+      root.render(R.createElement(Host))
+    }, { pkg: builtModule('index.js'), keyboard })
+    await v.ready('docx')
+    await select(v, 'docx')
+    if (keyboard) await v.page.getByLabel('Host command 0', { exact: true }).focus()
+    for (let i = 0; i < 3; i++) {
+      const button = v.page.getByLabel(`Host command ${i}`, { exact: true })
+      if (keyboard) {
+        if (i) await v.page.keyboard.press('Tab')
+        for (let press = 0; press < (i === 0 ? 3 : 1); press++) {
+          await v.page.keyboard.press('Enter')
+          await v.page.waitForTimeout(100)
+          if (i === 0) expect(await button.getAttribute('aria-pressed')).toBe(press % 2 ? 'false' : 'true')
+        }
+      } else await button.click()
+      await v.page.waitForTimeout(150)
+      expect(await button.evaluate((el) => el === document.activeElement)).toBe(true)
+      expect(await v.page.getByLabel('Host command 0', { exact: true }).getAttribute('aria-pressed')).toBe('true')
+    }
+    await v.page.evaluate(() => window.__ctl.save())
+    const bytes = fromB64((await v.waitEvent('save')).b64 as string)
+    const p = (await docxParas(bytes)).find((p) => paraText(p).startsWith('This document'))!
+    const run = runsOf(p).find((r) => r.text === 'document')!
+    expect(run.s.u).toBe('single')
+    expect(run.s.sz).toBe(30)
+    expect(run.s.color).toMatch(/00aa00/i)
+    await v.page.evaluate((data) => window.__setProps({ src: new Blob([new Uint8Array(data)]), name: 'reopened.docx' }), Array.from(bytes))
+    await v.waitEvent('load', 2)
+    await v.page.locator('.de-pages [data-pa]').filter({ hasText: 'This document' }).first().waitFor()
+    await select(v, 'docx')
+    expect(await v.page.evaluate(() => window.__ctl.snapshot().format)).toMatchObject({ underline: true, size: 30 })
+    expect(v.errors).toEqual([])
+  })
+}

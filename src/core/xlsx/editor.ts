@@ -12,8 +12,9 @@ import {
 } from '../raw'
 import { decodeEntities, parseXml } from '../xml'
 import { BUILTIN_FORMATS, isDateFormat } from './numfmt'
+import { readTyped, type TypedNumber } from '../number-input'
 import { parseSheetStyles } from './styles'
-import type { BookOp, BorderKind, CellInput, ClipCell, ColInfo, FindOptions, FmtPatch, Merge, Range, RowAttrs, SheetOp, SheetProgress, XlsxClip, XlsxEditResult } from './types'
+import type { BookOp, BorderKind, CellInput, ClipCell, ColInfo, FindOptions, FmtPatch, Merge, Range, RowAttrs, SetOptions, SheetOp, SheetProgress, XlsxClip, XlsxEditResult } from './types'
 import { expandShared, overflows, restore, setColStyle, setColWidth, setFormula, setMerge, setRowHeight, shiftSheet, snapshot, type Snapshot } from './structure'
 import { dropSheetInFormula, moveRefsInFormula, parseFormula, renameSheetInFormula, translateFormula, withFunctionPrefixes, type Ast, type MoveOp, type RefAddr } from './formula'
 import { loadDelimited, type DelimitedImport } from './import'
@@ -35,6 +36,13 @@ interface CellChange {
   prevF?: string
   next: Entry | null
   nextF?: string
+  /**
+   * Whether the formula before / after is a dynamic array formula. `nextD` left out: the formula says (one typed is
+   * dynamic when it may give several values); a formula copied is what its source is. Both are known once the
+   * change was applied: undoing and redoing put back what was.
+   */
+  prevD?: boolean
+  nextD?: boolean
 }
 interface LayoutState {
   merges?: Merge[]
@@ -42,6 +50,13 @@ interface LayoutState {
   rowAttrs?: [number, RowAttrs][]
   frozen?: { rows: number; cols: number }
   gridLines?: boolean
+}
+
+/** what the formulas know of the workbook besides its cells: the defined names and the tables */
+interface BookState {
+  names: XlsxWorkbook['names']
+  tables: XlsxWorkbook['tables']
+  pivots: XlsxWorkbook['pivots']
 }
 
 export interface Change {
@@ -58,6 +73,8 @@ export interface Change {
   others?: { sheet: number; key: number; prev: string; next: string }[]
   /** parts rewritten with it (defined names, tables, drawings, charts following rows / columns that moved) */
   parts?: PartEdit[]
+  /** the defined names and the tables as the formulas see them, before and after (they follow the rows / columns too) */
+  book?: { before: BookState; after: BookState }
   /**
    * The rows of `range` put in another order (a sort): row `i` of the range took the cells of row `order[i]`. The
    * cells are moved, not kept here; the formulas among them, as their text was before and is after (it follows the
@@ -177,27 +194,21 @@ interface InputContext {
   /** its number format ('' or "General": none) */
   fmt: string
   date1904: boolean
+  /** the BCP 47 tag numbers are typed in (undefined: a decimal point) */
+  locale?: string
 }
 
 const noQuotes = (fmt: string) => fmt.replace(/"[^"]*"|\\.|\[[^\]]*\]/g, '')
 
 const ERROR_INPUT = /^#(?:N\/A|DIV\/0!|VALUE!|REF!|NAME\?|NUM!|NULL!)$/i
-const MONEY = '$€£¥₫₩₹₽₱฿'
-const AMOUNT = new RegExp(`^([-+]?)\\s*([${MONEY}]?)\\s*(\\d{1,3}(?:,\\d{3})+|\\d+)(\\.\\d+)?\\s*([${MONEY}]?)$`)
 
 /**
- * An amount typed with thousands separators and / or a currency sign ("1,234,567", "$50", "€1,200.50", "50 ₫"): the
- * number, and the format that shows it as typed. Not a plain number (read before), not two signs.
+ * The format that shows an amount as typed ("1,234,567", "$50", "€1,200.50", "50 ₫"): grouped, with the decimals typed
+ * (a currency shows cents when cents were typed), the currency where it was. A format code, the same in every locale.
  */
-function amountInput(t: string): { n: number; fmt: string } | undefined {
-  const m = AMOUNT.exec(t)
-  if (!m || (m[2] && m[5]) || (!m[2] && !m[5] && !m[3].includes(','))) return undefined
-  const n = Number(m[3].replace(/,/g, '') + (m[4] ?? ''))
-  if (!Number.isFinite(n)) return undefined
-  // (a currency shows cents when cents were typed)
-  const digits = '#,##0' + (m[4] ? '.' + '0'.repeat(m[2] || m[5] ? Math.max(2, m[4].length - 1) : m[4].length - 1) : '')
-  const fmt = m[2] ? `"${m[2]}"${digits}` : m[5] ? `${digits}" ${m[5]}"` : digits
-  return { n: m[1] === '-' ? -n : n, fmt }
+function amountFormat(n: TypedNumber): string {
+  const digits = '#,##0' + (n.decimals ? '.' + '0'.repeat(n.currency ? Math.max(2, n.decimals) : n.decimals) : '')
+  return !n.currency ? digits : n.after ? `${digits}" ${n.currency}"` : `"${n.currency}"${digits}`
 }
 
 /** whether text reads as a formula that reads a cell or calls a function (what makes "+A1+B1" one, and not "-5" or "- item") */
@@ -246,21 +257,16 @@ function parseInput(input: string, style: number, ctx: InputContext = { fmt: '',
     if (readsOrCalls(f)) return { e: [T_STR, '=' + f, style], f }
   }
   if (ERROR_INPUT.test(t)) return { e: [T_ERR, t.toUpperCase(), style] }
+  // a number in the separators of the locale it is typed in (a number too large to be one, 1e999, stays the text
+  // typed: the file has no way to say Infinity)
+  const n = readTyped(t, ctx.locale)
   // more digits than a number holds (a card number, an id): kept as typed, where a number would end in zeros
-  if (/^[-+]?\d{16,}$/.test(t)) return { e: [T_STR, input, style] }
-  // a number too large to be one (1e999) stays the text typed: the file has no way to say Infinity
-  if (/^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i.test(t) && Number.isFinite(Number(t))) {
-    const n = Number(t)
-    // in a cell that shows percentages, 50 is 50% (as Excel reads it); a number under 1 is the fraction itself
-    return { e: [T_NUM, Math.abs(n) >= 1 && noQuotes(ctx.fmt).includes('%') ? n / 100 : n, style] }
-  }
-  if (/^[-+]?(\d+\.?\d*|\.\d+)%$/.test(t) && Number.isFinite(Number(t.slice(0, -1)))) {
-    const dec = /\.(\d+)%$/.exec(t)?.[1].length ?? 0
-    return { e: [T_NUM, Number(t.slice(0, -1)) / 100, style], want: general ? (dec ? `0.${'0'.repeat(Math.min(dec, 10))}%` : '0%') : undefined }
-  }
+  if (n?.kind === 'plain' && /^[-+]?\d{16,}$/.test(n.canon)) return { e: [T_STR, input, style] }
+  // in a cell that shows percentages, 50 is 50% (as Excel reads it); a number under 1 is the fraction itself
+  if (n?.kind === 'plain') return { e: [T_NUM, Math.abs(n.value) >= 1 && noQuotes(ctx.fmt).includes('%') ? n.value / 100 : n.value, style] }
+  if (n?.kind === 'percent') return { e: [T_NUM, n.value / 100, style], want: general ? (n.decimals ? `0.${'0'.repeat(Math.min(n.decimals, 10))}%` : '0%') : undefined }
   if (/^(true|false)$/i.test(t)) return { e: [T_BOOL, /^true$/i.test(t) ? 1 : 0, style] }
-  const amount = amountInput(t)
-  if (amount) return { e: [T_NUM, amount.n, style], want: general ? amount.fmt : undefined }
+  if (n) return { e: [T_NUM, n.value, style], want: general ? amountFormat(n) : undefined }
   if (general || isDateFormat(ctx.fmt)) {
     const date = dateInput(t, ctx.date1904)
     if (date) return { e: [T_NUM, date.serial, style], want: general ? date.fmt : undefined }
@@ -452,6 +458,11 @@ class StyleEditor {
 export class XlsxEditor {
   private undoStack: Change[] = []
   private redoStack: Change[] = []
+
+  /** the steps undo and redo can take back now */
+  get history(): { undo: number; redo: number } {
+    return { undo: this.undoStack.length, redo: this.redoStack.length }
+  }
   private styleEd?: StyleEditor
   private stylesPath?: string
   private formulaTouched = false
@@ -612,6 +623,8 @@ export class XlsxEditor {
   }
 
   private lastRecalc: number[] = []
+  /** the sheet reached further after the last change than before (a formula filled cells past its last row / column): how far */
+  private lastGrown: { rows: number; cols: number } | undefined
 
   /**
    * Before anything is edited: every sheet is in memory (a formula may read any, and a sheet never shown may hold
@@ -632,11 +645,21 @@ export class XlsxEditor {
   private apply(d: SheetData, cells: CellChange[], which: 'prev' | 'next') {
     const sheet = [...this.wb.sheetsData].find(([, x]) => x === d)?.[0] ?? 0
     const formulaKeys: { sheet: number; key: number }[] = []
+    const reach = [d.maxRow, d.maxCol]
+    // A value a dynamic array formula spilled into a cell is not the cell's own: what is typed over it replaces
+    // nothing, and undoing leaves the cell empty for the formula to fill again.
+    if (which === 'next' && d.dynamic.size) {
+      for (const ch of cells) if (ch.prev && !ch.prevF && ch.prev[0] !== T_EMPTY && this.wb.calc.spilledAt(sheet, ch.key)) ch.prev = ch.prev[2] ? [T_EMPTY, '', ch.prev[2]] : null
+    }
+    if (which === 'next') for (const ch of cells) if (ch.prevD === undefined && ch.prevF !== undefined) ch.prevD = d.dynamic.has(ch.key)
     this.applyRaw(d, cells, which)
     for (const ch of cells) {
       const f0 = which === 'prev' ? ch.nextF : ch.prevF
       const f1 = which === 'prev' ? ch.prevF : ch.nextF
-      if (f0 !== f1) this.wb.calc.formulaChanged(sheet, ch.key)
+      if (f0 !== f1) {
+        this.wb.calc.formulaChanged(sheet, ch.key, which === 'prev' ? ch.prevD : ch.nextD)
+        if (which === 'next' && ch.nextD === undefined && f1 !== undefined) ch.nextD = d.dynamic.has(ch.key)
+      }
       if (f1) formulaKeys.push({ sheet, key: ch.key })
     }
     // only value changes matter for dependents (formatting doesn't)
@@ -647,6 +670,7 @@ export class XlsxEditor {
       return !a || !b || a[0] !== b[0] || a[1] !== b[1] || c.prevF !== c.nextF
     })
     this.lastRecalc = changed.length || formulaKeys.length ? [...this.wb.calc.recalc(changed.map((c) => ({ sheet, key: c.key })), formulaKeys)] : []
+    this.lastGrown = d.maxRow > reach[0] || d.maxCol > reach[1] ? { rows: d.maxRow + 1, cols: d.maxCol + 1 } : undefined
   }
 
   private applyRaw(d: SheetData, cells: CellChange[], which: 'prev' | 'next') {
@@ -666,7 +690,7 @@ export class XlsxEditor {
     this.undoStack.push({ sheet, cells, range, lay })
     if (this.undoStack.length > 200) this.undoStack.shift()
     this.redoStack = []
-    return { sheet, range, recalc: this.lastRecalc, layout: lay ? this.layout(sheet) : undefined }
+    return { sheet, range, recalc: this.lastRecalc, layout: lay ? this.layout(sheet) : undefined, ...(this.lastGrown ? { grown: this.lastGrown } : {}) }
   }
 
   /** after rows/columns moved: rebuild the dependency graph and recompute every formula */
@@ -677,7 +701,8 @@ export class XlsxEditor {
     return [...this.wb.calc.recalc([], all)]
   }
 
-  async setCells(sheet: number, inputs: CellInput[]): Promise<XlsxEditResult> {
+  /** `opts.locale`: the BCP 47 tag the numbers among `inputs` were typed in (undefined: a decimal point; formulas are never read in it) */
+  async setCells(sheet: number, inputs: CellInput[], opts: SetOptions = {}): Promise<XlsxEditResult> {
     await this.ready()
     const d = this.sheet(sheet)
     if (d.protection) for (const { r, c } of inputs) this.denyLocked(d, { r0: r, c0: c, r1: r, c1: c })
@@ -693,7 +718,7 @@ export class XlsxEditor {
       const prev = getEntry(d, r, c)
       // (a cell typed into an empty place takes the format of its row, else of its column)
       const st = prev?.[2] ?? this.lockStyleAt(d, r, c)
-      const { e, f, want: typed } = parseInput(input, st, { fmt: xfs[st]?.numFmt ?? '', date1904: this.wb.date1904 })
+      const { e, f, want: typed } = parseInput(input, st, { fmt: xfs[st]?.numFmt ?? '', date1904: this.wb.date1904, locale: opts?.locale })
       // a formula typed into a cell without a format shows as what it computes: a date, or as the cell it is
       const want = typed ?? (e && f && !/[^\s]/.test((xfs[st]?.numFmt ?? '').replace(/^general$/i, '')) ? this.formulaFormat(sheet, f) : undefined)
       if (e && want) e[2] = (ed ??= await this.styles()).derive(st, { numFmt: want })
@@ -952,12 +977,20 @@ export class XlsxEditor {
   private step(ch: Change, which: 'prev' | 'next'): XlsxEditResult {
     const d = this.sheet(ch.sheet)
     this.lastRecalc = []
+    this.lastGrown = undefined
     if (ch.full) restore(d, which === 'prev' ? ch.full.before : ch.full.after)
     for (const o of ch.others ?? []) {
       const od = this.wb.sheetsData.get(o.sheet)
       if (od) setFormula(od, o.key, which === 'prev' ? o.prev : o.next)
     }
     for (const p of ch.parts ?? []) this.wb.pkg.setPart(p.path, which === 'prev' ? p.prev : p.next)
+    if (ch.book) {
+      const b = which === 'prev' ? ch.book.before : ch.book.after
+      this.wb.names = b.names
+      this.wb.tables = b.tables
+      this.wb.pivots = b.pivots
+      this.wb.calc.namesChanged()
+    }
     if (ch.cm) for (const [id, c] of which === 'prev' ? [...ch.cm.before].reverse() : ch.cm.after) this.wb.comments.set(id, c)
     if (ch.sort) {
       if (which === 'next') this.moveRows(d, ch.range, ch.sort.order, ch.sort.before, ch.sort.after)
@@ -967,7 +1000,7 @@ export class XlsxEditor {
     this.apply(d, ch.cells, which)
     if (ch.lay) applyLayout(d, which === 'prev' ? ch.lay.before : ch.lay.after)
     const recalc = ch.full || ch.others?.length || ch.sort ? this.recalcAll() : this.lastRecalc
-    return { sheet: ch.sheet, range: ch.range, layout: ch.full || ch.lay ? this.layout(ch.sheet) : undefined, recalc }
+    return { sheet: ch.sheet, range: ch.range, layout: ch.full || ch.lay ? this.layout(ch.sheet) : undefined, recalc, ...(this.lastGrown ? { grown: this.lastGrown } : {}) }
   }
 
   undo(): XlsxEditResult | null {
@@ -1014,7 +1047,7 @@ export class XlsxEditor {
       const to = which === 'prev' ? c.prev : c.next
       // (a format given to the cell since stays)
       const next: Entry | null = to && cur && left && cur[2] !== left[2] ? [to[0], to[1], cur[2]] : !to && cur && left && cur[2] !== left[2] ? [T_EMPTY, '', cur[2]] : to
-      cells.push({ key: c.key, prev: cur, prevF: curF, next, nextF: which === 'prev' ? c.prevF : c.nextF })
+      cells.push({ key: c.key, prev: cur, prevF: curF, next, nextF: which === 'prev' ? c.prevF : c.nextF, nextD: which === 'prev' ? c.prevD : c.nextD })
     }
     const counter: Change = {
       sheet: ch.sheet,
@@ -1117,12 +1150,18 @@ export class XlsxEditor {
         const followed = await followParts(this.wb.pkg, this.wb.mainPath, this.wb.sheets[sheet].path, name, { axis, at: op.at, delta })
         for (const h of followed.headers) setEntry(d, h.r, h.c, [T_STR, h.text, getEntry(d, h.r, h.c)?.[2] ?? 0])
         if (followed.parts.length) this.bookChanged = true
+        // (the names and tables the formulas know are those of the parts as they are now)
+        const book: BookState = { names: this.wb.names, tables: this.wb.tables, pivots: this.wb.pivots }
+        if (followed.parts.length) await this.wb.loadNames()
         const cm = this.shiftComments(this.wb.sheets[sheet].path, axis, op.at, delta)
         this.formulaTouched = true
         const recalc = this.recalcAll()
         const ch: Change = { sheet, cells: [], range: all, full: { before, after: snapshot(d) }, cm }
         if (edits.length) ch.others = edits.map((e) => ({ sheet: this.indexOf(e.d), key: e.key, prev: e.prev, next: e.next }))
-        if (followed.parts.length) ch.parts = followed.parts
+        if (followed.parts.length) {
+          ch.parts = followed.parts
+          ch.book = { before: book, after: { names: this.wb.names, tables: this.wb.tables, pivots: this.wb.pivots } }
+        }
         this.undoStack.push(ch)
         this.redoStack = []
         return { sheet, range: all, layout: this.layout(sheet), recalc }
@@ -1314,10 +1353,16 @@ export class XlsxEditor {
         const line: ClipCell[] = []
         const text: string[] = []
         for (let c = R.c0; c < R.c0 + w; c++) {
-          const e = getEntry(d, r, c)
-          const f = d.formulas.get(r * MAX_COL + c)
+          let e = getEntry(d, r, c)
+          const key = r * MAX_COL + c
+          const f = d.formulas.get(key)
+          // a value a dynamic array formula spilled here, copied with its formula: the formula fills the cell again where it is pasted
+          if (e && f === undefined && d.dynamic.size) {
+            const owner = this.wb.calc.spillOwner(sheet, key)
+            if (owner !== undefined && owner % MAX_COL >= R.c0 && owner % MAX_COL < R.c0 + w && Math.floor(owner / MAX_COL) >= R.r0 && Math.floor(owner / MAX_COL) < R.r0 + h) e = e[2] ? [T_EMPTY, '', e[2]] : null
+          }
           // (a shared string by its text: its number means something in this workbook only)
-          line.push(e || f !== undefined ? [e ? (e[0] === T_SST ? T_STR : e[0]) : T_EMPTY, e ? (e[0] === T_SST ? (this.wb.sst[e[1] as number] ?? '') : e[1]) : '', e?.[2] ?? 0, ...(f !== undefined ? [f] : [])] as ClipCell : null)
+          line.push(e || f !== undefined ? [e ? (e[0] === T_SST ? T_STR : e[0]) : T_EMPTY, e ? (e[0] === T_SST ? (this.wb.sst[e[1] as number] ?? '') : e[1]) : '', e?.[2] ?? 0, ...(f !== undefined ? (d.dynamic.has(key) ? [f, true] : [f]) : [])] as ClipCell : null)
           if (e || f !== undefined) filled++
           text.push(tsvCell(shown.get(r)?.get(c) ?? ''))
         }
@@ -1363,7 +1408,8 @@ export class XlsxEditor {
         // (a format this workbook does not have: one of another document, or a broken operation)
         const st = cell && Number.isInteger(cell[2]) && cell[2] >= 0 && cell[2] < styles ? cell[2] : 0
         const next: Entry | null = !cell ? null : nextF !== undefined ? [T_STR, '=' + nextF, st] : clipEntry(cell, st)
-        changes.push({ key, prev, prevF, next, nextF })
+        // (a formula copied is a dynamic array formula when the one it was copied from is)
+        changes.push(nextF !== undefined ? { key, prev, prevF, next, nextF, nextD: cell?.[4] === true } : { key, prev, prevF, next, nextF })
       }
     }
     // what read the cells cut reads them here (the formulas pasted have theirs already)
@@ -1422,7 +1468,9 @@ export class XlsxEditor {
         const src = getEntry(d, sr, sc)
         const sf = d.formulas.get(sr * MAX_COL + sc)
         const nf = sf ? translateFormula(sf, r - sr, c - sc) : undefined
-        changes.push({ key, prev: getEntry(d, r, c), prevF: d.formulas.get(key), next: src ? [src[0], nf ? '=' + nf : src[1], src[2]] : null, nextF: nf })
+        const ch: CellChange = { key, prev: getEntry(d, r, c), prevF: d.formulas.get(key), next: src ? [src[0], nf ? '=' + nf : src[1], src[2]] : null, nextF: nf }
+        if (nf) ch.nextD = d.dynamic.has(sr * MAX_COL + sc)
+        changes.push(ch)
       }
     }
     this.apply(d, changes, 'next')
@@ -1440,6 +1488,15 @@ export class XlsxEditor {
     // (Excel refuses too: "all the merged cells need to be the same size")
     if (d.merges.some((m) => m.r1 >= range.r0 && m.r0 <= range.r1 && m.c1 >= range.c0 && m.c0 <= range.c1)) {
       throw new Error('This range has merged cells: unmerge them to sort it.')
+    }
+    // (Excel refuses too: the cells a formula fills are not cells to move, and the formula moved would fill others)
+    if (d.dynamic.size) {
+      for (const key of d.dynamic) {
+        const rg = d.arrays.get(key) ?? { r0: Math.floor(key / MAX_COL), c0: key % MAX_COL, r1: Math.floor(key / MAX_COL), c1: key % MAX_COL }
+        if (rg.r1 >= range.r0 && rg.r0 <= range.r1 && rg.c1 >= range.c0 && rg.c0 <= range.c1) {
+          throw new Error('This range has a formula that fills several cells (a dynamic array): it cannot be sorted. Sort the cells the formula reads, or use SORT.')
+        }
+      }
     }
     const n = range.r1 - range.r0 + 1
     const rank = new Uint8Array(n)
@@ -1629,6 +1686,8 @@ export class XlsxEditor {
         // the sheet as it is now: its XML with the edits made here written in (what a save would write)
         const sd = this.wb.sheetsData.get(op.index)
         if (sd?.loading && !sd.done) await sd.loading
+        // (its dynamic array formulas name a record of the workbook's metadata: there before they are written)
+        if (sd?.dynamic.size) await this.linkDynamic(true)
         const source = sd && needsWrite(sd) ? await new Response(this.rewrite(src.path, sd)).text() : (this.newSheets.get(src.path) ?? (await pkg.text(src.path)))
         const taken = new Set(listed.map((e) => (getAttr(e, 'name') ?? '').toLowerCase()))
         let name = ''
@@ -1718,6 +1777,8 @@ export class XlsxEditor {
     this.redoStack = []
     // sheets are known to the formulas by their place in the list and by their name: both changed
     this.wb.calc.invalidate()
+    // (so are the names local to a sheet, and the tables: each is of a sheet)
+    await this.wb.loadNames().catch(() => {})
     return { sheet: 0, range: { r0: 0, c0: 0, r1: 0, c1: 0 }, sheets: sheets.map((s) => ({ ...s })), ...(recalc ? { recalc } : {}) }
   }
 
@@ -1743,6 +1804,7 @@ export class XlsxEditor {
     await this.wb.loadPending()
     const pkg = this.wb.pkg
     let any = false
+    await this.linkDynamic()
     for (const [index, d] of this.wb.sheetsData) {
       if (d.maxRow >= MAX_ROWS) {
         throw new Error(
@@ -1775,6 +1837,66 @@ export class XlsxEditor {
     if (this.wb.comments.dirty) await writeXlsxComments(pkg, this.wb.mainPath, this.wb.comments, this.wb.sheets)
     await this.linkStyles()
     return pkg.save(XLSX_MIME)
+  }
+
+  /**
+   * Dynamic array formulas are told from the array formulas of old by a record of the workbook's metadata part,
+   * which their cells name (`cm`): the part gets that record (and is made, when the workbook has none) before the
+   * sheets are written.
+   */
+  private async linkDynamic(now = false): Promise<void> {
+    const wb = this.wb
+    if (wb.dynamicRecord || (!now && ![...wb.sheetsData.values()].some((d) => d.dynamic.size && needsWrite(d)))) return
+    if (wb.dynamicCm.size) {
+      wb.dynamicRecord = Math.min(...wb.dynamicCm)
+      return
+    }
+    const pkg = wb.pkg
+    const TYPE = 'XLDAPR'
+    const XDA = 'http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray'
+    const type = `<metadataType name="${TYPE}" minSupportedVersion="120000" copy="1" pasteAll="1" pasteValues="1" merge="1" splitFirst="1" rowColShift="1" clearFormats="1" clearComments="1" assign="1" coerce="1" cellMeta="1"/>`
+    const future = `<futureMetadata name="${TYPE}" count="1"><bk><extLst><ext uri="{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}"><xda:dynamicArrayProperties xmlns:xda="${XDA}" fDynamic="1" fCollapsed="0"/></ext></extLst></bk></futureMetadata>`
+    const rel = relOfType(await pkg.rels(wb.mainPath), 'sheetMetadata')
+    if (rel && pkg.has(rel.target)) {
+      // a metadata part without the record (it holds others: the pictures in cells…): the record is added to it
+      const nodes = parseRaw(await pkg.text(rel.target))
+      const root = rootEl(nodes)
+      if (!root) return
+      const P = prefixOf(root.q)
+      const section = (name: string, before: string[]): RNode => {
+        let n = kidOf(root, name)
+        if (!n) {
+          n = el(P + name, { count: '0' })
+          const at = root.c.findIndex((c) => isNode(c) && before.includes(local(c.q)))
+          root.c.splice(at < 0 ? root.c.length : at, 0, n)
+          root.self = false
+        }
+        return n
+      }
+      const add = (n: RNode, xml: string) => {
+        n.c.push(...parseRaw(P ? xml.replace(/<(\/?)(?!xda:)/g, `<$1${P}`) : xml))
+        n.self = false
+        const count = kidsOf(n).length
+        setAttr(n, 'count', String(count))
+        return count
+      }
+      const types = section('metadataTypes', ['metadataStrings', 'mdxMetadata', 'futureMetadata', 'cellMetadata', 'valueMetadata', 'extLst'])
+      const t = add(types, type)
+      const at = root.c.findIndex((c) => isNode(c) && ['cellMetadata', 'valueMetadata', 'extLst'].includes(local(c.q)))
+      root.c.splice(at < 0 ? root.c.length : at, 0, ...parseRaw(P ? future.replace(/<(\/?)(?!xda:)/g, `<$1${P}`) : future))
+      wb.dynamicRecord = add(section('cellMetadata', ['valueMetadata', 'extLst']), `<bk><rc t="${t}" v="0"/></bk>`)
+      pkg.setPart(rel.target, serialize(nodes))
+    } else {
+      const path = 'xl/metadata.xml'
+      pkg.setPart(
+        path,
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<metadata xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><metadataTypes count="1">${type}</metadataTypes>${future}<cellMetadata count="1"><bk><rc t="1" v="0"/></bk></cellMetadata></metadata>`,
+      )
+      if (!rel) await pkg.addRel(wb.mainPath, 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata', path)
+      await pkg.setContentType(path, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml')
+      wb.dynamicRecord = 1
+    }
+    wb.dynamicCm.add(wb.dynamicRecord)
   }
 
   /**
@@ -1919,17 +2041,31 @@ function xText(s: string): string {
   return s.replace(/_(?=x[0-9A-Fa-f]{4}_)/g, '_x005F_').replace(/[\u0000-\u0008\u000b-\u001f\uFFFE\uFFFF]/g, (ch) => `_x${ch.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}_`)
 }
 
-function cellXml(d: SheetData, r: number, c: number, P: string, _wb: XlsxWorkbook): string {
+/** the name of the table a cell is in (a structured reference without a table name is of that one) */
+function tableAt(wb: XlsxWorkbook, d: SheetData, r: number, c: number): string | undefined {
+  if (!wb.tables.length) return undefined
+  const index = [...wb.sheetsData].find(([, x]) => x === d)?.[0]
+  const on = index === undefined ? undefined : wb.sheets[index]?.name
+  return wb.tables.find((t) => t.sheet === on && r >= t.r0 && r <= t.r1 && c >= t.c0 && c <= t.c1)?.name
+}
+
+function cellXml(d: SheetData, r: number, c: number, P: string, wb: XlsxWorkbook): string {
   const key = r * MAX_COL + c
   const e = getEntry(d, r, c)
   const f = d.formulas.get(key)
   if (!e && !f) return ''
   const ref = colName(c) + (r + 1)
-  const s = e?.[2] ? ` s="${e[2]}"` : ''
+  let s = e?.[2] ? ` s="${e[2]}"` : ''
   if (f) {
     const [t, v] = e ?? [T_EMPTY, '']
-    const arr = d.arrays.get(key)
-    const fx = `<${P}f${arr ? ` t="array" ref="${colName(arr.c0)}${arr.r0 + 1}:${colName(arr.c1)}${arr.r1 + 1}"` : ''}>${escText(withFunctionPrefixes(f))}</${P}f>`
+    // a dynamic array formula is an array formula over the cells it fills (its own alone when it gives one value),
+    // marked as dynamic by the metadata record its cell names
+    const dynamic = d.dynamic.has(key) && wb.dynamicRecord > 0
+    const arr = d.arrays.get(key) ?? (dynamic ? { r0: r, c0: c, r1: r, c1: c } : undefined)
+    if (dynamic) s += ` cm="${wb.dynamicRecord}"`
+    // (one cell is named alone, as Excel names it)
+    const cells = arr ? `${colName(arr.c0)}${arr.r0 + 1}${arr.r1 > arr.r0 || arr.c1 > arr.c0 ? `:${colName(arr.c1)}${arr.r1 + 1}` : ''}` : ''
+    const fx = `<${P}f${arr ? ` t="array" ref="${cells}"` : ''}>${escText(withFunctionPrefixes(f, f.includes('[') ? tableAt(wb, d, r, c) : undefined))}</${P}f>`
     if (t === T_NUM) return `<${P}c r="${ref}"${s}>${fx}<${P}v>${String(v)}</${P}v></${P}c>`
     if (t === T_BOOL) return `<${P}c r="${ref}"${s} t="b">${fx}<${P}v>${v ? 1 : 0}</${P}v></${P}c>`
     if (t === T_ERR) return `<${P}c r="${ref}"${s} t="e">${fx}<${P}v>${escText(String(v))}</${P}v></${P}c>`

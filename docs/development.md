@@ -34,10 +34,15 @@ src/core     parsers, DOM-free (runs in worker / Bun)
   legacy     .doc / .xls / .ppt (compound file reader + converters), .rtf, OpenDocument → DOCX / XLSX / PPTX
   iwork      Pages / Keynote / Numbers → DOCX / PPTX / XLSX
   visio      Visio drawings (.vsdx) → PPTX
+  math       TeX math: `$…$` / `$$…$$` in Markdown, TeX → MathML (views, web pages) and → OMML (Word file)
 src/react    view components
 src/embed.ts mount() + <office-viewer>
 src/collab   real-time collaboration (hub, session, per-format adapters)
 ```
+
+### DOCX pages
+
+`DocxView` measures the blocks off screen in time slices (`src/react/docx/measure.ts`: a block's height, where a paragraph's lines and a table's rows are), `paginate()` cuts them into pages (`paginate.ts`: pure, lines and rows given, keep rules; unit tests in `test/docx-paginate.test.ts`) and only the pages in view render. The browser breaks the lines; the offset each line starts at is read (`lineStarts`) only for the paragraphs a page in view or an edit cuts. A paragraph split across pages renders as one element per part, each with the paragraph's `data-pa` address and the offsets it holds (`data-from`, `data-to`): `paraEl()` / `posFromDom()` / `domFromPos()` in `src/react/edit/input.ts` map DOM places to paragraph offsets over the parts, so the caret, selections, find and comments need nothing else. Header rows repeated on the following pages of a table are copies without an address (`.de-head-copy`).
 
 ## Browser tests
 
@@ -54,7 +59,8 @@ The app reads `DocViewer` props from the query string (`?src=samples/sample.docx
 | `file-menu.spec.ts`   | every File entry: New, Open (conversions), Import, Save, Rename, Download as, Details, Print      |
 | `permissions.spec.ts` | `allowSave` / `allowDownload` combinations, image download, Ctrl+S / Ctrl+P                       |
 | `color.spec.ts`       | custom colors (system picker, recent list, persistence) in the 3 formats                          |
-| `embed.spec.ts`       | `<office-viewer>` (shadow DOM, attributes, `file`) and `mount()`                                  |
+| `embed.spec.ts`       | `<office-viewer>` (shadow DOM, attributes, `file`, `fonts`) and `mount()`                         |
+| `fonts.spec.ts`       | host fonts (a generated test font): loaded before measuring, timeout, failure, late web fonts     |
 | `collab.spec.ts`      | two editors on `scripts/collab-server.ts`: live edits, presence, File menu in a room              |
 
 `bun test` only runs `test/` (`bunfig.toml`); `bun run test:e2e` runs `e2e/`.

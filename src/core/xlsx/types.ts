@@ -111,6 +111,15 @@ export interface CellInput {
   input: string
 }
 
+/** how the inputs of an `xlsx.set` are read */
+export interface SetOptions {
+  /**
+   * BCP 47 tag the numbers were typed in: its decimal and grouping separators (`1,5` and `1.234,5` in `de-DE`).
+   * Undefined: a decimal point and commas grouping by thousands. Formulas are read the same in every locale.
+   */
+  locale?: string
+}
+
 export type BorderKind = 'all' | 'outer' | 'inner' | 'none' | 'top' | 'bottom' | 'left' | 'right'
 
 export interface FmtPatch {
@@ -155,10 +164,17 @@ export interface XlsxEditResult {
   sheets?: SheetInfo[]
   /** sheets whose formula values changed (cached rows are stale) */
   recalc?: number[]
+  /** the sheet reaches further than before (a formula filled cells past its last row / column): its rows and columns now */
+  grown?: { rows: number; cols: number }
+  /**
+   * the steps undo and redo can take back after this edit: an edit that changed nothing (a sort of sorted rows) records
+   * none, so this, not a count of results, says what the history holds
+   */
+  history?: { undo: number; redo: number }
 }
 
 /** a copied cell: kind of value (as the workbook holds it: number, text, boolean, error…), value, format, formula (no "=") */
-export type ClipCell = [type: number, value: number | string, style: number, formula?: string] | null
+export type ClipCell = [type: number, value: number | string, style: number, formula?: string, dynamic?: boolean] | null
 
 /** cells copied from a sheet (`xlsx.copy`): what the `paste` sheet operation writes, and what goes to the clipboard */
 export interface XlsxClip {

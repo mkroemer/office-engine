@@ -6,8 +6,9 @@
  */
 import type { DocumentClient } from '../core/worker/client'
 import type { Methods } from '../core/worker/protocol'
-import type { BookOp, Range, SheetOp, WorkbookMeta } from '../core/xlsx/types'
-import { onLocal } from './hosts'
+import type { BookOp, Range, SetOptions, SheetOp, WorkbookMeta } from '../core/xlsx/types'
+import { inputLocale } from '../core/number-input'
+import { onLocal, setLocalHistory } from './hosts'
 import type { Adapter, ApplyResult } from './session'
 import { conflictsX, isStructural, STRUCTURAL, transformX, type PBookOp, type XOp } from './xlsx-ops'
 import { applyComment, revertComment, type CommentOp } from './comments'
@@ -43,6 +44,7 @@ export class XlsxCollab implements Adapter<XOp> {
   private offLocal: () => void
 
   constructor(private client: DocumentClient) {
+    this.publishHistory()
     this.offLocal = onLocal(client, (d) => {
       const s = d as XlsxLocalSel
       const sheet = this.path(s.sheet)
@@ -52,6 +54,11 @@ export class XlsxCollab implements Adapter<XOp> {
 
   dispose() {
     this.offLocal()
+    setLocalHistory(this.client)
+  }
+
+  private publishHistory() {
+    setLocalHistory(this.client, { undo: this.undoStack.length, redo: this.redoStack.length })
   }
 
   private get meta() {
@@ -76,8 +83,11 @@ export class XlsxCollab implements Adapter<XOp> {
     switch (method) {
       case 'comments.set':
         return this.submit({ t: 'comment', id: this.id(), cid: a[0], c: a[1] as CommentOp['c'] })
-      case 'xlsx.set':
-        return this.local({ t: 'set', id: this.id(), sheet: this.path(a[0]), cells: a[1] })
+      case 'xlsx.set': {
+        // (the locale goes with the op: each replica, and a server replaying the log, reads the numbers as typed)
+        const locale = inputLocale((a[2] as SetOptions | undefined)?.locale)
+        return this.local({ t: 'set', id: this.id(), sheet: this.path(a[0]), cells: a[1], ...(locale ? { locale } : {}) })
+      }
       case 'xlsx.format':
         return this.local({ t: 'fmt', id: this.id(), sheet: this.path(a[0]), range: a[1], patch: a[2] })
       case 'xlsx.sheetOp': {
@@ -120,6 +130,7 @@ export class XlsxCollab implements Adapter<XOp> {
     } else if (!isStructural(op)) this.undoStack.push({ kind: 'op', id: op.id })
     if (this.undoStack.length > 200) this.undoStack.shift()
     this.redoStack = []
+    this.publishHistory()
     return this.submit!(op)
   }
 
@@ -127,6 +138,7 @@ export class XlsxCollab implements Adapter<XOp> {
     const e = from.pop()
     if (!e) return Promise.resolve(null)
     to.push(e)
+    this.publishHistory()
     if (e.kind === 'op') return this.submit!({ t: 'revert', id: this.id(), target: e.id, which })
     return this.submit!({ t: 'sheet', id: this.id(), sheet: e.sheet, op: which === 'prev' ? e.undo : e.redo })
   }
@@ -153,6 +165,7 @@ export class XlsxCollab implements Adapter<XOp> {
       const keep = (e: UndoEntry) => e.kind === 'inverse' && kind === 'local'
       this.undoStack = this.undoStack.filter(keep)
       this.redoStack = this.redoStack.filter(keep)
+      this.publishHistory()
     }
     if (kind !== 'local' && res) this.client.notify('collab:xlsx', res)
     return { result: res, undo: rec }

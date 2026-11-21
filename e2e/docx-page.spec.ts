@@ -41,8 +41,7 @@ describe('docx page setup', () => {
 
     const after = await pageBox(v)
     expect(after.width / after.height).toBeCloseTo(841.9 / 595.3, 1)
-    const colsCss = await v.page.locator('.de-page-cols').first().evaluate((el) => getComputedStyle(el).columnCount)
-    expect(colsCss).toBe('2')
+    expect(await v.page.locator('.de-page').first().locator('.de-page-cols > .de-page-col').count()).toBe(2)
     if (SHOTS) await v.page.screenshot({ path: `${SHOTS}/page-setup-2cols.png` })
 
     const m = await metaOf((await v.save()).bytes)
@@ -73,5 +72,28 @@ describe('docx page setup', () => {
     expect(await dlg.getByRole('button', { name: 'Apply' }).isDisabled()).toBe(true)
     await v.page.keyboard.press('Escape')
     expect(await dlg.count()).toBe(0)
+  })
+
+  test('margins typed in the locale of the viewer (de-DE: 2,5 cm); one that is not a number is refused, never a prefix (#17)', async () => {
+    const v = await viewer({ src: 'samples/sample.docx', editable: true, onSave: true, locale: 'de-DE' })
+    await v.page.locator('.de-ebar').waitFor()
+    const before = (await metaOf((await v.save()).bytes)).page
+    await v.btn('Page setup').click()
+    const dlg = v.page.locator('form[aria-label="Page setup"]')
+    const left = dlg.locator('input[aria-label="Left margin (cm)"]')
+    expect(await left.inputValue()).toBe(String(+(before.ml / (72 / 2.54)).toFixed(2)).replace('.', ','))
+    const apply = dlg.getByRole('button', { name: 'Apply' })
+    for (const bad of ['2.5', '2,5cm', '']) {
+      await left.fill(bad)
+      expect([bad, await apply.isDisabled()]).toEqual([bad, true])
+    }
+    await left.fill('2,5')
+    expect(await apply.isDisabled()).toBe(false)
+    await apply.click()
+    await v.page.waitForTimeout(600)
+    const after = (await metaOf((await v.save()).bytes)).page
+    expect(after.ml).toBeCloseTo(2.5 * (72 / 2.54), 1)
+    expect(after.mr).toBeCloseTo(before.mr, 1)
+    expect(v.errors).toEqual([])
   })
 })

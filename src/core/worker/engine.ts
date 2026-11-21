@@ -4,13 +4,14 @@ import type { CanonStyle, EditOp, HFSet, PageSet, ParaSpec, StyleLook, TableOp }
 import { OpcPackage, type DocKind } from '../opc'
 import { PptxPresentation } from '../pptx/parser'
 import { BlobSource, openSource, type DocSource } from '../source'
-import { decodeText, HAS_SOURCE, isMhtml, mayBePlain, mhtmlToHtml, plainFormat, plainToOffice, ungzipped } from '../plain'
+import { decodeText, HAS_SOURCE, isMhtml, mayBePlain, mhtmlToHtml, plainFormat, plainToOffice, ungzipped, unpackedName } from '../plain'
+import { languageOf, languageOfFile } from '../syntax'
 import { knownEncoding } from '../encoding'
 import { XlsxWorkbook } from '../xlsx/workbook'
 import { XlsxEditor } from '../xlsx/editor'
 import { readSheetDrawings } from '../xlsx/drawings'
 import { loadDelimited } from '../xlsx/import'
-import type { BookOp, CellInput, FindOptions, FmtPatch, Range, SheetOp } from '../xlsx/types'
+import type { BookOp, CellInput, FindOptions, FmtPatch, Range, SetOptions, SheetOp } from '../xlsx/types'
 import type { PParaSpec, ShapeOp, SlideOp } from '../pptx/types'
 import { addSlideImage, shapeOps, slideOp, undoShapes } from '../pptx/edit'
 import { ZipArchive } from '../zip'
@@ -44,6 +45,7 @@ export class Engine {
   private pptx?: PptxPresentation
   private abort = new AbortController()
   private plainText: string | null = null
+  private original: Blob | null = null
 
   constructor(private emit: Emit) {}
 
@@ -66,21 +68,26 @@ export class Engine {
       const bytes = await source.read(0, source.size)
       converted = legacy === 'cfb' ? await convertCfb(bytes) : legacy === 'rtf' ? await convertRtf(bytes) : legacy === 'biff' ? await convertBiff(bytes) : await convertFlatOdf(bytes)
     }
-    // CSV / TSV / text / Markdown / HTML / SVG / diagrams: converted to a workbook / document
-    const imported = head && !converted ? plainFormat(name, source.type, head, source.size <= 4096) : null
+    // CSV / TSV / text / Markdown / HTML / SVG / diagrams / source code: converted to a workbook / document
+    const imported = head && !converted ? plainFormat(name, source.type, head, source.size <= 4096, params.language?.trim() || undefined) : null
     // gzip-compressed (.svgz, .csv.gz): unpacked whole, then read like the file inside
     if (imported) source = await ungzipped(source)
     // CSV / TSV: an empty workbook whose sheet streams the rows in when it is loaded (the text is never read whole)
     const tabular = imported === 'csv' || imported === 'tsv'
-    let text = imported && !tabular ? decodeText(await source.read(0, source.size), source.type, params.encoding) : null
+    const bytes = imported && !tabular ? await source.read(0, source.size) : null
+    let text = bytes ? decodeText(bytes, source.type, params.encoding) : null
     // a web page saved as one file (MHTML, often named .doc): its HTML
     if (imported === 'html' && text && isMhtml(text)) text = mhtmlToHtml(text)
     // kept for the source view: formats whose text is worth reading next to the document
     this.plainText = imported && HAS_SOURCE.has(imported) ? text : null
+    // a source file: its language (the host's hint, else its name, else its type) and its bytes, saved as they are when not edited
+    const hint = params.language?.trim()
+    const language = imported === 'code' ? (hint ? (languageOf(hint) ?? hint.toLowerCase()) : (languageOfFile(unpackedName(name) ?? name, source.type) ?? '')) : undefined
+    this.original = imported === 'code' && bytes ? new Blob([bytes as BlobPart], { type: source.type || 'text/plain' }) : null
     let zip = converted
       ? await ZipArchive.open(new BlobSource(converted.file))
       : imported
-        ? await ZipArchive.open(new BlobSource(await plainToOffice(text ?? '', imported, name)))
+        ? await ZipArchive.open(new BlobSource(await plainToOffice(text ?? '', imported, name, language)))
         : await ZipArchive.open(source)
     // OpenDocument text / spreadsheet / presentation packages
     if (!converted && !imported) {
@@ -99,7 +106,7 @@ export class Engine {
     this.kind = main.kind
     const flavor = await pkg.flavor()
     const res: OpenResult = {
-      kind: main.kind, name, size, ...(from ? { from } : {}), ...(imported ? { imported } : {}), ...(converted ? { converted: converted.format } : {}),
+      kind: main.kind, name, size, ...(from ? { from } : {}), ...(imported ? { imported } : {}), ...(language !== undefined ? { language } : {}), ...(converted ? { converted: converted.format } : {}),
       ...(flavor ? { ext: flavor.ext } : {}),
     }
     if (main.kind === 'docx') this.docx = await DocxDocument.open(pkg, main.path)
@@ -137,6 +144,8 @@ export class Engine {
         return this.need(this.pkg).blob(args[0] as string)
       case 'plain.source':
         return this.plainText
+      case 'plain.original':
+        return this.original
       case 'docx.start': {
         const doc = this.need(this.docx)
         try {
@@ -192,28 +201,28 @@ export class Engine {
         return
       }
       case 'xlsx.set':
-        return this.xed().setCells(args[0] as number, args[1] as CellInput[])
+        return this.withHistory(this.xed().setCells(args[0] as number, args[1] as CellInput[], args[2] as SetOptions | undefined))
       case 'xlsx.copy':
         return this.xed().copy(args[0] as number, args[1] as Range)
       case 'xlsx.region':
         return this.xed().region(args[0] as number, args[1] as Range)
       case 'xlsx.format':
-        return this.xed().format(args[0] as number, args[1] as Range, args[2] as FmtPatch)
+        return this.withHistory(this.xed().format(args[0] as number, args[1] as Range, args[2] as FmtPatch))
       case 'xlsx.sheetOp':
-        return this.xed().sheetOp(args[0] as number, args[1] as SheetOp)
+        return this.withHistory(this.xed().sheetOp(args[0] as number, args[1] as SheetOp))
       case 'xlsx.replace':
-        return this.xed().replace(args[0] as number, args[1] as string, args[2] as string, args[3] as FindOptions, args[4] as { r: number; c: number } | undefined)
+        return this.withHistory(this.xed().replace(args[0] as number, args[1] as string, args[2] as string, args[3] as FindOptions, args[4] as { r: number; c: number } | undefined))
       case 'xlsx.bookOp':
-        return this.xed().bookOp(args[0] as BookOp)
+        return this.withHistory(this.xed().bookOp(args[0] as BookOp))
       case 'xlsx.import': {
         const p = (args[2] ?? {}) as { name?: string; sep?: string; residentCells?: number; pageRows?: number; encoding?: string }
         const source = await ungzipped(await openSource(args[1] as DocSource, { signal: this.abort.signal }))
-        return this.xed().importText(args[0] as number, { source, sep: p.sep, budget: p.residentCells, pageRows: p.pageRows, encoding: p.encoding, onWarning: (text) => this.emit('warning', { text }) }, p.name)
+        return this.withHistory(await this.xed().importText(args[0] as number, { source, sep: p.sep, budget: p.residentCells, pageRows: p.pageRows, encoding: p.encoding, onWarning: (text) => this.emit('warning', { text }) }, p.name))
       }
       case 'xlsx.undo':
-        return this.xed().undo()
+        return this.withHistory(this.xed().undo())
       case 'xlsx.redo':
-        return this.xed().redo()
+        return this.withHistory(this.xed().redo())
       case 'collab.xlsx.apply':
         return this.xc().apply(args[0] as XOp)
       case 'collab.xlsx.revert':
@@ -245,6 +254,8 @@ export class Engine {
         return addSlideImage(this.need(this.pptx), args[0] as number, new Uint8Array(args[1] as ArrayBuffer), args[2] as string)
       case 'pptx.slide':
         return this.need(this.pptx).slide(args[0] as number)
+      case 'pptx.titles':
+        return this.need(this.pptx).titles()
       case 'pptx.undo':
         return undoShapes(this.need(this.pptx), !!args[0])
     }
@@ -267,6 +278,13 @@ export class Engine {
 
   private xed(): XlsxEditor {
     return (this.xlsxEd ??= new XlsxEditor(this.need(this.xlsx)))
+  }
+
+  /** an edit's result with the undo / redo steps the workbook holds after it */
+  private async withHistory<T>(edit: T | Promise<T>): Promise<T> {
+    const res = await edit
+    if (res && typeof res === 'object') (res as { history?: { undo: number; redo: number } }).history = this.xed().history
+    return res
   }
 
   private async save(): Promise<Blob> {

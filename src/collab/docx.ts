@@ -14,7 +14,7 @@ import type { Block, HFSetResult, Inline, PageSetResult, Paragraph, StyleInfo } 
 import type { DocumentClient } from '../core/worker/client'
 import type { Methods } from '../core/worker/protocol'
 import type { DocState, DocxCommit, DocxEditor } from '../react/docx/DocxEditor'
-import { domFromPos } from '../react/edit/input'
+import { domFromPos, paraRanges } from '../react/edit/input'
 import { normalize, plen, runsText, splitRuns, type Pos, type RRun, type Sel } from '../react/edit/rich'
 import { watchHost } from './hosts'
 import type { Adapter, ApplyResult } from './session'
@@ -232,7 +232,7 @@ export class DocxCollab implements Adapter<DocxOp> {
   /** this client's rid / link key → resource key */
   private resKey = new Map<string, string>()
   private results = new WeakMap<DocxOp, unknown>()
-  private snap: { a: DPos; f: DPos; text: Map<string, string>; focused: boolean } | null = null
+  private snap: { a: DPos; f: DPos; text: Map<string, string>; focused: boolean; all: boolean } | null = null
   /** the model was changed since the last `settled` */
   private touchedModel = false
   private site = 0
@@ -668,8 +668,8 @@ export class DocxCollab implements Adapter<DocxOp> {
   /** remembers the selection (by paragraph id + text) before the model changes */
   private capture() {
     if (this.snap || !this.host) return
-    const focused = !!this.ed.input.readSel()
-    const sel = this.ed.input.sel()
+    const focused = this.ed.input.focused && !!this.ed.input.readSel()
+    const sel = focused ? this.ed.input.sel() : this.ed.input.lastSel
     const a = sel && this.toD(sel.a)
     const f = sel && this.toD(sel.f)
     if (!a || !f) return
@@ -678,7 +678,8 @@ export class DocxCollab implements Adapter<DocxOp> {
       const l = this.locate(d.pid)[d.k]
       if (l) text.set(`${d.pid}:${d.k}`, runsText(l.p.runs as RRun[]))
     }
-    this.snap = { a, f, text, focused }
+    // a select-all held while a host's control has the focus: lastSel is only the pages shown, the selection is everything
+    this.snap = { a, f, text, focused, all: !focused && this.ed.input.selectingAll }
   }
 
   /** the remembered selection in the current model */
@@ -708,9 +709,17 @@ export class DocxCollab implements Adapter<DocxOp> {
     }
     const sel = this.sel()
     this.snap = null
+    // a held select-all stays the whole document, with what the collaborators added
+    const all = s.all ? this.ed.input.renewSelectAll() : null
+    if (all) {
+      this.ed.pendingSel = null
+      this.ed.onSelection(all)
+      return
+    }
     // keep the caret where the user was; never steal focus from other controls
     this.ed.pendingSel = s.focused ? sel : null
     if (!s.focused) this.ed.input.lastSel = sel
+    this.ed.onSelection(sel)
   }
 
   // ---------------------------------------------------------------- presence
@@ -753,10 +762,13 @@ export class DocxCollab implements Adapter<DocxOp> {
     }
     const sel: DOMRect[] = []
     const ad = domFromPos(pages, a)
-    if (ad && fd && (a.pa !== f.pa || a.o !== f.o)) {
+    if (a.pa === f.pa && a.o !== f.o) {
+      // one paragraph, maybe over the end of a page: only its parts, not what is between them
+      for (const r of paraRanges(pages, a.pa, Math.min(a.o, f.o), Math.max(a.o, f.o))) for (const x of Array.from(r.getClientRects())) if (x.width > 0.5) sel.push(x)
+    } else if (ad && fd && a.pa !== f.pa) {
       const r = document.createRange()
       try {
-        const forward = this.ed.cmp(a.pa, f.pa) < 0 || (a.pa === f.pa && a.o < f.o)
+        const forward = this.ed.cmp(a.pa, f.pa) < 0
         if (forward) {
           r.setStart(ad[0], ad[1])
           r.setEnd(fd[0], fd[1])

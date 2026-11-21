@@ -49,7 +49,7 @@ const RE_CELL = /(\$?)([A-Za-z]{1,3})(\$?)(\d+)/y
 const RE_COLS = /(\$?)([A-Za-z]{1,3}):(\$?)([A-Za-z]{1,3})/y
 const RE_ROWS = /(\$?)(\d+):(\$?)(\d+)/y
 const RE_NUM = /(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?/y
-const PREFIXES = ['_XLFN.', '_XLWS.', '_XLUDF.']
+const PREFIXES = ['_XLFN.', '_XLWS.', '_XLUDF.', '_XLPM.']
 
 function at(re: RegExp, s: string, i: number): RegExpExecArray | null {
   re.lastIndex = i
@@ -114,6 +114,18 @@ export function stripFnPrefix(name: string): string {
   return n
 }
 
+/** the end of the bracketed text that starts at `i` (brackets balanced; `'` escapes the next character), -1 when it does not end */
+function brackets(src: string, i: number): number {
+  let depth = 0
+  for (let j = i; j < src.length; j++) {
+    const ch = src[j]
+    if (ch === "'") j++
+    else if (ch === '[') depth++
+    else if (ch === ']' && --depth === 0) return j + 1
+  }
+  return -1
+}
+
 export function tokenize(src: string): Token[] {
   const out: Token[] = []
   const n = src.length
@@ -169,6 +181,12 @@ export function tokenize(src: string): Token[] {
     }
     if (ch === '#') {
       const e = readError(src, i)
+      // A1#: the cells the dynamic array formula of A1 fills (a file writes it ANCHORARRAY)
+      const last = out[out.length - 1]
+      if (!e && last && (last.t === 'ref' || last.t === 'name' || (last.t === 'punc' && last.v === ')'))) {
+        out.push({ t: 'op', v: '#', s, e: ++i })
+        continue
+      }
       if (!e) throw new FormulaSyntaxError('bad error literal', i)
       out.push({ t: 'err', v: e[0], s, e: e[1] })
       i = e[1]
@@ -197,10 +215,17 @@ export function tokenize(src: string): Token[] {
       // external workbook prefix: [1]Sheet1!A1 (kept verbatim as part of the sheet name)
       const m = /\[\d+\][\w.\u00A1-\uFFFF]+!/y
       m.lastIndex = i
-      if (!m.exec(src)) throw new FormulaSyntaxError("unexpected '['", i)
-      const end = m.lastIndex - 1
-      const sheet = src.slice(i, end)
-      i = afterSheet(s, end + 1, sheet, sheet)
+      if (m.exec(src)) {
+        const end = m.lastIndex - 1
+        const sheet = src.slice(i, end)
+        i = afterSheet(s, end + 1, sheet, sheet)
+        continue
+      }
+      // a structured reference of the table the formula is in ([@Price], [Price]), or an optional parameter of LAMBDA
+      const j = brackets(src, i)
+      if (j < 0) throw new FormulaSyntaxError("unexpected '['", i)
+      out.push({ t: 'name', v: src.slice(i, j), s, e: j })
+      i = j
       continue
     }
     if ('(){},;'.includes(ch)) {
@@ -212,7 +237,7 @@ export function tokenize(src: string): Token[] {
       out.push({ t: 'op', v: two, s, e: (i += 2) })
       continue
     }
-    if ('+-*/^&=<>%:'.includes(ch)) {
+    if ('+-*/^&=<>%:@'.includes(ch)) {
       out.push({ t: 'op', v: ch, s, e: ++i })
       continue
     }
@@ -238,6 +263,16 @@ export function tokenize(src: string): Token[] {
         i = afterSheet(s, j + 1, word, word)
         continue
       }
+      if (src[j] === ':') {
+        // a 3-D reference: First:Last!A1 (the cell of every sheet from First to Last)
+        const m = /:[\w.\u00A1-\uFFFF]+!/y
+        m.lastIndex = j
+        if (m.exec(src)) {
+          const sheet = src.slice(i, m.lastIndex - 1)
+          i = afterSheet(s, m.lastIndex, sheet, sheet)
+          continue
+        }
+      }
       if (src[j] === '(') {
         out.push({ t: 'func', v: stripFnPrefix(word), s, e: j })
         i = j
@@ -256,14 +291,9 @@ export function tokenize(src: string): Token[] {
         continue
       }
       if (src[j] === '[') {
-        // structured reference Table[...]: swallow balanced brackets
-        let depth = 0
-        do {
-          if (src[j] === '[') depth++
-          else if (src[j] === ']') depth--
-          j++
-        } while (j < n && depth > 0)
-        if (depth > 0) throw new FormulaSyntaxError('unterminated [', i)
+        // structured reference Table[...]: its brackets, balanced
+        j = brackets(src, j)
+        if (j < 0) throw new FormulaSyntaxError('unterminated [', i)
       }
       out.push({ t: 'name', v: src.slice(i, j), s, e: j })
       i = j

@@ -739,6 +739,21 @@ describe('xlsx sheets and merging (QA 19/11/2026, N1-018, N1-019)', () => {
     expect(v.errors).toEqual([])
   })
 
+  test('sheet rename validation uses the German strings table', async () => {
+    const v = await viewer({ src: 'samples/sample.xlsx', editable: true, texts: 'de' })
+    await rename(v, 'Notes', 'sales')
+    expect(await v.toast()).toContain('„sales“ ist bereits vorhanden')
+    await rename(v, 'Notes', '   ')
+    expect(await v.toast()).toContain('darf nicht leer sein')
+    await rename(v, 'Notes', 'x'.repeat(40))
+    expect(await v.toast()).toContain('höchstens 31 Zeichen')
+    expect(await tabName(v, 1, 'x'.repeat(31))).toBe('x'.repeat(31))
+    await rename(v, 'x'.repeat(31), 'a/b?c')
+    expect(await v.toast()).toContain('durch _ ersetzt')
+    expect(await tabName(v, 1, 'a_b_c')).toBe('a_b_c')
+    expect(v.errors).toEqual([])
+  })
+
   test('N1-018: merging cells that hold data says what was dropped, and Undo brings it back', async () => {
     const v = await open()
     await v.typeCell('K24', 'a')
@@ -1065,5 +1080,162 @@ describe('xlsx whole columns and rows (QA 19/11/2026, P2-042)', () => {
     await v.page.waitForTimeout(300)
     expect((await cellBox(v, 'M20'))?.style ?? '').not.toMatch(yellow)
     expect(v.errors).toEqual([])
+  })
+})
+
+describe('xlsx dynamic arrays', () => {
+  test('a formula that gives several values fills the cells under it; a cell in the way makes it #SPILL!; saved', async () => {
+    const v = await open()
+    await v.typeCell('J10', '=SEQUENCE(3)')
+    await shownIs(v, 'J10', '1')
+    await shownIs(v, 'J11', '2')
+    await shownIs(v, 'J12', '3')
+    await v.typeCell('K10', '=SUM(J10#)')
+    await shownIs(v, 'K10', '6')
+    expect(await v.formula('K10')).toBe('=SUM(J10#)')
+    // typed over a value it filled: nothing is filled until Undo gives the cell back
+    await v.typeCell('J11', 'x')
+    await shownIs(v, 'J10', '#SPILL!')
+    await shownIs(v, 'J12', '')
+    await v.clickCell('N20')
+    await v.page.keyboard.press('Control+z')
+    await shownIs(v, 'J10', '1')
+    await shownIs(v, 'J11', '2')
+    await shownIs(v, 'K10', '6')
+    // a formula of single values with names of its own
+    await v.typeCell('L10', '=LET(x,J10,y,J11,x+y)')
+    await shownIs(v, 'L10', '3')
+    const s = await saved(v)
+    expect(s.cell('J12')).toBe('3')
+    expect(s.cell('K10')).toBe('6')
+    expect(v.errors).toEqual([])
+  })
+
+  test('#35: pasted into several cells, or filled as a block, every copy fills the cells under it; saved', async () => {
+    const v = await open()
+    await v.typeCell('J10', '=SEQUENCE(3)')
+    await shownIs(v, 'J12', '3')
+    // one copied cell into two: the second copy is a dynamic array formula too
+    await v.clickCell('J10')
+    await v.page.keyboard.press('ControlOrMeta+c')
+    await v.page.waitForTimeout(200)
+    await v.selectRange('L10', 'M10')
+    await v.page.keyboard.press('ControlOrMeta+v')
+    for (const col of ['L', 'M']) for (const [r, x] of [[10, '1'], [11, '2'], [12, '3']] as const) await shownIs(v, `${col}${r}`, x)
+    expect(await v.formula('M10')).toBe('=SEQUENCE(3)')
+    // the fill handle repeats a block of two cells the same way
+    await v.typeCell('P10', '=SEQUENCE(2)')
+    await v.typeCell('Q10', '=SEQUENCE(2)*10')
+    await v.selectRange('P10', 'Q10')
+    const h = (await v.page.locator('.de-fill-handle').first().boundingBox())!
+    const to = await v.cellPoint('T10')
+    await v.page.mouse.move(h.x + h.width / 2, h.y + h.height / 2)
+    await v.page.mouse.down()
+    await v.page.mouse.move(to.x, to.y, { steps: 6 })
+    await v.page.mouse.up()
+    for (const [ref, x] of [['R10', '1'], ['R11', '2'], ['S10', '10'], ['S11', '20'], ['T10', '1'], ['T11', '2']] as const) await shownIs(v, ref, x)
+    const { bytes } = await v.save()
+    const s = await xlsxSheet(bytes)
+    for (const [ref, x] of [['M11', '2'], ['M12', '3'], ['T11', '2']] as const) expect(s.cell(ref)).toBe(x)
+    const z = await unzip(new Blob([bytes]))
+    const xml = await z.text(z.paths.find((p) => /worksheets\/sheet1\.xml$/.test(p))!)
+    for (const ref of ['L10', 'M10', 'R10', 'S10', 'T10']) expect(xml).toMatch(new RegExp(`<c r="${ref}"[^>]* cm="\\d+"`))
+    expect(v.errors).toEqual([])
+  })
+})
+
+describe('xlsx numbers typed in a locale (#17)', () => {
+  const openIn = async (locale?: string, browser?: string) => {
+    const v = await viewer({ src: 'samples/sample.xlsx', editable: true, onSave: true, ...(locale ? { locale } : {}) }, { locale: browser })
+    await v.page.locator('.de-ebar').waitFor()
+    return v
+  }
+  /** type and value of saved cells (column A to Z) */
+  const kinds = async (v: Viewer, refs: string[]) => {
+    const s = await saved(v)
+    const out: [string, string, string][] = []
+    for (const ref of refs) {
+      const [, col, row] = /^([A-Z])(\d+)$/.exec(ref)!
+      const d: any = await s.engine.call('xlsx.cell', [0, Number(row) - 1, col.charCodeAt(0) - 65])
+      out.push([ref, d?.type, d?.value])
+    }
+    return out
+  }
+  const sizeBox = (v: Viewer) => v.page.locator('input[aria-label="Font size"]').first()
+  const typeSize = async (v: Viewer, text: string) => {
+    await sizeBox(v).click()
+    await sizeBox(v).fill(text)
+    await sizeBox(v).press('Enter')
+    await v.page.waitForTimeout(300)
+  }
+  const stylesXml = async (v: Viewer) => (await unzip(new Blob([(await v.save()).bytes]))).text('xl/styles.xml')
+
+  test('de-DE: 1,5 and 1.234,5 are numbers, 1.5 is text; the formula bar shows 1,5 and an edit of it stays 1.5', async () => {
+    const v = await openIn('de-DE')
+    await v.typeCell('J10', '1,5')
+    await v.typeCell('J11', '1.234,5')
+    await v.typeCell('J12', '1.5')
+    await v.typeCell('J13', '=J10*2')
+    expect(await v.shown('J13')).toBe('3')
+    expect(await v.formula('J10')).toBe('1,5')
+    expect(await v.formula('J13')).toBe('=J10*2')
+    // edited again: what is shown is what is read
+    await v.clickCell('J10')
+    await v.page.keyboard.press('F2')
+    await v.page.keyboard.type('0')
+    await v.page.keyboard.press('Enter')
+    await v.page.waitForTimeout(200)
+    expect(await v.formula('J10')).toBe('1,5')
+    expect(await v.shown('J13')).toBe('3')
+    expect(await kinds(v, ['J10', 'J11', 'J12', 'J13'])).toEqual([
+      ['J10', 'number', '1.5'],
+      ['J11', 'number', '1234.5'],
+      ['J12', 'string', '1.5'],
+      ['J13', 'number', '3'],
+    ])
+    expect(v.errors).toEqual([])
+  })
+
+  test('without a locale (in a German browser): 1,5 stays text, 1.5 is a number, as before', async () => {
+    const v = await openIn(undefined, 'de-DE')
+    await v.typeCell('J10', '1,5')
+    await v.typeCell('J11', '1.5')
+    await v.typeCell('J12', '1,234')
+    expect(await v.formula('J11')).toBe('1.5')
+    expect(await kinds(v, ['J10', 'J11', 'J12'])).toEqual([
+      ['J10', 'string', '1,5'],
+      ['J11', 'number', '1.5'],
+      ['J12', 'number', '1234'],
+    ])
+    expect(v.errors).toEqual([])
+  })
+
+  test('the font size box: 12,5 in de-DE; 12,5 and 12.5 without a locale; what is not a size keeps the size it had', async () => {
+    const de = await openIn('de-DE')
+    await de.clickCell('J10')
+    const was = await sizeBox(de).inputValue()
+    await typeSize(de, '12.5')
+    expect(await sizeBox(de).inputValue()).toBe(was)
+    await typeSize(de, '12,5')
+    expect(await sizeBox(de).inputValue()).toBe('12,5')
+    expect(await stylesXml(de)).toContain('<sz val="12.5"/>')
+    expect(de.errors).toEqual([])
+
+    const none = await openIn()
+    await none.clickCell('J10')
+    expect(await sizeBox(none).inputValue()).toBe(was)
+    for (const bad of ['12pt', '1.2.5', '1,2,5', '1,234', '']) {
+      await typeSize(none, bad)
+      expect([bad, await sizeBox(none).inputValue()]).toEqual([bad, was])
+    }
+    expect(await stylesXml(none)).not.toContain('<sz val="12.5"/>')
+    // without a locale the size box alone reads a decimal comma (#17): a size has no grouping
+    await typeSize(none, '12,5')
+    expect(await sizeBox(none).inputValue()).toBe('12.5')
+    expect(await stylesXml(none)).toContain('<sz val="12.5"/>')
+    await typeSize(none, '14.5')
+    expect(await sizeBox(none).inputValue()).toBe('14.5')
+    expect(await stylesXml(none)).toContain('<sz val="14.5"/>')
+    expect(none.errors).toEqual([])
   })
 })

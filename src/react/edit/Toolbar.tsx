@@ -3,6 +3,7 @@ import {
   createContext,
   Fragment,
   isValidElement,
+  useCallback,
   useContext,
   useEffect,
   useLayoutEffect,
@@ -10,12 +11,19 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type ComponentType,
   type CSSProperties,
   type ReactElement,
   type ReactNode,
   type RefObject,
 } from 'react'
+import { fontSize } from './format-values'
+import { focusWithSelection } from './input'
 import { cssColor } from '../../core/color'
+import { useStrings } from '../strings'
+import { useHostUI, type ButtonProps, type SelectProps } from '../ui'
+import { inputLocale, numberText, parseNumber } from '../../core/number-input'
+import { useLocale } from '../common/locale'
 
 const BORDER_GRID = <path d="M4 4h16v16H4zM12 4v16M4 12h16" strokeDasharray="1.2 2.6" opacity={0.5} strokeWidth={1.4} />
 
@@ -225,40 +233,83 @@ function PopBox(props: { className?: string; children: ReactNode; onMouseDown?: 
   )
 }
 
-/** closes a popup on outside mousedown (shadow-DOM safe: uses the composed path) */
+/** Closes on outside mousedown; attach the returned capture handler to the popup's wrapper for React portals. */
 export function useDismiss(ref: RefObject<HTMLElement | null>, open: boolean, close: () => void) {
   const cb = useRef(close)
+  const insideEvents = useRef(new WeakSet<Event>())
   cb.current = close
+  const onMouseDownCapture = useCallback((e: React.MouseEvent) => {
+    insideEvents.current.add(e.nativeEvent)
+  }, [])
   useEffect(() => {
     if (!open) return
+    let active = true
     const on = (e: MouseEvent) => {
       const el = ref.current
-      if (el && !e.composedPath().includes(el)) cb.current()
+      if (!el || e.composedPath().includes(el)) return
+      // React capture follows the logical tree through portals. Wait for it even if bubbling is stopped.
+      setTimeout(() => {
+        if (active && !insideEvents.current.has(e)) cb.current()
+        insideEvents.current.delete(e)
+      }, 0)
     }
     window.addEventListener('mousedown', on, true)
-    return () => window.removeEventListener('mousedown', on, true)
+    return () => {
+      active = false
+      window.removeEventListener('mousedown', on, true)
+    }
   }, [open, ref])
+  return onMouseDownCapture
 }
 
-export function Btn(props: { icon?: IconName; label?: ReactNode; title: string; active?: boolean; disabled?: boolean; onClick: () => void; wide?: boolean }) {
+function DefaultButton(props: ButtonProps) {
   return (
     <button
       type="button"
-      className={props.active ? 'de-tb de-tb-on' : 'de-tb'}
+      className={props.className}
       title={props.title}
       aria-label={props.title}
-      aria-pressed={props.active}
+      aria-pressed={props.expanded === undefined ? props.active : undefined}
+      aria-expanded={props.expanded}
       disabled={props.disabled}
-      onMouseDown={keep}
+      onMouseDown={props.onMouseDown}
       onClick={props.onClick}
       style={props.wide ? { width: 'auto', padding: '0 8px' } : undefined}
     >
-      {props.icon ? <Icon name={props.icon} /> : props.label}
+      {props.icon}
+      {props.label}
+      {props.children}
     </button>
   )
 }
 
-export const Sep = () => <span className="de-tb-sep" />
+/** A toolbar button through the host's `Button` where there is one. `extraClass` adds to the engine's classes. */
+function ToolButton(props: Omit<ButtonProps, 'onMouseDown' | 'className' | 'icon'> & { extraClass?: string; iconSize?: number }) {
+  const Button = useHostUI().Button ?? DefaultButton
+  const { extraClass, iconSize, ...rest } = props
+  const className = (props.active || props.expanded ? 'de-tb de-tb-on' : 'de-tb') + (extraClass ? ' ' + extraClass : '')
+  const icon = props.iconName ? <Icon name={props.iconName} size={iconSize} /> : undefined
+  return <Button {...rest} icon={icon} className={className} onMouseDown={keep} />
+}
+
+export function Btn(props: { icon?: IconName; label?: ReactNode; title: string; active?: boolean; disabled?: boolean; onClick: () => void; wide?: boolean }) {
+  return (
+    <ToolButton
+      title={props.title}
+      iconName={props.icon}
+      label={props.icon ? undefined : props.label}
+      active={props.active}
+      disabled={props.disabled}
+      onClick={props.onClick}
+      wide={props.wide}
+    />
+  )
+}
+
+export const Sep = () => {
+  const Separator = useHostUI().Separator
+  return Separator ? <Separator /> : <span className="de-tb-sep" />
+}
 
 export interface DropOption<T> {
   value: T
@@ -275,28 +326,17 @@ export interface DropOption<T> {
   head?: string
 }
 
+/** A dropdown through the host's `Select` where there is one. */
+export function Dropdown<T extends string | number>(props: SelectProps<T>) {
+  const Host = useHostUI().Select as ComponentType<SelectProps<T>> | undefined
+  return Host ? <Host {...props} /> : <DefaultSelect {...props} />
+}
+
 /**
  * Styled dropdown (listbox). Never takes focus from the editor: mouse down is prevented and,
  * while open, keys are captured at the window (arrows, Enter, Escape, type-ahead).
  */
-export function Dropdown<T extends string | number>(props: {
-  title: string
-  options: DropOption<T>[]
-  onChange: (v: T) => void
-  /** selected value (check mark); omit for command menus */
-  value?: T | ''
-  placeholder?: string
-  /** fixed trigger content (menus); null = icon only */
-  label?: ReactNode
-  icon?: IconName
-  width?: number
-  menuWidth?: number
-  disabled?: boolean
-  /** popup aligned to the trigger's right edge */
-  alignRight?: boolean
-  /** extra class of the trigger button */
-  className?: string
-}) {
+function DefaultSelect<T extends string | number>(props: SelectProps<T>) {
   const { options } = props
   const [open, setOpen] = useState(false)
   const [hi, setHi] = useState(-1)
@@ -307,7 +347,7 @@ export function Dropdown<T extends string | number>(props: {
   const check = props.value !== undefined
   const sel = check ? options.findIndex((o) => o.value === props.value) : -1
   const current = sel >= 0 ? options[sel] : undefined
-  useDismiss(ref, open, () => setOpen(false))
+  const onMouseDownCapture = useDismiss(ref, open, () => setOpen(false))
 
   const pick = (o: DropOption<T> | undefined) => {
     if (!o || o.disabled) return
@@ -376,7 +416,7 @@ export function Dropdown<T extends string | number>(props: {
 
   const label = props.label !== undefined ? props.label : (current?.label ?? props.placeholder ?? '')
   return (
-    <span ref={ref} className="de-dd-wrap">
+    <span ref={ref} className="de-dd-wrap" onMouseDownCapture={onMouseDownCapture}>
       <button
         type="button"
         className={(open ? 'de-dd de-dd-open' : 'de-dd') + (props.className ? ' ' + props.className : '')}
@@ -454,30 +494,67 @@ export function Select<T extends string | number>(props: {
   return <Dropdown {...props} />
 }
 
+/** the number typed into a size box, by the rules of `sizeOf` */
+function typedSize(text: string, locale?: string): number | null {
+  if (inputLocale(locale) || !text.includes(',')) return parseNumber(text, locale)
+  const m = /^\s*(\d+),(\d{1,2}|\d{4,})\s*$/.exec(text)
+  return m ? Number(`${m[1]}.${m[2]}`) : null
+}
+
+/**
+ * The size typed into a size box, in half points; null when the whole text is not one (12pt, 1.2.5, empty) and the
+ * box keeps the size it had. With a locale, the locale's rules as for every number typed (12,5 in `de-DE`; not in
+ * `en-US`). Without one, the exception of this box alone: a decimal comma is read as well as a point (12,5 is 12.5,
+ * as since #17), since a size from 1 to 400 needs no grouping; but not a comma that could group thousands (1,234:
+ * three digits after it) and not two (1,2,5). Cells, Page setup and Header & footer keep the rules of no locale.
+ */
+export function sizeOf(text: string, locale?: string) {
+  const pt = typedSize(text, locale)
+  return pt === null ? null : fontSize(pt)
+}
+
 /** Font size box: − [size] + with a list of common sizes (Google Docs style). */
 export function SizeBox(props: { value?: number; placeholder?: number; sizes?: number[]; onChange: (n: number) => void; title?: string; disabled?: boolean }) {
   const sizes = props.sizes ?? SIZES
+  const locale = useLocale()
   const [text, setText] = useState<string | null>(null)
+  const draft = useRef<string | null>(null)
+  const editText = (value: string | null) => {
+    draft.current = value
+    setText(value)
+  }
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLSpanElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
-  useDismiss(ref, open, () => setOpen(false))
+  const onMouseDownCapture = useDismiss(ref, open, () => setOpen(false))
   const base = props.value ?? props.placeholder ?? 11
-  const set = (n: number) => {
-    setText(null)
+  const shown = (n: number | undefined) => (n !== undefined ? numberText(n, locale) : '')
+  const set = (n: number | null) => {
+    editText(null)
     setOpen(false)
-    if (Number.isFinite(n) && n >= 1 && n <= 400) props.onChange(Math.round(n * 2) / 2)
+    if (n !== null) props.onChange(n)
   }
+  // where the focus came from (the document, usually): Enter and Escape go back there, since a plain blur leaves the
+  // focus on the page body and a document then has no selection to format
+  const back = useRef<HTMLElement | null>(null)
+  const leave = (restoreSelection: boolean) => {
+    const to = back.current
+    back.current = null
+    if (!to?.isConnected) inputRef.current?.blur()
+    else if (restoreSelection) focusWithSelection(to)
+    else to.focus({ preventScroll: true })
+  }
+  // a size that is not one (12pt, 1.2.5, 12,5 in en-US): the box shows the size it had again
   const done = () => {
-    if (text !== null) set(parseFloat(text))
-    inputRef.current?.blur()
+    const size = draft.current === null ? null : sizeOf(draft.current, locale)
+    set(size)
+    leave(size === null)
   }
-  const title = props.title ?? 'Font size'
+  const t = useStrings()
+  const title = props.title ?? t.toolbar.fontSize
   return (
-    <span ref={ref} className="de-size">
-      <button type="button" className="de-tb de-size-step" title="Decrease font size" aria-label="Decrease font size" disabled={props.disabled} onMouseDown={keep} onClick={() => set(Math.max(1, Math.ceil(base) - 1))}>
-        <Icon name="minus" size={16} />
-      </button>
+    <span ref={ref} className="de-size" onMouseDownCapture={onMouseDownCapture}>
+      <ToolButton title={t.toolbar.fontSizeDown} iconName="minus" iconSize={16} extraClass="de-size-step" disabled={props.disabled} onClick={() => set(fontSize(Math.max(1, Math.ceil(base) - 1)))} />
       <input
         ref={inputRef}
         className="de-size-input"
@@ -485,43 +562,42 @@ export function SizeBox(props: { value?: number; placeholder?: number; sizes?: n
         aria-label={title}
         inputMode="decimal"
         disabled={props.disabled}
-        value={text ?? (props.value !== undefined ? String(props.value) : '')}
-        placeholder={props.placeholder !== undefined ? String(props.placeholder) : ''}
+        value={text ?? shown(props.value)}
+        placeholder={shown(props.placeholder)}
         onFocus={(e) => {
+          back.current = e.relatedTarget instanceof HTMLElement ? e.relatedTarget : null
           e.currentTarget.select()
           setOpen(true)
         }}
-        // a decimal comma is a decimal point (12,5 is not 125)
-        onChange={(e) => setText(e.target.value.replace(/,/g, '.').replace(/[^\d.]/g, '').replace(/^(\d*\.\d*)\..*$/, '$1'))}
+        // what is typed, as typed: it is read whole when committed
+        onChange={(e) => editText(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter') {
             e.preventDefault()
             done()
           } else if (e.key === 'Escape') {
             e.preventDefault()
-            setText(null)
+            editText(null)
             setOpen(false)
-            inputRef.current?.blur()
+            leave(true)
           } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
             e.preventDefault()
-            const cur = parseFloat(text ?? String(base))
+            const cur = (text !== null ? typedSize(text, locale) : null) ?? base
             const next = e.key === 'ArrowUp' ? sizes.find((n) => n > cur) : [...sizes].reverse().find((n) => n < cur)
-            if (next !== undefined) setText(String(next))
+            if (next !== undefined) editText(shown(next))
           }
         }}
         onBlur={() => {
-          if (text !== null) set(parseFloat(text))
+          if (draft.current !== null) set(sizeOf(draft.current, locale))
           setOpen(false)
         }}
       />
-      <button type="button" className="de-tb de-size-step" title="Increase font size" aria-label="Increase font size" disabled={props.disabled} onMouseDown={keep} onClick={() => set(Math.floor(base) + 1)}>
-        <Icon name="plus" size={16} />
-      </button>
+      <ToolButton title={t.toolbar.fontSizeUp} iconName="plus" iconSize={16} extraClass="de-size-step" disabled={props.disabled} onClick={() => set(fontSize(Math.floor(base) + 1))} />
       {open && (
         <div className="de-dd-pop de-size-pop" role="listbox" aria-label={title} onMouseDown={keep}>
           {sizes.map((n) => (
-            <div key={n} role="option" aria-selected={n === props.value} className={'de-dd-opt' + (String(n) === (text ?? String(props.value)) ? ' de-dd-hi' : '')} onClick={() => set(n)}>
-              {n}
+            <div key={n} role="option" aria-selected={n === props.value} className={'de-dd-opt' + (shown(n) === (text ?? shown(props.value)) ? ' de-dd-hi' : '')} onClick={() => set(fontSize(n))}>
+              {shown(n)}
             </div>
           ))}
         </div>
@@ -553,29 +629,34 @@ const signature = (el: ReactElement) => {
  * Item widths are measured once per set of items and cached for resizes.
  */
 export function ToolbarRow({ children }: { children: ReactNode }) {
+  const t = useStrings()
+  const ui = useHostUI()
   const items = flatten(children)
   const sig = items.map(signature).join('|')
+  // Host replacements can change item widths without changing their titles or types.
+  const measurement = useMemo(() => ({}), [sig, ui.Button, ui.Select, ui.Separator, t.toolbar.moreTools])
   const rowRef = useRef<HTMLDivElement>(null)
   const widths = useRef<number[]>([])
-  const [fit, setFit] = useState<{ sig: string; cut: number; w: number }>({ sig: '', cut: items.length, w: 0 })
+  const [fit, setFit] = useState<{ measurement: object | null; cut: number; w: number }>({ measurement: null, cut: items.length, w: 0 })
   const [more, setMore] = useState(false)
   const moreRef = useRef<HTMLSpanElement>(null)
-  useDismiss(moreRef, more, () => setMore(false))
-  const measured = fit.sig === sig
+  const moreWidth = useRef(0)
+  const onMouseDownCapture = useDismiss(moreRef, more, () => setMore(false))
+  const measured = fit.measurement === measurement
   const cut = measured ? fit.cut : items.length
 
   const layout = (w: number) => {
     const ws = widths.current
     const gap = 2
-    const total = ws.reduce((a, b) => a + b + gap, 0)
+    const total = ws.reduce((a, b) => a + b, 0) + Math.max(0, ws.length - 1) * gap
     let k = items.length
     if (total > w) {
-      const room = w - 34
+      const room = w - moreWidth.current
       let used = 0
       k = 0
       while (k < items.length && used + ws[k] + gap <= room) used += ws[k++] + gap
     }
-    setFit((f) => (f.sig === sig && f.cut === k && f.w === w ? f : { sig, cut: k, w }))
+    setFit((f) => (f.measurement === measurement && f.cut === k && f.w === w ? f : { measurement, cut: k, w }))
   }
   const avail = () => {
     const el = rowRef.current
@@ -584,13 +665,14 @@ export function ToolbarRow({ children }: { children: ReactNode }) {
     return el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
   }
 
-  // new set of items: everything is rendered once, measured, then cut
+  // Render all items and More together at their natural widths before the first cut.
   useLayoutEffect(() => {
     const el = rowRef.current
-    if (!el || measured) return
+    if (!el) return
     widths.current = [...el.querySelectorAll<HTMLElement>(':scope > [data-i]')].map((x) => x.getBoundingClientRect().width)
+    moreWidth.current = moreRef.current?.getBoundingClientRect().width ?? 0
     layout(avail())
-  })
+  }, [measurement])
   const relayout = useRef(() => {})
   relayout.current = () => {
     if (widths.current.length === items.length) layout(avail())
@@ -614,11 +696,9 @@ export function ToolbarRow({ children }: { children: ReactNode }) {
           {el}
         </span>
       ))}
-      {rest.length > 0 && (
-        <span ref={moreRef} className="de-tb-color de-ebar-morewrap">
-          <button type="button" className={more ? 'de-tb de-tb-on' : 'de-tb'} title="More" aria-label="More tools" aria-expanded={more} onMouseDown={keep} onClick={() => setMore((m) => !m)}>
-            <Icon name="more" />
-          </button>
+      {(!measured || rest.length > 0) && (
+        <span ref={moreRef} className="de-tb-color de-ebar-morewrap" onMouseDownCapture={onMouseDownCapture} style={!measured ? { visibility: 'hidden' } : undefined}>
+          <ToolButton title={t.toolbar.moreTools} iconName="more" expanded={more} onClick={() => setMore((m) => !m)} />
           {more && (
             <PopBox className="de-tb-pop de-ebar-more">
               {rest.map((el, i) => (
@@ -683,10 +763,11 @@ export function ColorBtn(props: { icon: IconName; title: string; value?: string;
   const ref = useRef<HTMLSpanElement>(null)
   const pickerRef = useRef<HTMLInputElement>(null)
   const custom = useSyncExternalStore(subscribeCustom, getCustomColors, getCustomColors)
-  useDismiss(ref, open, () => setOpen(false))
+  const onMouseDownCapture = useDismiss(ref, open, () => setOpen(false))
   const onPick = useRef(props.onPick)
   onPick.current = props.onPick
   const cur = props.value?.toLowerCase()
+  const t = useStrings()
 
   // native 'change' fires once the OS picker is confirmed (React's onChange would fire while dragging)
   useEffect(() => {
@@ -717,23 +798,22 @@ export function ColorBtn(props: { icon: IconName; title: string; value?: string;
     <button key={c} type="button" title={c} className={cur === c ? 'on' : undefined} style={{ background: c }} onClick={() => (props.onPick(c), setOpen(false))} />
   )
   return (
-    <span ref={ref} className="de-tb-color">
-      <button type="button" className={open ? 'de-tb de-tb-on' : 'de-tb'} title={props.title} aria-label={props.title} aria-expanded={open} onMouseDown={keep} onClick={() => setOpen((o) => !o)}>
-        <Icon name={props.icon} />
+    <span ref={ref} className="de-tb-color" onMouseDownCapture={onMouseDownCapture}>
+      <ToolButton title={props.title} iconName={props.icon} expanded={open} onClick={() => setOpen((o) => !o)}>
         <span className="de-tb-swatch" style={{ background: cssColor(props.value) ?? 'transparent' }} />
-      </button>
+      </ToolButton>
       {/* kept mounted while the OS picker is open (the popover closes) */}
       <input ref={pickerRef} type="color" className="de-tb-native" tabIndex={-1} aria-hidden />
       {open && (
         <PopBox onMouseDown={keep}>
           <button type="button" className="de-tb-none" onClick={() => (props.onPick(null), setOpen(false))}>
-            {props.noneLabel ?? 'None'}
+            {props.noneLabel ?? t.common.none}
           </button>
           <div className="de-tb-grid">{(props.palette ?? PALETTE).map(swatch)}</div>
-          <div className="de-tb-custom">Custom</div>
+          <div className="de-tb-custom">{t.toolbar.custom}</div>
           <div className="de-tb-grid">
             {custom.map(swatch)}
-            <button type="button" className="de-tb-add" title="Custom color…" aria-label="Custom color" onClick={openPicker}>
+            <button type="button" className="de-tb-add" title={t.toolbar.customColorTitle} aria-label={t.toolbar.customColor} onClick={openPicker}>
               <Icon name="plus" size={14} />
             </button>
           </div>
@@ -779,22 +859,12 @@ export function Menu(props: { title: string; label: string; icon?: IconName; ite
 export function Pop(props: { icon: IconName; title: string; children: (close: () => void) => ReactNode; active?: boolean; disabled?: boolean; chevron?: boolean }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLSpanElement>(null)
-  useDismiss(ref, open, () => setOpen(false))
+  const onMouseDownCapture = useDismiss(ref, open, () => setOpen(false))
   return (
-    <span ref={ref} className="de-tb-color">
-      <button
-        type="button"
-        className={(props.active || open ? 'de-tb de-tb-on' : 'de-tb') + (props.chevron ? ' de-tb-chev' : '')}
-        title={props.title}
-        aria-label={props.title}
-        aria-expanded={open}
-        disabled={props.disabled}
-        onMouseDown={keep}
-        onClick={() => setOpen((o) => !o)}
-      >
-        <Icon name={props.icon} />
+    <span ref={ref} className="de-tb-color" onMouseDownCapture={onMouseDownCapture}>
+      <ToolButton title={props.title} iconName={props.icon} active={props.active} expanded={open} disabled={props.disabled} extraClass={props.chevron ? 'de-tb-chev' : undefined} onClick={() => setOpen((o) => !o)}>
         {props.chevron && <Icon name="chevron" size={14} />}
-      </button>
+      </ToolButton>
       {open && (
         <PopBox onMouseDown={(e) => (e.target as HTMLElement).closest('input, textarea') || e.preventDefault()}>
           {props.children(() => setOpen(false))}
@@ -807,6 +877,7 @@ export function Pop(props: { icon: IconName; title: string; children: (close: ()
 /** rows × cols picker for new tables */
 export function GridPicker({ onPick }: { onPick: (r: number, c: number) => void }) {
   const [hover, setHover] = useState<[number, number]>([0, 0])
+  const t = useStrings()
   return (
     <div>
       <div className="de-gridpick" onMouseLeave={() => setHover([0, 0])}>
@@ -816,7 +887,7 @@ export function GridPicker({ onPick }: { onPick: (r: number, c: number) => void 
           return <button key={i} type="button" className={r <= hover[0] && c <= hover[1] ? 'on' : ''} onMouseEnter={() => setHover([r, c])} onMouseDown={keep} onClick={() => onPick(r, c)} />
         })}
       </div>
-      <div className="de-gridpick-label">{hover[0] ? `${hover[0]} × ${hover[1]}` : 'Table size'}</div>
+      <div className="de-gridpick-label">{hover[0] ? `${hover[0]} × ${hover[1]}` : t.toolbar.tableSize}</div>
     </div>
   )
 }

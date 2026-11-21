@@ -36,6 +36,10 @@ export interface RichHost<P extends RichPara = RichPara> {
   tab?(sel: Sel, shift: boolean): boolean
   /** Enter in an empty paragraph (e.g. leave a list); true when handled */
   enterAtEmpty?(pa: string, p: P): boolean
+  /** line breaks stay inside this paragraph (a code block): Enter and pasted lines make "\n", not paragraphs */
+  keepsLines?(p: P): boolean
+  /** Enter on the empty last line of such a paragraph: leave it for a new paragraph; true when handled */
+  leaveLines?(pa: string, p: P): boolean
   /** ArrowRight / ArrowLeft with a caret that may have to leave a container (a table); true when handled */
   arrow?(sel: Sel, dir: 1 | -1): boolean
   /** copy / cut: puts the selection on the clipboard from the model; true when handled (the browser's own copy is skipped) */
@@ -56,6 +60,8 @@ export interface RichHost<P extends RichPara = RichPara> {
   all?(): Sel | null
   /** deletes a range that spans other blocks (tables): applies the change and returns the caret, or null when unsupported */
   deleteAcross?(s: Pos, e: Pos): Pos | null
+  /** an IME composition ended and its text was put in: what waited for the end of it can be applied */
+  composed?(): void
 }
 
 const NAV = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'])
@@ -155,9 +161,11 @@ export function opInsert(host: RichHost, sel: Sel, text: string, opts?: ReplaceO
   const p = plan.paras[0]
   const o = plan.at.o
   const lines = text.replace(/\r\n?/g, '\n').split('\n')
-  if (lines.length === 1 || opts?.label === 'linebreak') {
-    const runs = insertText(p.runs, o, text, style, host.defaultRun?.(p))
-    host.replace(plan.pas, [host.withRuns(p, runs)], caret({ pa: plan.at.pa, o: o + text.length }), { label: 'type', ...opts })
+  if (lines.length === 1 || opts?.label === 'linebreak' || host.keepsLines?.(p)) {
+    // (a code block keeps pasted lines as its own)
+    const t = lines.length > 1 ? lines.join('\n') : text
+    const runs = insertText(p.runs, o, t, style, host.defaultRun?.(p))
+    host.replace(plan.pas, [host.withRuns(p, runs)], caret({ pa: plan.at.pa, o: o + t.length }), { label: 'type', ...opts })
     return
   }
   const base = (style ? { ...(runAt(p.runs, o) ?? host.defaultRun?.(p) ?? {}), ...style } : undefined) as RRun | undefined
@@ -173,6 +181,16 @@ export function opEnter(host: RichHost, sel: Sel) {
   const p = plan.paras[0]
   // Enter in an empty paragraph of a list ends the list (Word, Docs)
   if (collapsed(sel) && !plen(p.runs) && host.enterAtEmpty?.(sel.a.pa, p)) return
+  if (host.keepsLines?.(p)) {
+    // a code block: a new line, indented as the one before; on an empty last line, out of the block
+    const text = runsText(p.runs)
+    const o = plan.at.o
+    if (collapsed(sel) && o === text.length && text.endsWith('\n') && host.leaveLines?.(sel.a.pa, p)) return
+    const start = text.lastIndexOf('\n', o - 1) + 1
+    const indent = collapsed(sel) ? /^[ \t]*/.exec(text.slice(start, o))![0] : ''
+    opInsert(host, sel, '\n' + indent, { label: 'linebreak' })
+    return
+  }
   const [l, r] = splitRuns(p.runs, plan.at.o)
   const [a, b] = host.split(p, l, r, plan.at.o >= plen(p.runs))
   host.replace(plan.pas, [a, b], caret({ pa: shiftPa(plan.at.pa, 1), o: 0 }), { label: 'enter' })
@@ -239,17 +257,62 @@ function spanEnd(s: HTMLElement): number {
   return o + (s.textContent?.length ?? 0)
 }
 
+/** the offsets [from, to] a paragraph element shows: all of them, or those of its part when the paragraph is split */
+const partOf = (el: HTMLElement): [number, number] => [Number(el.dataset.from ?? 0), el.dataset.to === undefined ? Infinity : Number(el.dataset.to)]
+
+/**
+ * The element of paragraph `pa` that shows offset `o`. A paragraph split across pages has one element per part, each
+ * with the offsets it holds (`data-from`, `data-to`: absent for the first and the last). Where two parts meet the
+ * offset is in both: the later one (the start of its first line), or with `upstream` the earlier one (the end of its
+ * last line). Null when no element of the paragraph shows `o` (its page is not rendered).
+ */
+export function paraEl(root: ParentNode, pa: string, o: number, upstream = false): HTMLElement | null {
+  let pick: HTMLElement | null = null
+  for (const el of root.querySelectorAll<HTMLElement>(`[data-pa="${pa}"]`)) {
+    const [from, to] = partOf(el)
+    if (o >= from && o <= to && !(upstream && pick)) pick = el
+  }
+  return pick
+}
+
+/** the caret at a place is at the end of a part of its paragraph (the next part starts there) */
+function atPartEnd(root: HTMLElement, node: Node | null, pos: Pos | null): boolean {
+  const el = node && (node.nodeType === 1 ? (node as Element) : node.parentElement)?.closest<HTMLElement>('[data-pa]')
+  return !!el && !!pos && root.contains(el) && el.dataset.to !== undefined && pos.o === Number(el.dataset.to)
+}
+
+/**
+ * DOM ranges over the offsets [a, b) of paragraph `pa`: one for each part of it shown, so that a range over the end of
+ * a page does not take in what is between the parts (footer, header).
+ */
+export function paraRanges(root: HTMLElement, pa: string, a: number, b: number): Range[] {
+  const out: Range[] = []
+  for (const el of root.querySelectorAll<HTMLElement>(`[data-pa="${pa}"]`)) {
+    const [from, to] = partOf(el)
+    const x = Math.max(a, from)
+    const y = Math.min(b, to)
+    if (y < x || (y === x && b > a)) continue
+    const s = domIn(el, x)
+    const e = domIn(el, y)
+    const r = document.createRange()
+    r.setStart(s[0], s[1])
+    r.setEnd(e[0], e[1])
+    out.push(r)
+  }
+  return out
+}
+
 export function posFromDom(root: HTMLElement, node: Node, offset: number): Pos | null {
   const start = node.nodeType === 1 ? (node as Element) : node.parentElement
   const pel = start?.closest('[data-pa]') as HTMLElement | null
   if (!pel || !root.contains(pel)) return null
   const pa = pel.dataset.pa!
   if (!runSpan(node, pel)) {
-    // boundary between runs: end of the last run span before the point
+    // boundary between runs: end of the last run span before the point (the start of the part when none is)
     const r = document.createRange()
     r.setStart(node, offset)
     r.collapse(true)
-    let o = 0
+    let o = Number(pel.dataset.from ?? 0)
     for (const sp of Array.from(pel.querySelectorAll<HTMLElement>('[data-o]'))) {
       if (r.comparePoint(sp, sp.childNodes.length) < 0) o = spanEnd(sp)
       else break
@@ -269,15 +332,27 @@ export function posFromDom(root: HTMLElement, node: Node, offset: number): Pos |
     }
     return { pa, o: base + o }
   }
+  // an element inside the run (a code block's colored token): the text of the run before that point
+  if (node !== span) {
+    const r = (node.ownerDocument ?? document).createRange()
+    r.setStart(span, 0)
+    r.setEnd(node, offset)
+    return { pa, o: base + r.toString().length }
+  }
   // offset is a child index inside the span
   let o = 0
   for (let i = 0; i < Math.min(offset, span.childNodes.length); i++) o += span.childNodes[i].textContent?.length ?? 0
   return { pa, o: base + o }
 }
 
-export function domFromPos(root: HTMLElement, pos: Pos): [Node, number] | null {
-  const pel = root.querySelector<HTMLElement>(`[data-pa="${pos.pa}"]`)
-  if (!pel) return null
+export function domFromPos(root: HTMLElement, pos: Pos, upstream = false): [Node, number] | null {
+  const pel = paraEl(root, pos.pa, pos.o, upstream)
+  return pel && domIn(pel, pos.o)
+}
+
+/** the DOM place of offset `o` in a paragraph element (or the part of one that holds it) */
+function domIn(pel: HTMLElement, at: number): [Node, number] {
+  const pos = { o: at }
   const spans = Array.from(pel.querySelectorAll<HTMLElement>('[data-o]'))
   if (!spans.length) return [pel, pel.childNodes.length]
   let pick: HTMLElement | undefined
@@ -343,6 +418,16 @@ export function selPoints(root: HTMLElement): SelPoints | null {
 
 // ---------------------------------------------------------------- controller
 
+const attachedInputs = new WeakMap<HTMLElement, RichInput>()
+
+/** Return keyboard focus from a toolbar field to the editor's current model selection. */
+export function focusWithSelection(element: HTMLElement) {
+  const input = attachedInputs.get(element)
+  const selection = input?.formatSelection()
+  element.focus({ preventScroll: true })
+  if (selection) input?.restore(selection)
+}
+
 export class RichInput {
   root: HTMLElement | null = null
   private composing: Sel | null = null
@@ -357,6 +442,11 @@ export class RichInput {
     this.last = sel
     this.expected = null
   }
+  /** A live formatting target remains valid while a focused host control owns DOM focus. */
+  private formatTarget: Sel | null = null
+  private attachedRoot: HTMLElement | null = null
+  private commandSelection: Sel | null = null
+  formatting = false
   /** select all: the model selection covers every paragraph, the DOM one only what is rendered */
   private override: { model: Sel; dom: Sel } | null = null
   /**
@@ -366,13 +456,23 @@ export class RichInput {
   private expected: Sel | null = null
   /** where the DOM selection last was in a paragraph: a view update that removes this node leaves the caret on the page element */
   private seen: Node | null = null
+  /** a selection change was not followed yet when the input was detached: the next attach reads the selection */
+  private missedSel = false
+  /**
+   * The caret was last seen at the end of a part of a paragraph split across pages (the end of a page), not at the
+   * start of the next part, which is the same offset: a caret put back there (after typing) stays on that side.
+   */
+  private upstream = false
 
   constructor(private host: RichHost) {}
 
   attach(root: HTMLElement) {
     if (this.root === root) return
     this.detach()
+    if (this.attachedRoot !== root) this.clearSelection()
+    this.attachedRoot = root
     this.root = root
+    attachedInputs.set(root, this)
     root.addEventListener('beforeinput', this.onBeforeInput)
     root.addEventListener('compositionstart', this.onCompStart)
     root.addEventListener('compositionend', this.onCompEnd)
@@ -381,11 +481,17 @@ export class RichInput {
     root.addEventListener('copy', this.onCopy)
     root.addEventListener('cut', this.onCopy)
     document.addEventListener('selectionchange', this.onSelChange)
+    // a selection change whose frame a detach cancelled (a re-render re-attaching in between) is followed now
+    if (this.missedSel) {
+      this.missedSel = false
+      this.onSelChange()
+    }
   }
 
   detach() {
     const r = this.root
     if (!r) return
+    if (attachedInputs.get(r) === this) attachedInputs.delete(r)
     r.removeEventListener('beforeinput', this.onBeforeInput)
     r.removeEventListener('compositionstart', this.onCompStart)
     r.removeEventListener('compositionend', this.onCompEnd)
@@ -394,12 +500,26 @@ export class RichInput {
     r.removeEventListener('copy', this.onCopy)
     r.removeEventListener('cut', this.onCopy)
     document.removeEventListener('selectionchange', this.onSelChange)
+    if (this.raf) this.missedSel = true
     cancelAnimationFrame(this.raf)
     this.raf = 0 // or the next selection change waits forever for a frame that was cancelled
     this.root = null
-    this.override = null
     this.expected = null
     this.seen = null
+  }
+
+  clearSelection() {
+    this.override = null
+    this.formatTarget = null
+    this.lastSel = null
+    this.expected = null
+    this.seen = null
+  }
+
+  get focused() {
+    const root = this.root
+    const active = (root?.getRootNode() as Document | ShadowRoot | undefined)?.activeElement
+    return !!root && (active === root || !!active && root.contains(active))
   }
 
   get isComposing() {
@@ -413,7 +533,10 @@ export class RichInput {
     if (!root.contains(s.anchorNode) || !root.contains(s.focusNode)) return null
     const a = posFromDom(root, s.anchorNode, s.anchorOffset)
     const f = posFromDom(root, s.focusNode, s.focusOffset)
-    if (a && f) this.seen = s.anchorNode
+    if (a && f) {
+      this.seen = s.anchorNode
+      this.upstream = atPartEnd(root, s.focusNode, f)
+    }
     return a && f ? { a, f } : null
   }
 
@@ -429,7 +552,7 @@ export class RichInput {
 
   /** the selection a key press acts on */
   private live(): Sel | null {
-    return this.override?.model ?? this.expected ?? this.sel()
+    return this.commandSelection ?? this.override?.model ?? this.expected ?? this.sel()
   }
 
   /**
@@ -448,7 +571,41 @@ export class RichInput {
 
   /** current selection, falling back to the last known one (e.g. after focusing a toolbar control) */
   sel(): Sel | null {
-    return this.override?.model ?? this.readSel() ?? this.lastSel
+    return this.commandSelection ?? this.override?.model ?? this.readSel() ?? this.lastSel
+  }
+
+  /** Keep a logical target for any focused host element, including keyboard-operated buttons and menus. */
+  private activeHost(): Element | null {
+    const root = this.root
+    if (!root) return null
+    let active = root.ownerDocument.activeElement
+    while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement
+    if (!active || root.contains(active)) return null
+    // A focusable page wrapper is background, including ancestors outside a web component's shadow root.
+    let scope: Node = root
+    for (;;) {
+      if (active.contains(scope)) return null
+      const tree = scope.getRootNode()
+      if (!(tree instanceof ShadowRoot)) return active
+      scope = tree.host
+    }
+  }
+
+  /** Use the exact published logical target for one command, without affecting later undo/navigation. */
+  withFormatSelection(sel: Sel, apply: () => void) {
+    this.commandSelection = sel
+    this.formatting = true
+    this.lastSel = sel
+    try { apply() } finally {
+      this.commandSelection = null
+      this.formatting = false
+    }
+  }
+
+  formatSelection(): Sel | null {
+    // a select-all covers the whole document, though only the rendered paragraphs are selected in the DOM (and lastSel)
+    const sel = this.activeHost() ? (this.override?.model ?? (this.formatTarget && this.lastSel)) : (this.override?.model ?? this.readSel())
+    return sel && this.host.para(sel.a.pa) && this.host.para(sel.f.pa) ? sel : null
   }
 
   /**
@@ -466,28 +623,71 @@ export class RichInput {
     })
     const first = paras[0]
     const last = paras[paras.length - 1]
-    const dom: Sel = first && last ? { a: { pa: first.dataset.pa!, o: 0 }, f: { pa: last.dataset.pa!, o: plen(this.host.para(last.dataset.pa!)!.runs) } } : all
+    // (the first and last elements may be parts of paragraphs split across pages: what they show)
+    const dom: Sel = first && last ? { a: { pa: first.dataset.pa!, o: partOf(first)[0] }, f: { pa: last.dataset.pa!, o: Math.min(partOf(last)[1], plen(this.host.para(last.dataset.pa!)!.runs)) } } : all
     this.restore(dom)
     this.override = { model: all, dom: this.readSel() ?? dom }
     this.host.onSelection?.(all)
     return true
   }
 
+  /** a select-all is held: the selection is the whole document, though the DOM holds only the pages shown */
+  get selectingAll(): boolean {
+    return !!this.override
+  }
+
+  /** after the document changed under a held select-all (a collaborator's edit): it is the whole document as it is now */
+  renewSelectAll(): Sel | null {
+    const all = this.host.all?.()
+    if (!this.override || !all) return null
+    this.override = { ...this.override, model: all }
+    return all
+  }
+
+  /**
+   * The paragraphs holding the selection were laid out again (a page now ends elsewhere in them): when the DOM
+   * selection no longer shows the model's, it is put back.
+   */
+  reflow(): boolean {
+    const want = this.expected ?? this.last
+    // Replacing the DOM selection can focus the editor. Keep the host's focus when wrapping changes.
+    if (!this.focused || this.composing || this.override || !want) return false
+    const now = this.readSel()
+    if (now && sameSel(now, want)) return false
+    // a selection in other paragraphs is a new one (its change is not read yet), not the model's moved by the cut
+    if (now && (now.a.pa !== want.a.pa || now.f.pa !== want.f.pa)) return false
+    return this.restore(want, false)
+  }
+
   /** Applies a model selection to the DOM; false when its paragraph isn't rendered. */
-  restore(sel: Sel | null, focus = true): boolean {
+  restore(sel: Sel | null, focus: boolean | 'preserve' = this.formatting ? 'preserve' : true): boolean {
     const root = this.root
     if (!root || !sel) return false
+    const active = (root.getRootNode() as Document | ShadowRoot).activeElement
+    if (focus === 'preserve' && active !== root && !root.contains(active)) {
+      this.lastSel = sel
+      return true
+    }
+    // putting back the selection a select-all holds keeps the select-all: an edit the worker reports after the
+    // select-all rebuilds its paragraph, and the view then restores the selection around it
+    const ov = this.override
+    const held = ov && (sameSel(sel, ov.dom) || sameSel(sel, ov.model)) ? ov : null
+    if (held) sel = held.dom
     this.override = null
-    const a = domFromPos(root, sel.a)
-    const f = domFromPos(root, sel.f)
+    const up = this.upstream && collapsed(sel)
+    const a = domFromPos(root, sel.a, up)
+    const f = domFromPos(root, sel.f, up)
     if (!a || !f) {
+      if (held) {
+        this.override = held
+        return true
+      }
       // not in the DOM (its page is not shown): the DOM caret is somewhere else, and key presses go by this one
       this.last = sel
       this.expected = sel
       return false
     }
-    const active = (root.getRootNode() as Document | ShadowRoot).activeElement
-    if (focus && active !== root && !root.contains(active)) root.focus({ preventScroll: true })
+    if (focus === true && active !== root && !root.contains(active)) root.focus({ preventScroll: true })
     const s = getSel(root)
     try {
       s?.setBaseAndExtent(a[0], a[1], f[0], f[1])
@@ -496,6 +696,8 @@ export class RichInput {
     }
     this.lastSel = sel
     this.expected = null
+    this.formatTarget = held ? held.model : sel
+    this.override = held
     return true
   }
 
@@ -598,6 +800,7 @@ export class RichInput {
     if (e.data) opInsert(this.host, sel, e.data, { remount: true })
     else opInsert(this.host, sel, '', { remount: true })
     setTimeout(() => (this.justComposed = ''), 0)
+    this.host.composed?.()
   }
 
   private onKeyDown = (e: KeyboardEvent) => {
@@ -631,6 +834,10 @@ export class RichInput {
       }
     }
     if (NAV.has(e.key)) this.expected = null
+    if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft') && !mod && !e.altKey && this.crossPart(e.key === 'ArrowRight' ? 1 : -1, e.shiftKey)) {
+      e.preventDefault()
+      return
+    }
     if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft') && !mod && !e.shiftKey && !e.altKey) {
       const sel = this.live()
       if (sel && collapsed(sel) && this.host.arrow?.(sel, e.key === 'ArrowRight' ? 1 : -1)) e.preventDefault()
@@ -642,6 +849,44 @@ export class RichInput {
       if (!sel) return
       if (!this.host.tab?.(sel, e.shiftKey) && !e.shiftKey) opInsert(this.host, sel, '\t')
     }
+  }
+
+  /**
+   * ArrowRight at the end of a part of a paragraph split across pages, ArrowLeft at the start of one: the browser would
+   * move to the other part at the same offset (the caret seems stuck). The caret moves one character into it instead,
+   * as over the end of a line. `extend`: Shift, the selection grows.
+   */
+  private crossPart(dir: 1 | -1, extend: boolean): boolean {
+    const root = this.root
+    const s = root && selPoints(root)
+    const el = s?.focusNode && (s.focusNode.nodeType === 1 ? (s.focusNode as Element) : s.focusNode.parentElement)?.closest<HTMLElement>('[data-pa]')
+    if (!root || !el || !root.contains(el) || (el.dataset.from === undefined && el.dataset.to === undefined)) return false
+    const sel = this.readSel()
+    const p = sel && this.host.para(sel.f.pa)
+    if (!sel || !p || (!extend && !collapsed(sel))) return false
+    const [from, to] = partOf(el)
+    const text = runsText(p.runs)
+    let o: number
+    if (dir === 1 && to !== Infinity && sel.f.o >= to) o = nextBoundary(text, to)
+    else if (dir === -1 && from > 0 && sel.f.o <= from) o = prevBoundary(text, from)
+    else return false
+    const f = { pa: sel.f.pa, o }
+    if (!this.restore(extend ? { a: sel.a, f } : caret(f))) return false
+    // shown: the view scrolls to it (the browser does that for the caret it moves itself)
+    const n = getSel(root)?.focusNode
+    const r = n && document.createRange()
+    if (r && n) {
+      r.setStart(n, getSel(root)!.focusOffset)
+      const box = r.getBoundingClientRect()
+      let sc = root.parentElement
+      while (sc && !/(auto|scroll)/.test(getComputedStyle(sc).overflowY)) sc = sc.parentElement
+      const view = sc?.getBoundingClientRect()
+      if (sc && view && box.height) {
+        if (box.bottom > view.bottom - 8) sc.scrollTop += box.bottom - view.bottom + 48
+        else if (box.top < view.top + 8) sc.scrollTop -= view.top - box.top + 48
+      }
+    }
+    return true
   }
 
   /** a click moves the caret: what an edit asked for no longer holds */
@@ -659,16 +904,21 @@ export class RichInput {
     if (this.raf) return
     this.raf = requestAnimationFrame(() => {
       this.raf = 0
-      const s = this.readSel()
+      const dom = this.readSel()
+      const control = this.activeHost()
       const ov = this.override
+      const active = (this.root?.getRootNode() as Document | ShadowRoot | undefined)?.activeElement
       // select all stays until the selection moves somewhere else (losing it to a re-render keeps it, like lastSel)
-      if (ov && s && !sameSel(s, ov.dom)) this.override = null
-      else if (ov) {
+      if (ov && ((control && !!this.formatTarget) || (dom ? sameSel(dom, ov.dom) : this.root === active))) {
+        this.formatTarget = ov.model
         this.host.onSelection?.(ov.model)
         return
       }
+      this.override = null
+      const s = control ? this.formatSelection() : dom
       if (s && this.expected && sameSel(s, this.expected)) this.expected = null
       if (s && !this.expected) this.lastSel = s
+      this.formatTarget = this.expected ?? s
       this.host.onSelection?.(this.expected ?? s)
     })
   }

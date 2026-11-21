@@ -27,9 +27,12 @@ export const THEME_TOKENS = [
   'status-idle', 'status-live', 'status-busy', 'status-error',
   // paper: pages, slides and sheets (the same in both modes, as documents keep their own colors)
   'page', 'page-ink', 'sheet-ink', 'skeleton', 'ph-border', 'ph-a', 'ph-b', 'ph-ink', 'ph-outline', 'ph-hint',
-  // source editor (Markdown, HTML, diagrams)
+  // source editor and code view (Markdown, HTML, diagrams, source files)
   'src-bg', 'src-gutter', 'src-sel', 'src-font', 'src-comment', 'src-keyword', 'src-string', 'src-operator',
-  'src-number', 'src-heading', 'src-attr', 'src-tag', 'src-meta',
+  'src-number', 'src-heading', 'src-attr', 'src-tag', 'src-meta', 'src-function', 'src-type',
+  // code blocks on the page and printed code (paper: the same in both modes)
+  'code-comment', 'code-keyword', 'code-string', 'code-operator', 'code-number', 'code-attr', 'code-tag', 'code-meta',
+  'code-function', 'code-type',
 ] as const
 
 export type ThemeToken = (typeof THEME_TOKENS)[number]
@@ -73,9 +76,11 @@ export function themeStyle(theme: Theme | undefined, dark: boolean): CSSProperti
 
 /**
  * The class name and style of a viewer root for `theme`: what `DocViewer` puts on its root element, for hosts that
- * mount the views (`DocxView`, `XlsxView`, `PptxView`) in a root of their own.
+ * mount the views (`DocxView`, `XlsxView`, `PptxView`) in a root of their own. `host` is for a container of controls
+ * (ZoomBar, FormatBar…) rather than a view: sized by its content, and its popups (menus, the size list) show beyond it.
  */
-export function useThemeRoot(theme?: Theme, style?: CSSProperties): { className: string; style: CSSProperties; dark: boolean } {
+export function useThemeRoot(theme?: Theme, style?: CSSProperties, opts?: { host?: boolean }): { className: string; style: CSSProperties; dark: boolean } {
   const dark = useDarkTheme(themeMode(theme))
-  return { className: dark ? 'de-root de-dark' : 'de-root', style: { ...themeStyle(theme, dark), ...style }, dark }
+  const className = 'de-root' + (dark ? ' de-dark' : '') + (opts?.host ? ' de-host' : '')
+  return { className, style: { ...themeStyle(theme, dark), ...style }, dark }
 }
