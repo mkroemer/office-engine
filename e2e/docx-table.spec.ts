@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
-import type { Table } from '../src/core/docx/types'
+import type { Paragraph, Table } from '../src/core/docx/types'
 import { gridOf } from '../src/react/docx/tables'
-import { docxBlocks, useBrowser, viewer, type Viewer } from './harness'
+import { docxBlocks, paraText, useBrowser, viewer, type Viewer } from './harness'
 
 useBrowser()
 
@@ -111,6 +111,43 @@ describe('docx table formatting', () => {
     expect(after[0]).toBeGreaterThan(before[0] + 20)
     expect(after[1]).toBeLessThan(before[1] - 20)
     expect(after.reduce((a, b) => a + b, 0)).toBeCloseTo(before.reduce((a, b) => a + b, 0), 0)
+    expect(v.errors).toEqual([])
+  })
+
+  test('a list in a table inserted this session is shown and can be taken away again (#27)', async () => {
+    const v = await open()
+    await v.selectText('Quarterly Report', 'end')
+    await v.btn('Insert table').click()
+    // 2 × 2: 8 cells per picker row
+    await v.page.locator('.de-gridpick button').nth(8 + 1).click()
+    await v.page.waitForTimeout(300)
+    await v.page.keyboard.insertText('Item')
+    await v.page.waitForTimeout(200)
+    const bullets = v.btn('Bulleted list')
+    const pressed = v.page.locator('button[aria-label^="Bulleted list"][aria-pressed="true"]')
+    const marker = v.page.locator('.de-pages td', { hasText: 'Item' }).locator('.de-marker')
+    const itemPara = async () => {
+      const t = (await docxBlocks((await v.save()).bytes)).find((b): b is Table => b.t === 'tbl' && b.rows[0].cells[0].blocks.some((p) => p.t === 'p' && paraText(p) === 'Item'))!
+      return t.rows[0].cells[0].blocks[0] as Paragraph
+    }
+
+    await bullets.click()
+    await pressed.waitFor()
+    await marker.waitFor()
+    expect((await marker.textContent())?.trim()).toBe('•')
+    let p = await itemPara()
+    expect(p.lst).toBe('bullet')
+    expect(p.marker?.text).toBe('•')
+
+    // saving moved the focus to the Save button: caret back in the cell, then the same button takes the list away
+    await v.selectText('Item', 'end')
+    await pressed.waitFor()
+    await bullets.click()
+    await pressed.waitFor({ state: 'hidden' })
+    await marker.waitFor({ state: 'detached' })
+    p = await itemPara()
+    expect(p.lst).toBeUndefined()
+    expect(p.marker).toBeUndefined()
     expect(v.errors).toEqual([])
   })
 })

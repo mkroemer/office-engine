@@ -4,7 +4,8 @@
  */
 import { paraSpec, tableSpec } from '../../core/docx/spec'
 import type {
-  Block, CanonStyle, EditOp, EditResult, HeaderFooters, HFSet, HFSetResult, Inline, PageSet, PageSetResult, PageSetup, Paragraph, ParaDirty, ParaStyle, RunSet, RunStyle, StyleInfo, StyleLook, Table,
+  Block, CanonStyle, EditOp, EditResult, HeaderFooters, HFSet, HFSetResult, Inline, PageSet, PageSetResult, PageSetup, Paragraph, ParaDirty, ParaSpec, ParaStyle, RunSet, RunStyle, StyleInfo, StyleLook, Table,
+  TableOp,
 } from '../../core/docx/types'
 import { cssFont } from '../../core/fonts'
 import type { DocumentClient } from '../../core/worker/client'
@@ -13,7 +14,7 @@ import { htmlToParas, type PastedCell, type PastedPara } from '../../core/html'
 import { docxBodyHtml, docxToText } from '../file/text'
 import { cellsIn, deleteCol, deleteRow, distributeCols, gridOf, insertCol, insertRow, mergeCells, newTable, patchCells, rectOf, setBorders, tableFromRows, unmergeCell, type BorderPreset, type CellRect } from './tables'
 import { changeSpans, hasChanges, resolveRuns, trackEdit } from './track'
-import { collapsed, formatRange, linkSpan, markRange, normalize, plen, rlen, runAt, runsText, shiftPa, splitRuns, type Pos, type RRun, type Sel } from '../edit/rich'
+import { collapsed, deleteRange, formatRange, linkSpan, markRange, normalize, plen, rlen, runAt, runsText, shiftPa, splitRuns, type Pos, type RRun, type Sel } from '../edit/rich'
 
 /** a place in a paragraph that survives edits elsewhere: paragraph id, page-break part, offset */
 export interface ParaPos {
@@ -220,6 +221,15 @@ export class DocxEditor implements RichHost<Paragraph> {
   private inflight = 0
   /** paragraphs whose look on screen may be behind their style / list: a conversion was asked, none was applied yet */
   private stale = new Set<number>()
+  /**
+   * Counts the writes sent to the worker; paragraph id → the last write that carried the paragraph. An answer is about
+   * the paragraphs as its write had them: one written again since is the later answer's (whatever else replaced the
+   * paragraph object meanwhile: a marker, another conversion, the same object brought back by undo).
+   */
+  private writes = 0
+  private writtenIn = new Map<number, number>()
+  /** answers that came during an IME composition, applied when it ends */
+  private held: { res: EditResult; seq: number }[] = []
   onState?: (s: FormatState | null) => void
   /** image selection changed (overlay with resize handles) */
   onImage?: (img: FormatState['img'] | null) => void
@@ -467,7 +477,7 @@ export class DocxEditor implements RichHost<Paragraph> {
       if (c.at < this.st.frontier) this.st.frontier++
     }
     if (c.cell && (this.st.blocks[c.cell[0]] as Table).tid !== undefined) this.commitTable(c.cell[0])
-    else this.send('docx.edit', { anchor: p.pid, list: [paraSpec(this.partsOf(list, p.pid, c.at))] } as EditOp)
+    else this.sendParas(p.pid, [paraSpec(this.partsOf(list, p.pid, c.at))])
     this.onDirty?.()
     this.changed()
   }
@@ -483,8 +493,9 @@ export class DocxEditor implements RichHost<Paragraph> {
 
   private commit(pa: string, before: Paragraph[], next: Paragraph[], want?: boolean) {
     const c = this.container(pa)!
+    const structural = want || next.some((p) => p.pd !== before.find((b) => b.pid === p.pid)?.pd)
     if (c.cell && (this.st.blocks[c.cell[0]] as Table).tid !== undefined) {
-      this.commitTable(c.cell[0])
+      this.commitTable(c.cell[0], structural ? [...before, ...next].map((p) => p.pid!) : [])
       return
     }
     const list = c.list
@@ -509,28 +520,49 @@ export class DocxEditor implements RichHost<Paragraph> {
       const lost = [...had].filter((id) => !kept.has(id))
       if (lost.length) this.remark(new Set(lost), new Set([...pids, ...remove, ...before.map((b) => b.pid!)]))
     }
-    const structural = want || next.some((p) => p.pd !== before.find((b) => b.pid === p.pid)?.pd)
-    // also while an earlier conversion is still due: its answer comes back after this edit and can't be applied (see applyResult)
-    const convert = structural || specs.some((x) => this.stale.has(x.pid))
-    if (convert) for (const x of specs) this.stale.add(x.pid)
-    const sent = new Set<Paragraph>(next)
-    const op: EditOp = { anchor, list: specs, remove, want: convert }
+    this.sendParas(anchor, specs, remove, structural)
+  }
+
+  /** writes paragraphs (`remove`: taken out); `want`: their style or list changed, their conversion is needed */
+  private sendParas(anchor: number, list: ParaSpec[], remove: number[] = [], want = false) {
+    // also while an earlier conversion is still due: its answer comes back after this write and can't be applied (see applyResult)
+    const convert = want || list.some((x) => this.stale.has(x.pid))
+    const pids = list.map((x) => x.pid)
+    this.send('docx.edit', { anchor, list, remove, want: convert }, [...pids, ...remove], convert ? pids : [])
+  }
+
+  /**
+   * Sends a write to the worker: `pids` the paragraphs it carries, `convert` those whose conversion it asks for (they
+   * are `stale` until one is applied). The answer is applied to the paragraphs no later write carried (applyResult).
+   */
+  private send(method: 'docx.edit' | 'docx.table', op: EditOp | TableOp, pids: number[], convert: number[]) {
+    const seq = ++this.writes
+    for (const pid of pids) this.writtenIn.set(pid, seq)
+    for (const pid of convert) this.stale.add(pid)
     this.inflight++
-    let applied = false
-    this.client
-      .call('docx.edit', op)
-      .then((res) => { applied = this.applyResult(res, sent) })
-      .catch((e) => console.error('[office-engine] edit failed', e))
-      .finally(() => {
-        this.inflight--
+    ;(this.client.call as (m: string, op: EditOp | TableOp) => Promise<EditResult>)(method, op)
+      .finally(() => this.inflight--)
+      .then((res) => {
         // Conversion can change the look after replace's optimistic notification. Use the selection now,
-        // after completing the edit, so the toolbar also sees the current history and busy state.
-        if (applied) this.emitState(this.input.sel())
+        // after completing the edit, so the toolbar also sees the current history and busy state. The last answer
+        // in is told even when it changed nothing (an obsolete one): what is published then is the model as it
+        // stands, no longer busy, never the look of an obsolete answer.
+        if (this.applyResult(res, seq) || this.settled) this.emitState(this.input.sel())
       })
+      // (a listener that throws included: reported here, not left as an unhandled rejection)
+      .catch((e) => console.error('[office-engine] edit failed', e))
   }
 
   get busy() {
     return this.inflight > 0
+  }
+
+  /**
+   * Every write answered and taken in. An answer held for an IME composition is not: the state is published when the
+   * composition ends and the answer is applied (composed), not before, with the look it is about to replace.
+   */
+  private get settled() {
+    return !this.inflight && !this.held.length
   }
 
   /**
@@ -548,7 +580,7 @@ export class DocxEditor implements RichHost<Paragraph> {
         const parts = this.partsOf(list, b.pid, i)
         for (const p of parts) p.edited = true
         if (bi !== undefined && (this.st.blocks[bi] as Table).tid !== undefined) tables.add(bi)
-        else this.send('docx.edit', { anchor: b.pid, list: [paraSpec(parts)] } as EditOp)
+        else this.sendParas(b.pid, [paraSpec(parts)])
       })
     }
     visit(this.st.blocks, undefined)
@@ -685,8 +717,15 @@ export class DocxEditor implements RichHost<Paragraph> {
     }
   }
 
-  private applyResult(res: EditResult, sent: Set<Paragraph>): boolean {
-    if (this.input.isComposing) return false
+  /** applies the answer to write `seq`; true when something changed */
+  private applyResult(res: EditResult, seq: number): boolean {
+    // never rebuild paragraphs under an IME composition: the answer waits for its end (composed)
+    if (this.input.isComposing) {
+      this.held.push({ res, seq })
+      return false
+    }
+    // written again since: the paragraph stays `stale`, so that write asked for the conversion too and its answer is the one applied
+    const again = (pid: number) => (this.writtenIn.get(pid) ?? 0) > seq
     let touched = false
     // the caret inside a rebuilt paragraph is put back after the render (same offsets: the text is the same)
     const sel = this.input.readSel()
@@ -694,17 +733,13 @@ export class DocxEditor implements RichHost<Paragraph> {
     // re-converted paragraphs (style / list changes): only if not edited again meanwhile
     for (const [k, blocks] of Object.entries(res.blocks)) {
       const pid = Number(k)
-      const locs = this.locate(pid)
-      const cur = locs.map((l) => l.list[l.index] as Paragraph)
-      const paras = blocks.filter((b): b is Paragraph => b.t === 'p')
-      // edited again: the paragraph stays `stale`, so that edit asked for the conversion too and its answer is the one applied
-      let again = false
-      for (const x of sent) again ||= x.pid === pid && cur.length > 0 && !cur.includes(x)
-      if (again) continue
+      if (again(pid)) continue
       this.stale.delete(pid)
-      if (!locs.length || paras.length !== locs.length || !cur.every((x) => sent.has(x))) continue
+      const locs = this.locate(pid)
+      const paras = blocks.filter((b): b is Paragraph => b.t === 'p')
+      if (!locs.length || paras.length !== locs.length) continue
       locs.forEach((l, i) => {
-        const was = cur[i]
+        const was = l.list[l.index] as Paragraph
         const p = { ...paras[i], from: was.from, orig: was.orig, pd: was.pd, edited: was.edited, keepSect: was.keepSect, ver: was.ver, pb: was.pb }
         this.put(l.pa, p)
         // converted with the styles as they are by now
@@ -714,12 +749,17 @@ export class DocxEditor implements RichHost<Paragraph> {
       })
       touched = true
     }
-    // list numbering changes anywhere in the document
+    // list numbering changes anywhere in the document. A paragraph converted above but written again since gets its
+    // marker with that later write's conversion (the marker it has then may be this one, so it is not in that answer's).
     for (const [k, m] of Object.entries(res.markers)) {
-      for (const loc of this.locate(Number(k))) {
+      const pid = Number(k)
+      if (pid in res.blocks && again(pid)) continue
+      for (const loc of this.locate(pid)) {
         const p = loc.list[loc.index] as Paragraph
         if ((loc.list[loc.index - 1] as Paragraph | undefined)?.pid === p.pid) continue
-        this.put(loc.pa, { ...p, marker: m ? { text: m.text, s: m.s, tab: m.tab } : undefined, lst: m?.lst })
+        const q = { ...p, marker: m ? { text: m.text, s: m.s, tab: m.tab } : undefined, lst: m?.lst }
+        this.put(loc.pa, q)
+        this.heir.set(p, q)
         touched = true
       }
     }
@@ -727,6 +767,13 @@ export class DocxEditor implements RichHost<Paragraph> {
     if (sel && !this.pendingSel && (rebuilt.has(sel.a.pa) || rebuilt.has(sel.f.pa))) this.pendingSel = sel
     this.changed()
     return true
+  }
+
+  /** an IME composition ended (its text is in): the answers that came meanwhile are applied, the toolbar told */
+  composed() {
+    let applied = false
+    for (const { res, seq } of this.held.splice(0)) applied = this.applyResult(res, seq) || applied
+    if (applied || this.settled) this.emitState(this.input.sel())
   }
 
   // ---------------------------------------------------------------- history
@@ -966,6 +1013,22 @@ export class DocxEditor implements RichHost<Paragraph> {
     return true
   }
 
+  /** a code block is one paragraph: its lines are line breaks */
+  keepsLines(p: Paragraph): boolean {
+    return p.code !== undefined
+  }
+
+  /** Enter on the empty last line of a code block: that line goes, a paragraph of the default style follows the block */
+  leaveLines(pa: string, p: Paragraph): boolean {
+    const len = plen(p.runs as RRun[])
+    const [a, b] = this.split(p, deleteRange(p.runs as RRun[], len - 1, len), [], true)
+    const out: Paragraph = { ...b, pd: { ...(b.pd ?? {}), style: '' }, sid: undefined, caret: undefined }
+    delete out.code
+    const next = shiftPa(pa, 1)
+    this.replace([pa], [a, out], { a: { pa: next, o: 0 }, f: { pa: next, o: 0 } }, { label: 'enter' })
+    return true
+  }
+
   /** ArrowRight after the last character of a table leaves it, as ArrowDown does */
   arrow(sel: Sel, dir: 1 | -1): boolean {
     if (dir !== 1 || !sel.a.pa.includes('.')) return false
@@ -984,7 +1047,8 @@ export class DocxEditor implements RichHost<Paragraph> {
 
   /**
    * Copy / cut of text: the clipboard gets the paragraphs as the model has them (list items, headings, runs), not the
-   * page's DOM (which holds the list markers as text and the colors as computed). Pictures and ranges across a table are
+   * page's DOM (which holds the list markers as text and the colors as computed). TeX formulas go as MathML holding
+   * their TeX (pasted back as formulas) and as their source in the plain text. Pictures and ranges across a table are
    * left to the browser.
    */
   copy(sel: Sel, data: DataTransfer, cut: boolean): boolean {
@@ -995,7 +1059,7 @@ export class DocxEditor implements RichHost<Paragraph> {
       const p = this.para(pa)!
       return { ...p, runs: sliceRunsOf(p, i === 0 ? s.o : 0, i === pas.length - 1 ? e.o : plen(p.runs as RRun[])) }
     })
-    if (parts.some((p) => p.runs.some((r) => r.t !== 'text'))) return false
+    if (parts.some((p) => p.runs.some((r) => r.t !== 'text' && !(r.t === 'ref' && r.math)))) return false
     data.setData('text/html', docxBodyHtml(parts))
     data.setData('text/plain', docxToText(parts).replace(/\n$/, ''))
     if (cut) opDelete(this, sel)
@@ -1018,18 +1082,14 @@ export class DocxEditor implements RichHost<Paragraph> {
     return undefined
   }
 
-  private commitTable(bi: number) {
+  /** writes the table at `bi` whole; `want`: paragraphs of it whose style or list changed (as sendParas) */
+  private commitTable(bi: number, want: number[] = []) {
     const t = this.st.blocks[bi] as Table
     if (t?.t !== 'tbl' || t.tid === undefined) return
-    this.send('docx.table', { tid: t.tid, item: t.item, anchor: t.item === undefined ? this.prevParaPid(bi) : undefined, spec: tableSpec(t) })
-  }
-
-  private send(method: 'docx.table' | 'docx.edit', op: unknown) {
-    this.inflight++
-    ;(this.client.call as (m: string, ...a: unknown[]) => Promise<unknown>)(method, op)
-      .then((res) => method === 'docx.edit' && this.applyResult(res as EditResult, new Set()))
-      .catch((e) => console.error('[office-engine] edit failed', e))
-      .finally(() => this.inflight--)
+    const spec = tableSpec(t)
+    const pids = spec.rows.flatMap((r) => r.cells.flatMap((c) => c.paras.map((p) => p.pid)))
+    const convert = pids.filter((pid) => want.includes(pid) || this.stale.has(pid))
+    this.send('docx.table', { tid: t.tid, item: t.item, anchor: t.item === undefined ? this.prevParaPid(bi) : undefined, spec, want: convert }, pids, convert)
   }
 
   /** Replaces top-level blocks (table insert/delete/restructure) with history + write-back. */
@@ -1053,9 +1113,9 @@ export class DocxEditor implements RichHost<Paragraph> {
     const changed = next.some((b) => b.t === 'p' && b.pid !== undefined && beforeObj.has(key(b)) && beforeObj.get(key(b)) !== b)
     if (anchorP && (added.length || removed.length || changed)) {
       const list = next.filter((b): b is Paragraph => b.t === 'p' && b.pid !== undefined)
-      this.send('docx.edit', { anchor: anchorP.pid, list: list.map((p) => paraSpec([p])), remove: removed.map((p) => p.pid) } as EditOp)
+      this.sendParas(anchorP.pid!, list.map((p) => paraSpec([p])), removed.map((p) => p.pid!))
     }
-    for (const b of before) if (b.t === 'tbl' && !nextKeys.has(key(b)) && (b.tid !== undefined || b.item !== undefined)) this.send('docx.table', { tid: b.tid ?? -1, item: b.item, spec: null })
+    for (const b of before) if (b.t === 'tbl' && !nextKeys.has(key(b)) && (b.tid !== undefined || b.item !== undefined)) this.send('docx.table', { tid: b.tid ?? -1, item: b.item, spec: null }, [], [])
     next.forEach((b, i) => {
       if (b.t !== 'tbl') return
       // an original table coming back (undo of its deletion) is regenerated from the model like a new one
@@ -1307,6 +1367,8 @@ export class DocxEditor implements RichHost<Paragraph> {
   }
 
   pasteRich(sel: Sel, data: DataTransfer): boolean {
+    // into a code block: the plain text, its lines kept in the block
+    if (this.para(sel.a.pa)?.code !== undefined) return false
     const files = Array.from(data.files ?? []).filter((f) => f.type.startsWith('image/'))
     if (files.length) {
       void this.insertImages(files, sel)

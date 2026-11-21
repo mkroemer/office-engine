@@ -38,6 +38,11 @@ export class DocumentClient {
   private urls = new Map<string, Promise<string>>()
   private destroyed = false
 
+  /** the document was closed (`destroy`): every call now fails with "Document closed" */
+  get closed(): boolean {
+    return this.destroyed
+  }
+
   private constructor(opts: OpenOptions) {
     const factory = opts.worker === false ? undefined : opts.worker ?? defaultWorkerFactory
     if (factory) {

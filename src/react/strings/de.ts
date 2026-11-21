@@ -37,6 +37,7 @@ export const de: Strings = {
     save: 'Speichern',
     download: 'Herunterladen',
     sourceStale: 'Änderungen im Dokument sind nicht in diesem Quelltext: Wird er bearbeitet, entsteht das Dokument neu aus dem Quelltext.',
+    codeCopied: 'Code kopiert',
     sourceCopied: 'Quelltext kopiert',
     cannotCopy: 'Kopieren ist hier nicht möglich',
     resizeSource: 'Größe des Quelltexts ändern',
@@ -73,6 +74,7 @@ export const de: Strings = {
     mermaid: 'Mermaid-Diagramm',
     plantuml: 'PlantUML-Diagramm',
     graphviz: 'Graphviz-Diagramm',
+    code: 'Quelltext',
   },
 
   details: {
@@ -120,7 +122,7 @@ export const de: Strings = {
     preparingPdf: 'PDF wird vorbereitet… im Druckdialog „Als PDF speichern“ wählen',
     preparing: 'Wird vorbereitet…',
     unsupported: (name: string, what?: string) =>
-      `„${name}“${what ? ` (${what})` : ''} kann nicht geöffnet werden: unterstützt werden Word, Excel, PowerPoint (auch 97-2003), OpenDocument, RTF, Pages, Keynote, Numbers, Visio, CSV, Text, Markdown, HTML, SVG, Mermaid, PlantUML und Graphviz (auch gzip-komprimiert: .svgz, .csv.gz)`,
+      `„${name}“${what ? ` (${what})` : ''} kann nicht geöffnet werden: unterstützt werden Word, Excel, PowerPoint (auch 97-2003), OpenDocument, RTF, Pages, Keynote, Numbers, Visio, CSV, Text, Markdown, HTML, SVG, Mermaid, PlantUML, Graphviz und Quelltext (auch gzip-komprimiert: .svgz, .csv.gz)`,
   },
 
   zoom: {
@@ -362,6 +364,10 @@ export const de: Strings = {
     commentHint: 'Eine Zelle zum Kommentieren auswählen.',
     addSheet: 'Blatt hinzufügen',
     renameSheet: 'Umbenennen',
+    sheetNameEmpty: 'Ein Blattname darf nicht leer sein',
+    sheetNameTaken: (name: string) => `Ein Blatt mit dem Namen „${name}“ ist bereits vorhanden`,
+    sheetNameShortened: (name: string) => `Blattnamen dürfen höchstens 31 Zeichen enthalten. Der Name wurde zu „${name}“ gekürzt.`,
+    sheetNameInvalidChars: 'Blattnamen dürfen \\ / ? * [ ] : nicht enthalten. Diese Zeichen wurden durch _ ersetzt.',
     duplicateSheet: 'Blatt duplizieren',
     moveLeft: 'Nach links verschieben',
     moveRight: 'Nach rechts verschieben',
@@ -494,7 +500,7 @@ export const de: Strings = {
 
   source: {
     source: 'Quelltext',
-    lines: (n: number) => (n === 1 ? 'Zeile' : 'Zeilen'),
+    lines: (n: number, locale: string | undefined = undefined) => `${n.toLocaleString(locale)} ${n === 1 ? 'Zeile' : 'Zeilen'}`,
     copy: 'Quelltext kopieren',
     download: 'Quelltext herunterladen',
     input: (format: string) => `${format}-Quelltext`,

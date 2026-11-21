@@ -201,6 +201,18 @@ const CANON_BY_NAME: Record<string, CanonStyle> = dict({
   heading6: 'h6',
 })
 
+/**
+ * The paragraph style of code blocks in `lang` ('' : no language): "Source Code" (the name Pandoc gives its code
+ * blocks), "Source Code (js)". The language of a code block travels in the document as its style.
+ */
+export const codeStyleName = (lang: string) => (lang ? `Source Code (${lang})` : 'Source Code')
+
+/** the language of a style named by codeStyleName ('' : code in no language), undefined for any other style */
+export function codeStyleLang(name: string): string | undefined {
+  const m = /^source ?code(?: \((.*)\))?$/i.exec(name.trim())
+  return m ? (m[1] ?? '') : undefined
+}
+
 function readDef(s: XEl): StyleDef | undefined {
   const id = s.a.styleId
   if (!id) return undefined
@@ -222,6 +234,7 @@ export class StyleSheet {
   private paraCache = new Map<string, ResolvedParaStyle>()
   private charCache = new Map<string, RunStyle>()
   private tblCache = new Map<string, ResolvedTableStyle>()
+  private codeCache = new Map<string, string | null>()
   defaultPara?: string
   defaultTable?: string
   docRs: RunStyle = {}
@@ -247,6 +260,20 @@ export class StyleSheet {
     if (!def) return
     this.defs.set(def.id, def)
     this.paraCache.clear()
+    this.codeCache.clear()
+  }
+
+  /** the language of the code blocks of paragraph style `id` (a "Source Code" style, or one based on it), undefined for other styles */
+  code(id: string | undefined): string | undefined {
+    if (!id) return undefined
+    let r = this.codeCache.get(id)
+    if (r === undefined) {
+      r = null
+      const chain = this.chain(id)
+      for (let k = chain.length - 1; k >= 0 && r === null; k--) if (chain[k].type === 'paragraph') r = codeStyleLang(chain[k].name) ?? null
+      this.codeCache.set(id, r)
+    }
+    return r ?? undefined
   }
 
   /** the element of paragraph style `id`: what the style says itself, nothing inherited */

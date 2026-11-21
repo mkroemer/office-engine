@@ -4,6 +4,7 @@ import './core/default-worker'
 import { DocViewer, type DocViewerProps } from './react/DocViewer'
 import type { Icons } from './react/edit/Toolbar'
 import type { StringsOverride } from './react/strings'
+import type { FontSource } from './core/fonts'
 
 export type MountOptions = Omit<DocViewerProps, 'styleTarget'>
 
@@ -36,18 +37,20 @@ export function mount(el: HTMLElement, options: MountOptions): MountedViewer {
 /**
  * `<office-viewer src="/file.xlsx" style="height:600px"></office-viewer>`
  * Rendered inside a shadow root so host page CSS cannot leak in.
- * Attributes: src, name, editable, toolbar / thumbnails / save / download / file-menu / open / capture-select-all ("false" to turn off),
- * theme ("light" | "dark" | "auto"), locale (BCP 47 number/date formatting tag); other languages are supplied through `.strings`.
+ * Attributes: src, name, language (a source file's: "typescript", "py"…), editable, toolbar / thumbnails / save / download /
+ * file-menu / open / capture-select-all ("false" to turn off), theme ("light" | "dark" | "auto"),
+ * locale (BCP 47 tag for number/date formatting and numeric input: "de-DE" reads 1,5), fonts (a JSON list of `{ family, src, weight?, style?, unicodeRange? }` with URLs);
  * real-time collaboration: collab (hub WebSocket URL), room, user (display name), base (snapshot seq `src` was opened at).
  * Properties: `file` (File/Blob/ArrayBuffer) for local data; `icons` (map or resolver, as DocViewer's `icons`);
- * `strings` (texts replacing English or the enclosing provider's).
+ * `fonts` (as DocViewer's `fonts`, bytes too; over the attribute); `strings` (texts replacing the optional enclosing table or English).
  */
 export class OfficeViewerElement extends HTMLElement {
-  static observedAttributes = ['src', 'name', 'toolbar', 'thumbnails', 'editable', 'save', 'download', 'file-menu', 'open', 'capture-select-all', 'theme', 'collab', 'room', 'user', 'base', 'comments', 'locale']
+  static observedAttributes = ['src', 'name', 'language', 'toolbar', 'thumbnails', 'editable', 'save', 'download', 'file-menu', 'open', 'capture-select-all', 'theme', 'collab', 'room', 'user', 'base', 'comments', 'locale', 'fonts']
   private viewer?: MountedViewer
   private _file?: Blob | ArrayBuffer
   private _icons?: Icons
   private _strings?: StringsOverride
+  private _fonts?: readonly FontSource[]
   // one function each for the element's life: a new one with every update would run the viewer's load effect again (a `load` event per update)
   private readonly onLoad: NonNullable<MountOptions['onLoad']> = (client) => this.dispatchEvent(new CustomEvent('load', { detail: { kind: client.kind, name: client.name } }))
   private readonly onError: NonNullable<MountOptions['onError']> = (error) => this.dispatchEvent(new CustomEvent('error', { detail: error }))
@@ -76,6 +79,14 @@ export class OfficeViewerElement extends HTMLElement {
     this.sync()
   }
 
+  get fonts() {
+    return this._fonts
+  }
+  set fonts(v: readonly FontSource[] | undefined) {
+    this._fonts = v
+    this.sync()
+  }
+
   connectedCallback() {
     if (this.viewer) return
     const shadow = this.shadowRoot ?? this.attachShadow({ mode: 'open' })
@@ -100,6 +111,7 @@ export class OfficeViewerElement extends HTMLElement {
     return {
       src: this._file ?? this.getAttribute('src'),
       name: this.getAttribute('name') ?? undefined,
+      language: this.getAttribute('language') || undefined,
       toolbar: this.getAttribute('toolbar') !== 'false',
       thumbnails: this.getAttribute('thumbnails') !== 'false',
       editable: this.hasAttribute('editable') && this.getAttribute('editable') !== 'false',
@@ -112,6 +124,7 @@ export class OfficeViewerElement extends HTMLElement {
       icons: this._icons,
       locale: this.getAttribute('locale') ?? undefined,
       strings: this._strings,
+      fonts: this._fonts ?? fontsAttr(this.getAttribute('fonts')),
       collab:
         this.getAttribute('collab') && this.getAttribute('room')
           ? {
@@ -136,6 +149,19 @@ export class OfficeViewerElement extends HTMLElement {
   private sync() {
     this.viewer?.update(this.props())
   }
+}
+
+/** the `fonts` attribute: a JSON list of fonts by URL; anything else is ignored, with a warning */
+function fontsAttr(v: string | null): FontSource[] | undefined {
+  if (!v) return undefined
+  try {
+    const list = JSON.parse(v) as unknown
+    if (Array.isArray(list)) return list.filter((f): f is FontSource => !!f && typeof f.family === 'string' && typeof f.src === 'string')
+  } catch {
+    // reported below
+  }
+  console.warn('[office-engine] the fonts attribute is not a JSON list of { family, src } objects; it is ignored')
+  return undefined
 }
 
 export function defineElement(tag = 'office-viewer') {

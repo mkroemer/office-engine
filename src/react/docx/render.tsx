@@ -1,11 +1,13 @@
-import { memo, type CSSProperties, type PointerEvent as RPointerEvent, type ReactNode } from 'react'
+import { createElement, memo, useMemo, type CSSProperties, type PointerEvent as RPointerEvent, type ReactElement, type ReactNode } from 'react'
 import { cssColor } from '../../core/color'
-import type { Block, Inline, Paragraph, ParaStyle, RunStyle, Table, TrackMark } from '../../core/docx/types'
+import type { Block, Inline, Paragraph, ParaStyle, RunStyle, Table, TexMath, TrackMark } from '../../core/docx/types'
+import { texToMathml, type MNode } from '../../core/math/tex'
 import { safeHref } from '../../core/url'
 import type { DocumentClient } from '../../core/worker/client'
 import { useMediaUrl } from '../common/hooks'
 import { dict } from '../../core/dict'
 import { en, type Strings } from '../strings/en'
+import { highlight, languageOf, type Token } from '../../core/syntax'
 
 export interface RenderCtx {
   client: DocumentClient
@@ -129,7 +131,84 @@ function Img({ ctx, target, w, h, alt }: { ctx: RenderCtx; target: string; w: nu
   return <img src={url} alt={alt ?? ''} style={{ ...size, verticalAlign: 'bottom', display: 'inline-block' }} draggable={false} />
 }
 
-function InlineView({ x, ctx, o }: { x: Inline; ctx: RenderCtx; o: number }): ReactNode {
+/** a MathML tree as elements (React puts them in the MathML namespace under `math`) */
+function mathEl(n: MNode, key?: number): ReactElement {
+  return createElement(n.t, { key, ...n.a }, n.x ?? n.k?.map(mathEl))
+}
+
+/**
+ * A TeX formula, drawn by the browser from its MathML (selectable, read by screen readers, printed); the TeX rides
+ * along as an annotation. A formula that cannot be drawn shows its source, its reason as the tooltip.
+ */
+function MathView({ math, sz, attrs }: { math: TexMath; sz?: number; attrs: { title?: string } }) {
+  const display = math.delim === '$$'
+  const { node, error } = useMemo(() => texToMathml(math.tex, display), [math.tex, display])
+  return (
+    <span {...attrs} className="de-math" data-display={display ? '' : undefined} data-error={error ? '' : undefined} title={error ?? attrs.title} style={sz ? { fontSize: `${sz}pt` } : undefined}>
+      {mathEl(node)}
+    </span>
+  )
+}
+
+/** a code block longer than this is shown without colors */
+const CODE_COLORED = 50_000
+
+interface CodeTokens {
+  toks: Token[]
+  /** where each token starts in the paragraph's text */
+  starts: number[]
+}
+
+/**
+ * the colors of a code paragraph's text, worked out once per paragraph and text (an edit makes a new paragraph; its
+ * unchanged lines come from the tokenizer's cache)
+ */
+const codeCache = new WeakMap<Paragraph, { key: string; r: CodeTokens | null }>()
+
+function codeTokens(p: Paragraph): CodeTokens | null {
+  // objects count as one character, as they do for the caret
+  const text = p.runs.map((x) => (x.t === 'text' ? x.text : '\uFFFC')).join('')
+  const key = `${p.code}\u0000${text}`
+  const hit = codeCache.get(p)
+  if (hit?.key === key) return hit.r
+  let r: CodeTokens | null = null
+  if (languageOf(p.code) && text.length <= CODE_COLORED) {
+    const toks = highlight(p.code, text, CODE_COLORED)
+    const starts: number[] = []
+    let at = 0
+    for (const t of toks) {
+      starts.push(at)
+      at += t[1].length
+    }
+    r = { toks, starts }
+  }
+  codeCache.set(p, { key, r })
+  return r
+}
+
+/** the colored pieces of the text [a, b) of a code paragraph: only drawn, the run stays as it is */
+function codePieces(c: CodeTokens, a: number, b: number): ReactNode[] {
+  const { toks, starts } = c
+  let lo = 0
+  let hi = toks.length - 1
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1
+    if (starts[mid] <= a) lo = mid
+    else hi = mid - 1
+  }
+  const out: ReactNode[] = []
+  for (let k = lo; k < toks.length && starts[k] < b; k++) {
+    const [cls, t] = toks[k]
+    const s = Math.max(a, starts[k])
+    const e = Math.min(b, starts[k] + t.length)
+    if (e <= s) continue
+    const piece = t.slice(s - starts[k], e - starts[k])
+    out.push(cls ? <span key={k} className={`de-tk-${cls}`}>{piece}</span> : piece)
+  }
+  return out
+}
+
+function InlineView({ x, ctx, o, pieces }: { x: Inline; ctx: RenderCtx; o: number; pieces?: ReactNode[] }): ReactNode {
   // an object inside a tracked change: outlined in the author's colour (dimmed when deleted)
   const objTc = x.t !== 'text' ? x.tc : undefined
   const obj = {
@@ -149,7 +228,7 @@ function InlineView({ x, ctx, o }: { x: Inline; ctx: RenderCtx; o: number }): Re
           data-tc={tc?.k}
           title={tc ? tcTitle(ctx, tc, true) : undefined}
         >
-          {x.text}
+          {pieces ?? x.text}
         </span>
       )
       const href = ctx.measuring || ctx.editable ? undefined : safeHref(x.href)
@@ -170,6 +249,7 @@ function InlineView({ x, ctx, o }: { x: Inline; ctx: RenderCtx; o: number }): Re
       )
     }
     case 'ref':
+      if (x.math) return <MathView attrs={obj} math={x.math} sz={x.s.sz} />
       return (
         <span {...obj} style={runCss(x.s)}>
           {x.text}
@@ -222,14 +302,25 @@ function ParaView({ p, ctx, pa, sp }: { p: Paragraph; ctx: RenderCtx; pa?: strin
     if (p.markFont) style.fontFamily = p.markFont
   }
   const editable = ctx.editable && pa !== undefined
+  // a code block: its text colored by its language (not while measuring: colors do not change the layout)
+  const code = p.code !== undefined && !ctx.measuring ? codeTokens(p) : null
   let o = 0
   const runs = p.runs.map((x, i) => {
-    const node = <InlineView key={i} x={x} ctx={ctx} o={o} />
+    // (a tracked change keeps its author's color)
+    const pieces = code && x.t === 'text' && !x.tc ? codePieces(code, o, o + x.text.length) : undefined
+    const node = <InlineView key={i} x={x} ctx={ctx} o={o} pieces={pieces} />
     o += x.t === 'text' ? x.text.length : 1
     return node
   })
   return (
-    <div className="de-p" style={style} data-pa={pa} contentEditable={ctx.editable && !editable ? false : undefined}>
+    <div
+      className={p.code !== undefined ? 'de-p de-code' : 'de-p'}
+      style={style}
+      data-pa={pa}
+      data-code={p.code}
+      spellCheck={p.code !== undefined ? false : undefined}
+      contentEditable={ctx.editable && !editable ? false : undefined}
+    >
       {p.marker && (
         <span className="de-marker" contentEditable={ctx.editable ? false : undefined} style={{ ...runCss(p.marker.s), minWidth: p.marker.tab && hang ? `${hang}pt` : undefined }}>
           {p.marker.text}
