@@ -6,6 +6,7 @@
  * cells (chart.ts), or, of a kind not drawn, its kind and title for a placeholder the size of the chart. Shapes, text
  * boxes and the like are left out, as are drawings in a group the anchor's own frame does not hold.
  */
+import { dict } from '../dict'
 import { isWebImage } from '../opc'
 import { desc, descAll, kid, textOf, type XEl } from '../xml'
 import { MAX_COL, MAX_ROWS, MAX_SHEET_WIDTH_PX, MAX_SHEET_HEIGHT_PX, ooxmlInt } from './limits'
@@ -43,11 +44,11 @@ export interface SheetDrawing {
 /** DrawingML measures in EMU: 914400 to the inch, 96 CSS pixels to the inch */
 const EMU_PER_PX = 9525
 
-const CHART_KINDS: Record<string, string> = {
+const CHART_KINDS: Record<string, string> = dict({
   barChart: 'bar', bar3DChart: 'bar', lineChart: 'line', line3DChart: 'line', pieChart: 'pie', pie3DChart: 'pie', ofPieChart: 'pie',
   doughnutChart: 'doughnut', areaChart: 'area', area3DChart: 'area', scatterChart: 'scatter', bubbleChart: 'bubble', radarChart: 'radar',
   stockChart: 'stock', surfaceChart: 'surface', surface3DChart: 'surface',
-}
+})
 
 /** an attribute whatever its namespace prefix: `r:id` is the usual, not the only one */
 const attr = (el: XEl | undefined, local: string) => {
@@ -122,6 +123,8 @@ export function workbookReader(wb: XlsxWorkbook, self: number): RangeReader {
     }
     if (!refs.length) return null
     const out: RangeValues = { values: [], formats: [], hidden: [] }
+    // the cells of all the reference's areas together, so a reference of many areas is no larger than one
+    let cells = 0
     for (const r of refs) {
       if (r.sheet?.startsWith('[')) return null
       const s = r.sheet === undefined ? self : wb.sheets.findIndex((x) => x.name.toLowerCase() === r.sheet!.toLowerCase())
@@ -137,7 +140,8 @@ export function workbookReader(wb: XlsxWorkbook, self: number): RangeReader {
         'r' in r
           ? [r.r, r.c, r.r, r.c]
           : [r.r0, r.c0, r.r1 >= MAX_ROWS - 1 ? Math.min(r.r1, Math.max(r.r0, d.maxRow)) : r.r1, r.c1 >= MAX_COL - 1 ? Math.min(r.c1, Math.max(r.c0, d.maxCol)) : r.c1]
-      if ((r1 - r0 + 1) * (c1 - c0 + 1) > MAX_POINTS) return null
+      cells += (r1 - r0 + 1) * (c1 - c0 + 1)
+      if (cells > MAX_POINTS) return null
       await wb.ensure(d, r0, r1)
       const hiddenCols = new Set<number>()
       for (const ci of d.colInfo) if (ci.w === 0) for (let c = Math.max(ci.min, c0); c <= Math.min(ci.max, c1); c++) hiddenCols.add(c)
@@ -158,7 +162,7 @@ export function workbookReader(wb: XlsxWorkbook, self: number): RangeReader {
   }
 }
 
-/** more cells than a chart reads from one reference (a whole column): its saved values are used instead */
+/** more cells than a chart reads from one reference, all its areas together (a whole column): its saved values are used instead */
 const MAX_POINTS = 50_000
 
 function cellValue(wb: XlsxWorkbook, t: number, v: unknown): number | string | null {
@@ -187,6 +191,13 @@ export async function readSheetDrawings(wb: XlsxWorkbook, sheet: number): Promis
   if (!sheetPath) return []
   const sheetRels = await pkg.rels(sheetPath)
   const out: SheetDrawing[] = []
+  // a chart part is read once, however many anchors show it
+  const charts = new Map<string, ReturnType<typeof chartOf>>()
+  const chartFor = (part: string) => {
+    let c = charts.get(part)
+    if (!c) charts.set(part, (c = chartOf(wb, sheet, part)))
+    return c
+  }
   for (const rel of sheetRels.values()) {
     if (rel.external || !rel.type.endsWith('/drawing') || !pkg.has(rel.target)) continue
     const root = await pkg.xml(rel.target)
@@ -199,8 +210,8 @@ export async function readSheetDrawings(wb: XlsxWorkbook, sheet: number): Promis
       const blip = desc(anchor, 'blip')
       if (chartRef) {
         const target = rels.get(attr(chartRef, 'id') ?? '')
-        const chart = target && !target.external && pkg.has(target.target) ? await chartOf(wb, sheet, target.target) : { chart: '', title: '', model: null }
-        out.push({ kind: 'chart', ...place, chart: chart.chart, title: chart.title, ...(chart.model ? { model: chart.model } : {}) })
+        const chart = target && !target.external && pkg.has(target.target) ? await chartFor(target.target) : { chart: '', title: '', model: null }
+        out.push({ kind: 'chart', ...place, chart: chart.chart, title: chart.title, ...(chart.model ? { model: { ...chart.model } } : {}) })
       } else if (blip) {
         const target = rels.get(attr(blip, 'embed') ?? '')
         const pr = desc(anchor, 'cNvPr')

@@ -11,6 +11,7 @@
  * A chart of the newer chartex kinds (waterfall, treemap, ...) is in another part and has no model: it stays a placeholder.
  */
 import { colorOf, cssColor, drawingColor, type ColorCtx } from '../color'
+import { dict } from '../dict'
 import type { Theme } from '../theme'
 import { kid, kids, num, textOf, type XEl } from '../xml'
 import { formatValue } from './numfmt'
@@ -216,13 +217,15 @@ export interface RangeValues {
 /** reads a series reference (`'Sheet 1'!$B$2:$B$9`) from the workbook; null where it cannot */
 export type RangeReader = (ref: string) => Promise<RangeValues | null>
 
-const GROUPS: Record<string, ChartType> = {
+const GROUPS: Record<string, ChartType> = dict({
   barChart: 'bar', bar3DChart: 'bar', lineChart: 'line', line3DChart: 'line', areaChart: 'area', area3DChart: 'area',
   pieChart: 'pie', pie3DChart: 'pie', ofPieChart: 'pie', doughnutChart: 'doughnut', scatterChart: 'scatter',
   bubbleChart: 'bubble', radarChart: 'radar', stockChart: 'stock', surfaceChart: 'surface', surface3DChart: 'surface',
-}
+})
 
 const val = (el: XEl | undefined, def?: string) => el?.a.val ?? def
+/** `v` kept to Excel's range for it, `def` when it is not a number */
+const within = (v: number, lo: number, hi: number, def: number) => (Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : def)
 const on = (el: XEl | undefined, def = false) => (el ? el.a.val === undefined || el.a.val === '1' || el.a.val === 'true' : def)
 const EMU_PER_PT = 12700
 
@@ -400,11 +403,29 @@ function labelsOf(el: XEl | undefined, ctx: ColorCtx): DataLabels | undefined {
 
 /** the most points read from a chart's saved values: `ptCount` is the file's word, and allocated as an array */
 const MAX_CACHED = 100_000
+/** the most points a chart reads from its cells and saved values together: one past it is shown as its placeholder */
+export const MAX_CHART_POINTS = 250_000
+/** the most series a chart has in Excel: one with more is shown as its placeholder */
+export const MAX_SERIES = 255
+
+/** where a chart's values come from: the workbook's cells, and the points it may still read */
+interface Sources {
+  read: RangeReader
+  left: number
+}
+
+/** takes `n` points of the chart's budget; past it the chart is not read (its placeholder is shown) */
+function take(src: Sources, n: number) {
+  src.left -= n
+  if (src.left < 0) throw new Error(`more than ${MAX_CHART_POINTS} points in the chart`)
+}
 
 /** a cache's points by index (`c:pt idx`), `ptCount` long */
-function cacheOf(cache: XEl | undefined): { values: (string | null)[]; format?: string } | null {
+function cacheOf(cache: XEl | undefined, src: Sources): { values: (string | null)[]; format?: string } | null {
   if (!cache) return null
-  const n = Math.min(Math.max(0, num(val(kid(cache, 'ptCount')), 0)!), MAX_CACHED)
+  const count = num(val(kid(cache, 'ptCount')), 0)!
+  const n = Number.isFinite(count) ? Math.min(Math.max(0, Math.floor(count)), MAX_CACHED) : 0
+  take(src, n)
   const values: (string | null)[] = new Array(n).fill(null)
   for (const pt of kids(cache, 'pt')) {
     const i = num(pt.a.idx, -1)!
@@ -420,30 +441,31 @@ interface Read {
 }
 
 /** a title whose text is a cell (`c:tx/c:strRef`): the cell's text, else the cached one */
-async function referencedText(el: XEl, ctx: ColorCtx, read: RangeReader, size: number): Promise<ChartText | undefined> {
-  const text = (await source(kid(el, 'tx'), read))?.values.filter((x) => x !== null && x !== '').join(' ')
+async function referencedText(el: XEl, ctx: ColorCtx, src: Sources, size: number): Promise<ChartText | undefined> {
+  const text = (await source(kid(el, 'tx'), src))?.values.filter((x) => x !== null && x !== '').join(' ')
   return text ? { text: String(text), size, bold: false, ...txLook(el, ctx) } : undefined
 }
 
 /** a data source (`c:cat`, `c:val`, `c:xVal`, `c:yVal`, `c:tx`): its reference read from the cells, else its cache */
-async function source(el: XEl | undefined, read: RangeReader): Promise<Read | null> {
+async function source(el: XEl | undefined, src: Sources): Promise<Read | null> {
   if (!el) return null
   const ref = kid(el, 'numRef') ?? kid(el, 'strRef') ?? kid(el, 'multiLvlStrRef')
   const lit = kid(el, 'numLit') ?? kid(el, 'strLit')
   const f = textOf(kid(ref, 'f'))
   if (f) {
-    const got = await read(f).catch(() => null)
+    const got = await src.read(f).catch(() => null)
+    if (got) take(src, got.values.length)
     if (got) return { values: got.values, format: got.formats.find((x) => x && x !== 'General'), hidden: got.hidden }
   }
-  const cache = cacheOf(kid(ref, 'numCache') ?? kid(ref, 'strCache') ?? lit) ?? multiLevel(kid(ref, 'multiLvlStrCache'))
+  const cache = cacheOf(kid(ref, 'numCache') ?? kid(ref, 'strCache') ?? lit, src) ?? multiLevel(kid(ref, 'multiLvlStrCache'), src)
   return cache ? { values: cache.values, format: cache.format } : null
 }
 
 /** multi-level categories: the innermost level (the labels next to the axis) */
-function multiLevel(cache: XEl | undefined) {
+function multiLevel(cache: XEl | undefined, src: Sources) {
   const lvl = kids(cache, 'lvl')[0]
   if (!cache || !lvl) return null
-  return cacheOf({ ...lvl, c: [kid(cache, 'ptCount')!, ...lvl.c].filter(Boolean) })
+  return cacheOf({ ...lvl, c: [kid(cache, 'ptCount')!, ...lvl.c].filter(Boolean) }, src)
 }
 
 const toNum = (v: number | string | null | undefined): number | null => {
@@ -455,7 +477,7 @@ const toNum = (v: number | string | null | undefined): number | null => {
 
 interface SeriesCtx {
   ctx: ColorCtx
-  read: RangeReader
+  read: Sources
   plotVisOnly: boolean
   date1904: boolean
   style: ChartStyle
@@ -633,6 +655,8 @@ export async function readChart(root: XEl | undefined, opts: { theme: Theme; dat
   const groups: ChartGroup[] = []
   let seriesIndex = 0
   const count = plot.c.reduce((a, g) => a + (GROUPS[g.n] ? kids(g, 'ser').length : 0), 0)
+  if (count > MAX_SERIES) return null
+  const src: Sources = { read: opts.read, left: MAX_CHART_POINTS }
   for (const g of plot.c) {
     const type = GROUPS[g.n]
     if (!type) continue
@@ -645,24 +669,26 @@ export async function readChart(root: XEl | undefined, opts: { theme: Theme; dat
     // a line chart marks its points unless it says not to; a scatter chart of style line or smooth has no markers
     const scatterStyle = val(kid(g, 'scatterStyle'))
     const markers = type === 'scatter' ? scatterStyle !== 'line' && scatterStyle !== 'smooth' : on(kid(g, 'marker'), true)
-    const sc: SeriesCtx = { ctx, read: opts.read, plotVisOnly, date1904: opts.date1904, style, count, radarStyle, markers }
+    const sc: SeriesCtx = { ctx, read: src, plotVisOnly, date1904: opts.date1904, style, count, radarStyle, markers }
     for (const ser of kids(g, 'ser')) series.push(await seriesOf(ser, seriesIndex++, type, vary, sc))
+    // a group with no series draws nothing (and has no values to scale)
+    if (!series.length) continue
     const groupLabels = labelsOf(kid(g, 'dLbls'), ctx)
     if (groupLabels) for (const s of series) s.labels ??= groupLabels
     groups.push({
       type,
       dir: val(kid(g, 'barDir')) === 'bar' ? 'bar' : 'col',
       grouping,
-      gapWidth: num(val(kid(g, 'gapWidth')), 150)!,
-      overlap: num(val(kid(g, 'overlap')), grouping === 'stacked' || grouping === 'percentStacked' ? 100 : 0)!,
+      gapWidth: within(num(val(kid(g, 'gapWidth')), 150)!, 0, 500, 150),
+      overlap: within(num(val(kid(g, 'overlap')), grouping === 'stacked' || grouping === 'percentStacked' ? 100 : 0)!, -100, 100, 0),
       varyColors,
-      holeSize: num(val(kid(g, 'holeSize')), 50)!,
-      firstSliceAng: num(val(kid(g, 'firstSliceAng')), 0)!,
+      holeSize: within(num(val(kid(g, 'holeSize')), 50)!, 10, 90, 50),
+      firstSliceAng: within(num(val(kid(g, 'firstSliceAng')), 0)!, 0, 360, 0),
       scatterStyle: val(kid(g, 'scatterStyle')),
       ...(radarStyle ? { radarStyle } : {}),
       ...(type === 'bubble'
         ? {
-            bubbleScale: num(val(kid(g, 'bubbleScale')), 100)!,
+            bubbleScale: within(num(val(kid(g, 'bubbleScale')), 100)!, 0, 300, 100),
             sizeRepresents: val(kid(g, 'sizeRepresents')) === 'w' ? ('w' as const) : ('area' as const),
             showNegBubbles: on(kid(g, 'showNegBubbles')),
           }
@@ -680,7 +706,7 @@ export async function readChart(root: XEl | undefined, opts: { theme: Theme; dat
   const single = groups.length === 1 && groups[0].series.length === 1
   const titleEl = kid(chart, 'title')
   const auto = (): ChartText => ({ text: single ? groups[0].series[0].name : 'Chart Title', size: fontSize * 1.4, bold: false, ...txLook(titleEl, ctx) })
-  let title = titleEl ? (richText(titleEl, ctx, fontSize * 1.4, false) ?? (await referencedText(titleEl, ctx, opts.read, fontSize * 1.4)) ?? auto()) : undefined
+  let title = titleEl ? (richText(titleEl, ctx, fontSize * 1.4, false) ?? (await referencedText(titleEl, ctx, src, fontSize * 1.4)) ?? auto()) : undefined
   if (!titleEl && single && !on(kid(chart, 'autoTitleDeleted')) && groups[0].type !== 'scatter') title = auto()
   if (title) {
     if (!title.size) title.size = fontSize * 1.4

@@ -6,6 +6,7 @@ import { FindBar } from '../src/react/docx/FindBar'
 import { resolveStrings, StringsProvider, useStrings } from '../src/react/strings'
 import { de } from '../src/locales/de'
 import { drawingEl } from '../src/react/xlsx/drawings'
+import type { ChartModel } from '../src/core/xlsx/chart'
 
 const noop = () => {}
 const find = <FindBar query="Office" index={1} count={3} editable replace onQuery={noop} onNav={noop} onClose={noop} onReplace={noop} />
@@ -46,6 +47,21 @@ describe('rendered UI strings', () => {
     expect(renderToStaticMarkup(drawingEl('p', { kind: 'picture', title: '' }, { width: 200, height: 100 }, german))).toContain('<strong>Bild</strong>')
     for (const kind of ['', 'unknown', 'constructor', '__proto__']) {
       expect(renderToStaticMarkup(drawingEl('c', { ...chart, chart: kind }, { width: 200, height: 100 }, german))).toContain('<strong>Diagramm</strong>')
+    }
+  })
+
+  test('a chart that cannot be drawn shows its placeholder box instead of taking the view down', () => {
+    const broken = { groups: null } as unknown as ChartModel
+    const warn = console.warn
+    console.warn = () => {}
+    try {
+      const html = renderToStaticMarkup(drawingEl('c', { kind: 'chart', chart: 'column', title: 'Sales', model: broken }, { width: 200, height: 100 }, resolveStrings('en')))
+      expect(html).toContain('de-xl-drawing')
+      expect(html).toContain('<strong>Column chart</strong>')
+      // asked again (the next render), it is not drawn again
+      expect(renderToStaticMarkup(drawingEl('c', { kind: 'chart', chart: 'column', title: 'Sales', model: broken }, { width: 200, height: 100 }, resolveStrings('en')))).toContain('de-xl-drawing')
+    } finally {
+      console.warn = warn
     }
   })
 

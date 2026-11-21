@@ -9,6 +9,7 @@
  *
  * Every chart is its own picture, so the ids of its gradients, patterns and clip path need only be unique within it.
  */
+import { dict } from '../dict'
 import { lineHeight, pathData, Svg, textWidth, wrap, type Paint, type Pt } from '../diagram/svg'
 import type { ChartAxis, ChartGroup, ChartModel, ChartSeries, ChartText, FillLook, LineLook, TextLook } from './chart'
 import { SURFACE_BANDS } from './chart'
@@ -33,10 +34,10 @@ interface Scale {
   format?: string
 }
 
-const DASH: Record<string, number[]> = {
+const DASH: Record<string, number[]> = dict({
   dash: [4, 3], sysDash: [3, 1], dot: [1, 1], sysDot: [1, 1], dashDot: [4, 3, 1, 3], sysDashDot: [3, 1, 1, 1],
   lgDash: [8, 3], lgDashDot: [8, 3, 1, 3], lgDashDotDot: [8, 3, 1, 3, 1, 3], sysDashDotDot: [3, 1, 1, 1, 1, 1],
-}
+})
 const dashOf = (d: string | undefined, w: number) => (d && DASH[d] ? DASH[d].map((x) => x * Math.max(1, w)).join(' ') : undefined)
 
 /** a line's paint: its color, width and dash */
@@ -62,6 +63,12 @@ function highest(xs: readonly number[]): number {
 export function niceScale(lo: number, hi: number, opts: { min?: number; max?: number; major?: number; zero?: boolean; ticks?: number } = {}): Scale {
   if (!Number.isFinite(lo) || !Number.isFinite(hi)) (lo = 0), (hi = 1)
   if (lo > hi) [lo, hi] = [hi, lo]
+  // bounds and a step that are not numbers, or fixed bounds the wrong way round (Excel keeps the minimum then)
+  opts = { ...opts }
+  if (opts.min !== undefined && !Number.isFinite(opts.min)) opts.min = undefined
+  if (opts.max !== undefined && !Number.isFinite(opts.max)) opts.max = undefined
+  if (opts.major !== undefined && !(Number.isFinite(opts.major) && opts.major > 0)) opts.major = undefined
+  if (opts.min !== undefined && opts.max !== undefined && opts.max <= opts.min) opts.max = undefined
   if (opts.zero !== false) {
     // values all alike keep zero in view too, so bars of them have a height
     if (lo > 0 && (lo < (hi * 5) / 6 || lo === hi)) lo = 0
@@ -280,6 +287,7 @@ interface LegendEntry {
 
 function legendEntries(m: ChartModel): LegendEntry[] {
   const g0 = m.groups[0]
+  if (!g0) return []
   if (g0.type === 'surface') return surfaceBands(g0, m).map((b) => ({ label: b.label, fill: b.fill, look: b.look }))
   // a pie (or one series of varied colors): the points of its first series are the entries
   const pie = g0.type === 'pie' || g0.type === 'doughnut'
@@ -477,6 +485,8 @@ function cumulative(g: ChartGroup, s: ChartSeries): (number | null)[] {
 }
 
 export function renderChart(m: ChartModel, W: number, H: number): string {
+  // a group without series draws nothing: a pie or radar of it would have no first series to draw
+  m = { ...m, groups: m.groups.filter((g) => g.series.length) }
   const svg = new Svg()
   // the chart area: a plain color is the picture's canvas; a gradient or pattern a rect of its own
   if (m.bgLook && m.bg !== null) svg.rect(0, 0, W, H, { fill: fillPaint(svg, m.bg, m.bgLook) })

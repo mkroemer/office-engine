@@ -30,7 +30,7 @@ const ser = (i: number, name: string, val: string, extra = '') =>
 const AXES = '<c:catAx><c:axId val="1"/><c:axPos val="b"/><c:crossAx val="2"/></c:catAx><c:valAx><c:axId val="2"/><c:axPos val="l"/><c:majorGridlines/><c:crossAx val="1"/></c:valAx>'
 
 /** a workbook whose sheet "Data" holds ROWS and one chart (its `plotArea` body given); `hideRow` hides a row (1-based) */
-async function withChart(plot: string, opts: { hideRow?: number; title?: string; titleXml?: string; style?: number } = {}): Promise<Blob> {
+async function withChart(plot: string, opts: { hideRow?: number; title?: string; titleXml?: string; style?: number; anchors?: number } = {}): Promise<Blob> {
   const base = await rowsToXlsx(ROWS, 'Data')
   const zip = await ZipArchive.open(new BlobSource(base))
   const files = new Map<string, string>()
@@ -42,7 +42,7 @@ async function withChart(plot: string, opts: { hideRow?: number; title?: string;
   files.set('xl/drawings/_rels/drawing1.xml.rels', `${HEAD}<Relationships xmlns="${RELS}"><Relationship Id="rId1" Type="${R}/chart" Target="../charts/chart1.xml"/></Relationships>`)
   files.set(
     'xl/drawings/drawing1.xml',
-    `${HEAD}<xdr:wsDr ${NS}><xdr:twoCellAnchor><xdr:from><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>10</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>16</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rId1"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>`,
+    `${HEAD}<xdr:wsDr ${NS}>${Array.from({ length: opts.anchors ?? 1 }, (_, k) => `<xdr:twoCellAnchor><xdr:from><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${1 + k * 20}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>10</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${16 + k * 20}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="${2 + k}" name="Chart ${1 + k}"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rId1"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor>`).join('')}</xdr:wsDr>`,
   )
   const title = opts.titleXml ?? (opts.title ? `<c:title><c:tx><c:rich><a:p><a:r><a:t>${opts.title}</a:t></a:r></a:p></c:rich></c:tx></c:title>` : '')
   files.set('xl/charts/chart1.xml', `${HEAD}<c:chartSpace ${NS}>${opts.style ? `<c:style val="${opts.style}"/>` : ''}<c:chart>${title}<c:plotArea><c:layout/>${plot}</c:plotArea><c:legend><c:legendPos val="b"/></c:legend><c:plotVisOnly val="1"/></c:chart></c:chartSpace>`)
@@ -511,5 +511,104 @@ describe('xlsx charts: axis formats, labels at the edge, empty cells, date axes,
   test('an Excel 2010 style number (142) the XML reader already took out of its AlternateContent is style 42', async () => {
     const { model } = await modelOf(await withChart(CLUSTERED, { style: 142 }))
     expect(model!.textColor.toLowerCase()).toBe('#ffffff')
+  })
+})
+
+describe('xlsx charts: hostile input', () => {
+  const cached = (n: number, ptCount: number | string = n) =>
+    `<c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="${ptCount}"/>${Array.from({ length: n }, (_, i) => `<c:pt idx="${i}"><c:v>${i}</c:v></c:pt>`).join('')}</c:numLit>`
+
+  test('a dash named after an inherited key ("constructor") is drawn solid', async () => {
+    const dashed = `<c:spPr><a:ln w="19050"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill><a:prstDash val="constructor"/></a:ln></c:spPr>`
+    const plot = `<c:lineChart><c:grouping val="standard"/>${ser(0, 'B', numRef('Data!$B$2:$B$4', [1, 2, 3]), dashed)}<c:axId val="1"/><c:axId val="2"/></c:lineChart>${AXES}`
+    const { model } = await modelOf(await withChart(plot))
+    const svg = renderChart(model!, 400, 260)
+    expect(svg).toContain('<path')
+    expect(svg).not.toContain('stroke-dasharray')
+  })
+
+  test('a group named after an inherited key (<c:constructor>) is skipped, and the chart beside it kept', async () => {
+    const { model } = await modelOf(await withChart(`<c:constructor>${ser(0, 'B', numRef('Data!$B$2:$B$4', [1, 1, 1]))}</c:constructor>${CLUSTERED}`))
+    expect(model!.groups.map((g) => g.type)).toEqual(['bar'])
+    // a model of plain data: what the worker posts
+    expect(() => structuredClone(model)).not.toThrow()
+  })
+
+  test('an empty pie group beside a bar group draws the bars', async () => {
+    const { model } = await modelOf(await withChart(`<c:pieChart><c:varyColors val="1"/></c:pieChart>${CLUSTERED}`))
+    expect(model!.groups.map((g) => g.type)).toEqual(['bar'])
+    expect(renderChart(model!, 400, 260)).toContain('<rect')
+    // a model made elsewhere with the empty group still draws
+    model!.groups.unshift({ ...model!.groups[0], type: 'pie', series: [] })
+    expect(() => renderChart(model!, 400, 260)).not.toThrow()
+  })
+
+  test('a point count that is not a whole number is read as the whole part', async () => {
+    const plot = `<c:lineChart><c:grouping val="standard"/>${ser(0, 'B', `<c:numRef><c:f>SalesRange</c:f>${cached(3, '3.5').replace(/c:numLit/g, 'c:numCache')}</c:numRef>`)}<c:axId val="1"/><c:axId val="2"/></c:lineChart>${AXES}`
+    const { model } = await modelOf(await withChart(plot))
+    expect(model!.groups[0].series[0].values).toEqual([0, 1, 2])
+  })
+
+  test('more series than Excel allows: the placeholder', async () => {
+    const many = Array.from({ length: 256 }, (_, i) => `<c:ser><c:idx val="${i}"/><c:order val="${i}"/><c:val>${cached(1)}</c:val></c:ser>`).join('')
+    const { model, drawing } = await modelOf(await withChart(`<c:lineChart><c:grouping val="standard"/>${many}<c:axId val="1"/><c:axId val="2"/></c:lineChart>${AXES}`))
+    expect(model).toBeUndefined()
+    expect(drawing.chart).toBe('line')
+  })
+
+  test('saved values past the chart-wide budget: the placeholder, not a chart of millions of points', async () => {
+    // 30 series of a saved count of 100 000 each: within the cap of one cache, past the chart's
+    const many = Array.from({ length: 30 }, (_, i) => `<c:ser><c:idx val="${i}"/><c:order val="${i}"/><c:val>${cached(1, 100_000)}</c:val></c:ser>`).join('')
+    const { model } = await modelOf(await withChart(`<c:lineChart><c:grouping val="standard"/>${many}<c:axId val="1"/><c:axId val="2"/></c:lineChart>${AXES}`))
+    expect(model).toBeUndefined()
+  })
+
+  test('a reference of many areas counts its cells together: its saved values stand in', async () => {
+    // 200 areas of 300 cells: each is small, together they are past the cap of one reference
+    const areas = Array.from({ length: 200 }, () => 'Data!$B$1:$B$300').join(',')
+    const plot = `<c:lineChart><c:grouping val="standard"/>${ser(0, 'B', numRef(`(${areas})`, [5, 6, 7]))}<c:axId val="1"/><c:axId val="2"/></c:lineChart>${AXES}`
+    const { model } = await modelOf(await withChart(plot))
+    expect(model!.groups[0].series[0].values).toEqual([5, 6, 7])
+  })
+
+  test('a chart shown by several anchors is read once, each anchor with a model of its own', async () => {
+    const engine = new Engine(() => {})
+    await engine.open(await withChart(CLUSTERED, { anchors: 3 }), {})
+    const pkg = (engine as unknown as { xlsx: { pkg: { xml: (part: string) => Promise<unknown> } } }).xlsx.pkg
+    const xml = pkg.xml.bind(pkg)
+    let reads = 0
+    pkg.xml = (part) => ((reads += part.endsWith('chart1.xml') ? 1 : 0), xml(part))
+    const drawings = (await engine.call('xlsx.drawings', [0])) as SheetDrawing[]
+    expect(drawings.length).toBe(3)
+    expect(reads).toBe(1)
+    expect(drawings.every((d) => d.model?.groups[0].series.length === 2)).toBe(true)
+    expect(new Set(drawings.map((d) => d.model)).size).toBe(3)
+  })
+
+  test('a gap width, overlap and hole size outside what Excel takes are kept to it', async () => {
+    const plot = CLUSTERED.replace('<c:gapWidth val="150"/>', '<c:gapWidth val="-100"/><c:overlap val="-400"/>')
+    const { model } = await modelOf(await withChart(plot))
+    expect(model!.groups[0].gapWidth).toBe(0)
+    expect(model!.groups[0].overlap).toBe(-100)
+    expect(renderChart(model!, 400, 260)).not.toContain('NaN')
+    const ring = `<c:doughnutChart><c:varyColors val="1"/>${ser(0, 'B', numRef('Data!$B$2:$B$4', [1, 1, 1]))}<c:holeSize val="5000"/></c:doughnutChart>`
+    expect((await modelOf(await withChart(ring))).model!.groups[0].holeSize).toBe(90)
+  })
+
+  test('a control character in a title is left out, so the picture stays well-formed XML', async () => {
+    const { model } = await modelOf(await withChart(CLUSTERED, { title: 'Sales&#1;\u{1F4C8} 2026' }))
+    const svg = renderChart(model!, 400, 260)
+    expect(svg).toContain('Sales\u{1F4C8} 2026')
+    expect(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(svg)).toBe(false)
+    expect(renderChart({ ...model!, title: { ...model!.title!, text: 'a\uD800b' } }, 400, 260)).toContain('>ab<')
+  })
+
+  test('fixed bounds the wrong way round or a step of zero still give a scale', () => {
+    for (const opts of [{ min: 10, max: 2 }, { major: 0 }, { min: 0, max: 0 }, { major: Infinity }, { min: NaN, max: Infinity }]) {
+      const s = niceScale(1, 9, opts)
+      expect(Number.isFinite(s.min) && Number.isFinite(s.max) && s.max > s.min).toBe(true)
+      expect(s.ticks.length).toBeGreaterThan(1)
+      expect(s.ticks.every(Number.isFinite)).toBe(true)
+    }
   })
 })
