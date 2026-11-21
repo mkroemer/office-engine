@@ -41,8 +41,7 @@ describe('docx page setup', () => {
 
     const after = await pageBox(v)
     expect(after.width / after.height).toBeCloseTo(841.9 / 595.3, 1)
-    const colsCss = await v.page.locator('.de-page-cols').first().evaluate((el) => getComputedStyle(el).columnCount)
-    expect(colsCss).toBe('2')
+    expect(await v.page.locator('.de-page').first().locator('.de-page-cols > .de-page-col').count()).toBe(2)
     if (SHOTS) await v.page.screenshot({ path: `${SHOTS}/page-setup-2cols.png` })
 
     const m = await metaOf((await v.save()).bytes)

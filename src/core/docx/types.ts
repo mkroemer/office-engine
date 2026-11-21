@@ -41,6 +41,10 @@ export interface ParaStyle {
   bLeft?: Border
   bRight?: Border
   keepNext?: boolean
+  /** the paragraph is not split across pages (w:keepLines) */
+  keepLines?: boolean
+  /** widow / orphan control (w:widowControl); absent: on, as in Word */
+  widowControl?: boolean
   pageBreakBefore?: boolean
   outline?: number
   contextual?: boolean

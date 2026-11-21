@@ -186,7 +186,7 @@ export interface Pap {
 }
 
 export const DEFAULT_PAP: Pap = {
-  istd: 0, jc: 0, keep: false, keepNext: false, pbb: false, widow: false, noLnn: false, noHyph: false, bidi: false, ctxSp: false, mirror: false,
+  istd: 0, jc: 0, keep: false, keepNext: false, pbb: false, widow: true, noLnn: false, noHyph: false, bidi: false, ctxSp: false, mirror: false,
   left: 0, right: 0, first: 0, before: 0, after: 0, beforeAuto: false, afterAuto: false, line: 240, lineMult: true,
   inTable: false, ttp: false, itap: 0, innerCell: false, innerTtp: false, ilfo: 0, ilvl: 0, outLvl: 9, tabs: [],
   bTop: null, bLeft: null, bBottom: null, bRight: null, bBetween: null, bBar: null, shd: '',
