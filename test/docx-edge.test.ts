@@ -367,6 +367,19 @@ describe('review findings', () => {
     expect(seen.at(-1)).toEqual([true, false])
     client.destroy()
   })
+
+  test('a state subscriber hears the current state at once, then each change, until it unsubscribes', async () => {
+    const { ed, client } = await editorOn(await tracked())
+    const seen: unknown[] = []
+    const off = ed.subscribeState((s) => seen.push(s))
+    expect(seen).toEqual([ed.state()])
+    ed.onSelection(null)
+    expect(seen.length).toBe(2)
+    off()
+    ed.onSelection(null)
+    expect(seen.length).toBe(2)
+    client.destroy()
+  })
 })
 
 describe('saving in between', () => {

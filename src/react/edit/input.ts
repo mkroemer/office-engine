@@ -432,6 +432,11 @@ export class RichInput {
     this.last = sel
     this.expected = null
   }
+  /** A live formatting target remains valid while a focused host control owns DOM focus. */
+  private formatTarget: Sel | null = null
+  private attachedRoot: HTMLElement | null = null
+  private commandSelection: Sel | null = null
+  formatting = false
   /** select all: the model selection covers every paragraph, the DOM one only what is rendered */
   private override: { model: Sel; dom: Sel } | null = null
   /**
@@ -441,6 +446,8 @@ export class RichInput {
   private expected: Sel | null = null
   /** where the DOM selection last was in a paragraph: a view update that removes this node leaves the caret on the page element */
   private seen: Node | null = null
+  /** a selection change was not followed yet when the input was detached: the next attach reads the selection */
+  private missedSel = false
   /**
    * The caret was last seen at the end of a part of a paragraph split across pages (the end of a page), not at the
    * start of the next part, which is the same offset: a caret put back there (after typing) stays on that side.
@@ -452,6 +459,8 @@ export class RichInput {
   attach(root: HTMLElement) {
     if (this.root === root) return
     this.detach()
+    if (this.attachedRoot !== root) this.clearSelection()
+    this.attachedRoot = root
     this.root = root
     root.addEventListener('beforeinput', this.onBeforeInput)
     root.addEventListener('compositionstart', this.onCompStart)
@@ -461,6 +470,11 @@ export class RichInput {
     root.addEventListener('copy', this.onCopy)
     root.addEventListener('cut', this.onCopy)
     document.addEventListener('selectionchange', this.onSelChange)
+    // a selection change whose frame a detach cancelled (a re-render re-attaching in between) is followed now
+    if (this.missedSel) {
+      this.missedSel = false
+      this.onSelChange()
+    }
   }
 
   detach() {
@@ -474,12 +488,26 @@ export class RichInput {
     r.removeEventListener('copy', this.onCopy)
     r.removeEventListener('cut', this.onCopy)
     document.removeEventListener('selectionchange', this.onSelChange)
+    if (this.raf) this.missedSel = true
     cancelAnimationFrame(this.raf)
     this.raf = 0 // or the next selection change waits forever for a frame that was cancelled
     this.root = null
-    this.override = null
     this.expected = null
     this.seen = null
+  }
+
+  clearSelection() {
+    this.override = null
+    this.formatTarget = null
+    this.lastSel = null
+    this.expected = null
+    this.seen = null
+  }
+
+  get focused() {
+    const root = this.root
+    const active = (root?.getRootNode() as Document | ShadowRoot | undefined)?.activeElement
+    return !!root && (active === root || !!active && root.contains(active))
   }
 
   get isComposing() {
@@ -512,7 +540,7 @@ export class RichInput {
 
   /** the selection a key press acts on */
   private live(): Sel | null {
-    return this.override?.model ?? this.expected ?? this.sel()
+    return this.commandSelection ?? this.override?.model ?? this.expected ?? this.sel()
   }
 
   /**
@@ -531,7 +559,41 @@ export class RichInput {
 
   /** current selection, falling back to the last known one (e.g. after focusing a toolbar control) */
   sel(): Sel | null {
-    return this.override?.model ?? this.readSel() ?? this.lastSel
+    return this.commandSelection ?? this.override?.model ?? this.readSel() ?? this.lastSel
+  }
+
+  /** Keep a logical target for any focused host element, including keyboard-operated buttons and menus. */
+  private activeHost(): Element | null {
+    const root = this.root
+    if (!root) return null
+    let active = root.ownerDocument.activeElement
+    while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement
+    if (!active || root.contains(active)) return null
+    // A focusable page wrapper is background, including ancestors outside a web component's shadow root.
+    let scope: Node = root
+    for (;;) {
+      if (active.contains(scope)) return null
+      const tree = scope.getRootNode()
+      if (!(tree instanceof ShadowRoot)) return active
+      scope = tree.host
+    }
+  }
+
+  /** Use the exact published logical target for one command, without affecting later undo/navigation. */
+  withFormatSelection(sel: Sel, apply: () => void) {
+    this.commandSelection = sel
+    this.formatting = true
+    this.lastSel = sel
+    try { apply() } finally {
+      this.commandSelection = null
+      this.formatting = false
+    }
+  }
+
+  formatSelection(): Sel | null {
+    // a select-all covers the whole document, though only the rendered paragraphs are selected in the DOM (and lastSel)
+    const sel = this.activeHost() ? (this.override?.model ?? (this.formatTarget && this.lastSel)) : (this.override?.model ?? this.readSel())
+    return sel && this.host.para(sel.a.pa) && this.host.para(sel.f.pa) ? sel : null
   }
 
   /**
@@ -557,13 +619,27 @@ export class RichInput {
     return true
   }
 
+  /** a select-all is held: the selection is the whole document, though the DOM holds only the pages shown */
+  get selectingAll(): boolean {
+    return !!this.override
+  }
+
+  /** after the document changed under a held select-all (a collaborator's edit): it is the whole document as it is now */
+  renewSelectAll(): Sel | null {
+    const all = this.host.all?.()
+    if (!this.override || !all) return null
+    this.override = { ...this.override, model: all }
+    return all
+  }
+
   /**
    * The paragraphs holding the selection were laid out again (a page now ends elsewhere in them): when the DOM
    * selection no longer shows the model's, it is put back.
    */
   reflow(): boolean {
     const want = this.expected ?? this.last
-    if (!this.root || this.composing || this.override || !want) return false
+    // Replacing the DOM selection can focus the editor. Keep the host's focus when wrapping changes.
+    if (!this.focused || this.composing || this.override || !want) return false
     const now = this.readSel()
     if (now && sameSel(now, want)) return false
     // a selection in other paragraphs is a new one (its change is not read yet), not the model's moved by the cut
@@ -572,21 +648,34 @@ export class RichInput {
   }
 
   /** Applies a model selection to the DOM; false when its paragraph isn't rendered. */
-  restore(sel: Sel | null, focus = true): boolean {
+  restore(sel: Sel | null, focus: boolean | 'preserve' = this.formatting ? 'preserve' : true): boolean {
     const root = this.root
     if (!root || !sel) return false
+    const active = (root.getRootNode() as Document | ShadowRoot).activeElement
+    if (focus === 'preserve' && active !== root && !root.contains(active)) {
+      this.lastSel = sel
+      return true
+    }
+    // putting back the selection a select-all holds keeps the select-all: an edit the worker reports after the
+    // select-all rebuilds its paragraph, and the view then restores the selection around it
+    const ov = this.override
+    const held = ov && (sameSel(sel, ov.dom) || sameSel(sel, ov.model)) ? ov : null
+    if (held) sel = held.dom
     this.override = null
     const up = this.upstream && collapsed(sel)
     const a = domFromPos(root, sel.a, up)
     const f = domFromPos(root, sel.f, up)
     if (!a || !f) {
+      if (held) {
+        this.override = held
+        return true
+      }
       // not in the DOM (its page is not shown): the DOM caret is somewhere else, and key presses go by this one
       this.last = sel
       this.expected = sel
       return false
     }
-    const active = (root.getRootNode() as Document | ShadowRoot).activeElement
-    if (focus && active !== root && !root.contains(active)) root.focus({ preventScroll: true })
+    if (focus === true && active !== root && !root.contains(active)) root.focus({ preventScroll: true })
     const s = getSel(root)
     try {
       s?.setBaseAndExtent(a[0], a[1], f[0], f[1])
@@ -595,6 +684,8 @@ export class RichInput {
     }
     this.lastSel = sel
     this.expected = null
+    this.formatTarget = held ? held.model : sel
+    this.override = held
     return true
   }
 
@@ -801,16 +892,21 @@ export class RichInput {
     if (this.raf) return
     this.raf = requestAnimationFrame(() => {
       this.raf = 0
-      const s = this.readSel()
+      const dom = this.readSel()
+      const control = this.activeHost()
       const ov = this.override
+      const active = (this.root?.getRootNode() as Document | ShadowRoot | undefined)?.activeElement
       // select all stays until the selection moves somewhere else (losing it to a re-render keeps it, like lastSel)
-      if (ov && s && !sameSel(s, ov.dom)) this.override = null
-      else if (ov) {
+      if (ov && ((control && !!this.formatTarget) || (dom ? sameSel(dom, ov.dom) : this.root === active))) {
+        this.formatTarget = ov.model
         this.host.onSelection?.(ov.model)
         return
       }
+      this.override = null
+      const s = control ? this.formatSelection() : dom
       if (s && this.expected && sameSel(s, this.expected)) this.expected = null
       if (s && !this.expected) this.lastSel = s
+      this.formatTarget = this.expected ?? s
       this.host.onSelection?.(this.expected ?? s)
     })
   }

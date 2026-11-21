@@ -1,8 +1,9 @@
 import { useRef, useState } from 'react'
+import { cellFormat } from '../edit/format'
 import type { BorderKind, FmtPatch } from '../../core/xlsx/types'
 import { MOD } from '../common/ContextMenu'
 import { EditorBar } from '../common/Slots'
-import { Btn, ColorBtn, Dropdown, fontName, fontOptions, Icon, Menu, Pop, PromptBox, Select, Sep, SizeBox, useDismiss, type DropOption, type IconName } from '../edit/Toolbar'
+import { Btn, ColorBtn, Dropdown, fontOptions, Icon, Menu, Pop, PromptBox, Select, Sep, SizeBox, useDismiss, type DropOption, type IconName } from '../edit/Toolbar'
 import { useStrings, type Strings } from '../strings'
 
 type FormatName = keyof Strings['xlsx']['formats']
@@ -140,13 +141,12 @@ export function XlsxToolbar(props: {
   const { css, onFormat: f } = props
   const [bColor, setBColor] = useState('#000000')
   const [bStyle, setBStyle] = useState<(typeof BORDER_STYLES)[number]['value']>('thin')
-  const deco = String(css.textDecoration ?? '')
-  const align = (css.textAlign as string | undefined) ?? ''
+  const look = cellFormat(css, props.base)
+  const align = look.align ?? ''
   const valign = css.alignItems === 'flex-start' ? 'top' : css.alignItems === 'center' ? 'center' : 'bottom'
   const rot = Number(css.textRotate ?? 0)
-  const pt = (v: unknown) => (typeof v === 'string' && v.endsWith('pt') ? parseFloat(v) : typeof v === 'number' ? Math.round(v * 0.75 * 2) / 2 : undefined)
-  const sz = pt(css.fontSize) ?? pt(props.base.fontSize)
-  const font = fontName((css.fontFamily ?? props.base.fontFamily) as string | undefined)
+  const sz = look.size
+  const font = look.font ?? ''
   const t = useStrings()
   const kb = (label: string, keys: string) => t.edit.keyed(label, keys)
   const borderTitle = (k: BorderKind) => (k === 'none' ? t.xlsx.clearBorders : t.format.borders[k])
@@ -166,13 +166,13 @@ export function XlsxToolbar(props: {
       <Sep />
       <SizeBox value={sz} sizes={SIZES} onChange={(v) => f({ sz: v })} />
       <Sep />
-      <Btn icon="bold" title={kb(t.edit.bold, `${MOD}B`)} active={css.fontWeight === 700} onClick={() => props.onToggle('b')} />
-      <Btn icon="italic" title={kb(t.edit.italic, `${MOD}I`)} active={css.fontStyle === 'italic'} onClick={() => props.onToggle('i')} />
-      <Btn icon="underline" title={kb(t.edit.underline, `${MOD}U`)} active={deco.includes('underline')} onClick={() => props.onToggle('u')} />
-      <Btn icon="strike" title={kb(t.edit.strike, `${MOD}⇧X`)} active={deco.includes('line-through')} onClick={() => props.onToggle('strike')} />
-      <ColorBtn icon="color" title={t.edit.textColor} value={css.color as string | undefined} onPick={(c) => f({ color: c })} noneLabel={t.edit.automatic} />
+      <Btn icon="bold" title={kb(t.edit.bold, `${MOD}B`)} active={look.bold} onClick={() => props.onToggle('b')} />
+      <Btn icon="italic" title={kb(t.edit.italic, `${MOD}I`)} active={look.italic} onClick={() => props.onToggle('i')} />
+      <Btn icon="underline" title={kb(t.edit.underline, `${MOD}U`)} active={look.underline} onClick={() => props.onToggle('u')} />
+      <Btn icon="strike" title={kb(t.edit.strike, `${MOD}⇧X`)} active={look.strike} onClick={() => props.onToggle('strike')} />
+      <ColorBtn icon="color" title={t.edit.textColor} value={look.color} onPick={(c) => f({ color: c })} noneLabel={t.edit.automatic} />
       <Sep />
-      <ColorBtn icon="fill" title={t.xlsx.fillColor} value={typeof css.background === 'string' && !css.background.includes('gradient') ? css.background : undefined} onPick={(c) => f({ fill: c })} noneLabel={t.format.noFill} />
+      <ColorBtn icon="fill" title={t.xlsx.fillColor} value={look.highlight} onPick={(c) => f({ fill: c })} noneLabel={t.format.noFill} />
       <Pop icon="borders" title={t.xlsx.borders} chevron>
         {(close) => (
           <div className="de-borders-pop">

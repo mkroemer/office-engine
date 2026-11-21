@@ -11,7 +11,7 @@
  */
 import { StrictMode, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { createViewerController, DocViewer, type DocViewerProps, type FileMenuItem, type UIComponents, type ViewerController } from '../../src'
+import { createViewerController, useViewerState, DocViewer, type DocViewerProps, type FileMenuItem, type UIComponents, type ViewerController } from '../../src'
 import { de } from '../../src/locales/de'
 
 type Ev = { type: string; [k: string]: unknown }
@@ -138,6 +138,12 @@ const initial: DocViewerProps = {
   collab: q.get('collab') ? { transport: q.get('collab')!, room: q.get('room') ?? 'e2e', base: Number(q.get('base')) || 0, user: { name: q.get('user') ?? 'Tester' } } : undefined,
 }
 
+function RenderingHost({ props }: { props: DocViewerProps }) {
+  const f = useViewerState(window.__ctl).format
+  return <><input aria-label="React host size" type="number" disabled={!f} defaultValue="" onChange={(e) => window.__ctl.format({ op: 'size', pt: e.currentTarget.valueAsNumber })} />
+    <DocViewer {...props} onSave={async (blob, name) => { log({ type: 'save', name, b64: await b64(blob) }) }} /></>
+}
+
 function App() {
   const [props, setProps] = useState(initial)
   const [phase, setPhase] = useState(0)
@@ -149,6 +155,7 @@ function App() {
   window.__setProps = (p) => setProps((cur) => ({ ...cur, ...p }))
   window.__setLanguage = (language) => setProps((cur) => ({ ...cur, strings: language === 'de-DE' ? de : undefined }))
   const { undo, redo } = window.__ctl
+  if (q.has('renderHost')) return <RenderingHost props={props} />
   return <>
     {q.has('hostControls') && <div><button onClick={undo}>Host undo</button><button onClick={redo}>Host redo</button><button onMouseDown={(e) => e.preventDefault()} onClick={() => window.__ctl.goto(window.__ctl.snapshot().outline!.items[1].id)}>Host second sheet</button></div>}
     {phase < 2 && <DocViewer key="old" {...props} />}

@@ -11,7 +11,8 @@ import type { DocumentClient } from '../../core/worker/client'
 import { getPeers, publishLocal, subscribePeers, getLocalHistory, subscribeLocalHistory } from '../../collab/hosts'
 import { claimFocus, useForceUpdate, useScroll, useSize } from '../common/hooks'
 import { useFileOps, useViewer, useSelectAll } from '../common/Slots'
-import { useViewCommands } from '../controller'
+import { useViewCommands, type TextFormat } from '../controller'
+import { cellFormat, cellPatch, marksAfter } from '../edit/format'
 import { Status } from '../common/Status'
 import { ContextMenu, MOD, type MenuItem } from '../common/ContextMenu'
 import { Toast } from '../common/Dialog'
@@ -494,23 +495,18 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
 
   // ---- controller: the sheets as the outline, sheet switching, undo ----
   const { ctl, headless } = viewer
-  const gridCommands = useRef<{ undo: () => void; redo: () => void } | null>(null)
   const sheetItems = meta.sheets.filter((s) => !s.hidden).map((s) => ({ id: String(s.index), title: s.name, level: 0, current: s.index === cur }))
   useEffect(() => {
     const h = store.history
     ctl?.update({ outline: { kind: 'sheets', items: sheetItems }, canUndo: viewer.editable && h.undo > 0, canRedo: viewer.editable && h.redo > 0 })
   })
-  useViewCommands(ctl, {
-    goto: (id) => {
-      const i = Number(id)
-      if (!meta.sheets[i] || meta.sheets[i].hidden) return
-      // a formula being typed stays open on the other sheet, for cross-sheet references, as with the built-in tabs
-      if (keepEditing && i !== cur) hold.current = true
-      setActive(i)
-    },
-    undo: () => gridCommands.current?.undo(),
-    redo: () => gridCommands.current?.redo(),
-  })
+  const gotoSheet = (id: string) => {
+    const i = Number(id)
+    if (!meta.sheets[i] || meta.sheets[i].hidden) return
+    // a formula being typed stays open on the other sheet, for cross-sheet references, as with the built-in tabs
+    if (keepEditing && i !== cur) hold.current = true
+    setActive(i)
+  }
 
   return (
     <div className="de-xlsx">
@@ -525,7 +521,7 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
         setEdit={setEdit}
         hold={hold}
         onSheet={setActive}
-        gridCommands={gridCommands}
+        gotoSheet={gotoSheet}
       />
       <div className="de-tabs" role="tablist" hidden={headless}>
         {viewer.editable && (
@@ -612,8 +608,7 @@ interface GridProps {
   setEdit: React.Dispatch<React.SetStateAction<EditState | null>>
   hold: MutableRefObject<boolean>
   onSheet: (i: number) => void
-  /** set by the grid: its undo / redo, for the viewer's controller */
-  gridCommands: MutableRefObject<{ undo: () => void; redo: () => void } | null>
+  gotoSheet: (id: string) => void
 }
 
 /** text rotation (OOXML degrees, + = counter-clockwise, 255 = stacked) */
@@ -719,7 +714,7 @@ export function withMerges(r: Range, merges: Merge[]): Range {
 /** the hidden input field of a grid at rest: inside the view, so that nothing scrolls to it */
 const SINK_STYLE: CSSProperties = { left: 4, top: 4, width: 1, height: 1 }
 
-function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, gridCommands }: GridProps) {
+function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, gotoSheet }: GridProps) {
   const viewer = useViewer()
   const str = useStrings()
   const editable = viewer.editable
@@ -1633,25 +1628,65 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
 
   const activeCss = (styles[styleOf(sel.ar, sel.ac)] ?? {}) as Record<string, string | number>
   // whole columns / rows / the sheet: the format goes to them, down to the last row, not only to the cells there are
-  const fmt = (patch: FmtPatch) =>
-    fmtAt(sel.whole === 'all' ? { r0: 0, c0: 0, r1: MAX_ROW, c1: MAX_COL } : sel.whole === 'col' ? { ...rect, r0: 0, r1: MAX_ROW } : sel.whole === 'row' ? { ...rect, c0: 0, c1: MAX_COL } : rect, patch)
-  const fmtAt = (range: Range, patch: FmtPatch) => {
+  const fmtRange = (): Range =>
+    sel.whole === 'all' ? { r0: 0, c0: 0, r1: MAX_ROW, c1: MAX_COL } : sel.whole === 'col' ? { ...rect, r0: 0, r1: MAX_ROW } : sel.whole === 'row' ? { ...rect, c0: 0, c1: MAX_COL } : rect
+  const fmt = (patch: FmtPatch) => fmtAt(fmtRange(), patch)
+  /** `focus`: the grid takes the focus back (the built-in toolbar); a host's control keeps it */
+  const fmtAt = (range: Range, patch: FmtPatch, focus = true) => {
     const done = run(client.call('xlsx.format', sheet, range, patch))
     // Wrap text shows all of the text: the rows grow; a number format shows its numbers: the columns widen
     if (patch.wrap) void done.then(() => fitRows(range, false))
     if (patch.numFmt !== undefined) void done.then(() => widen(range))
-    focusGrid()
+    if (focus) focusGrid()
+    return done
   }
   const toggle = (k: 'b' | 'i' | 'u' | 'strike') => {
-    const on =
-      k === 'b' ? activeCss.fontWeight === 700 : k === 'i' ? activeCss.fontStyle === 'italic' : String(activeCss.textDecoration ?? '').includes(k === 'u' ? 'underline' : 'line-through')
+    const on = cellFmt[k === 'b' ? 'bold' : k === 'i' ? 'italic' : k === 'u' ? 'underline' : 'strike']
     fmt({ [k]: !on })
   }
   const undo = () => void run(client.call('xlsx.undo'), 'undo')
   const redo = () => void run(client.call('xlsx.redo'), 'redo')
-  // the controller's undo / redo: this sheet's grid runs them while it is shown
+  // the controller's undo / redo and formatting: this sheet's grid runs them while it is shown
+  const cellFmt = cellFormat(activeCss, meta.baseFont as { fontFamily?: string; fontSize?: string | number })
+  // Commands sent faster than the cell shows their effect (a quick second or third toggle) go by the marks the earlier
+  // ones left, not by the format last read from the cell: the worker answers each in turn, and the cell's rows are read
+  // again after that. Those marks are kept while any command is unanswered and until the cell shows them; another
+  // selection, undo and redo drop them (an undo can bring back the very format they were worked out from).
+  const selKey = `${sheet}:${rect.r0}:${rect.c0}:${rect.r1}:${rect.c1}:${sel.whole ?? ''}`
+  const marks = (f: TextFormat) => `${f.bold}${f.italic}${f.underline}${f.strike}`
+  const pendingFmt = useRef<{ sel: string; fmt: TextFormat; waiting: number } | null>(null)
+  {
+    const p = pendingFmt.current
+    if (p && (p.sel !== selKey || (p.waiting === 0 && marks(p.fmt) === marks(cellFmt)))) pendingFmt.current = null
+  }
+  const publishFormat = useViewCommands(viewer.ctl, {
+    goto: gotoSheet,
+    undo: () => {
+      pendingFmt.current = null
+      if (editable) undo()
+    },
+    redo: () => {
+      pendingFmt.current = null
+      if (editable) redo()
+    },
+    format: (c) => {
+      const p = pendingFmt.current && pendingFmt.current.sel === selKey ? pendingFmt.current : null
+      const now = p ? p.fmt : cellFmt
+      const patch = editable && cellPatch(c, now)
+      if (!patch) return
+      const q = p ?? { sel: selKey, fmt: now, waiting: 0 }
+      q.fmt = marksAfter(c, now)
+      q.waiting++
+      pendingFmt.current = q
+      void fmtAt(fmtRange(), patch, false).finally(() => {
+        q.waiting--
+      })
+    },
+  })
   useEffect(() => {
-    gridCommands.current = { undo: () => editable && undo(), redo: () => editable && redo() }
+    publishFormat(editable ? cellFmt : null)
+    const h = store.history
+    viewer.ctl?.update({ canUndo: editable && h.undo > 0, canRedo: editable && h.redo > 0 })
   })
 
   /** the selection as clipboard text, when all its rows are at hand (else null: the worker has them) */

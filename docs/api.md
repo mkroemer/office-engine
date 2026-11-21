@@ -124,24 +124,73 @@ function Viewer({ file }: { file: File }) {
 }
 ```
 
-| `ViewerState` | Meaning |
-|---------------|---------|
-| `rev` | counts the changes (the state object is replaced on each) |
-| `kind` | `'docx'`, `'xlsx'`, `'pptx'`, or `null` before a document is open |
-| `loading` | loading or downloading |
-| `editing`, `canEdit` | in edit mode; whether editing is possible (allowed, not view only) |
-| `dirty`, `saving` | unsaved changes; a save running |
-| `canUndo`, `canRedo` | whether undo / redo can run (spreadsheets count the edits made here; presentations offer redo whenever editing) |
-| `zoom` | `{ value: 'fit' \| number, effective }`, `null` for spreadsheets |
-| `page` | `{ current, count }` from 1: the page (documents; `count` 0 while laid out) or slide in view; `null` for spreadsheets |
-| `outline` | `{ kind, items: [{ id, title, level, current }] }`: a document's headings, a workbook's visible sheets, a presentation's slides (titled by their title placeholder, else "Slide n") |
-| `status` | the status line ("Page 2 of 7 · 1,204 words", "Slide 3 of 12", "200 rows × 8 cols") |
+| `ViewerState`        | Meaning                                                                                                                                                                                                           |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rev`                | counts the changes (the state object is replaced on each)                                                                                                                                                         |
+| `kind`               | `'docx'`, `'xlsx'`, `'pptx'`, or `null` before a document is open                                                                                                                                                 |
+| `loading`            | loading or downloading                                                                                                                                                                                            |
+| `editing`, `canEdit` | in edit mode; whether editing is possible (allowed, not view only)                                                                                                                                                |
+| `dirty`, `saving`    | unsaved changes; a save running                                                                                                                                                                                   |
+| `canUndo`, `canRedo` | whether undo / redo can run (spreadsheets count the edits made here; presentations offer redo whenever editing)                                                                                                   |
+| `zoom`               | `{ value: 'fit' \| number, effective }`, `null` for spreadsheets                                                                                                                                                  |
+| `page`               | `{ current, count }` from 1: the page (documents; `count` 0 while laid out) or slide in view; `null` for spreadsheets                                                                                             |
+| `outline`            | `{ kind, items: [{ id, title, level, current }] }`: a document's headings, a workbook's visible sheets, a presentation's slides (titled by their title placeholder, else "Slide n")                               |
+| `status`             | the status line ("Page 2 of 7 · 1,204 words", "Slide 3 of 12", "200 rows × 8 cols")                                                                                                                               |
+| `format`             | while editing, the formatting at the selection (`TextFormat`, below), retained while using focused host controls; `null` without a valid target, while viewing, and in a presentation unless text is being edited |
 
 Commands: `setEditing(on)`, `save()`, `undo()`, `redo()`, `zoomIn()`, `zoomOut()`, `setZoom('fit' | number)`,
 `goto(outlineId)`, `gotoPage(n)`, `present()` (a slideshow from the slide in view), `print()`, `fileAction(id)` (a File menu
-action: `pdf`, `html`, `text:md`, `details`, `rename`…), `toggleComments(open?)`. A command the open document has no use
-for does nothing. `subscribe(fn)` returns its unsubscribe; `snapshot()` the current state. Keep a subscription active to receive the complete DOCX headings and PPTX slide titles. Without `react`, `mount()`
-returns the controller (`mounted.controller`), and `<office-viewer headless>` has it as `element.controller`.
+action: `pdf`, `html`, `text:md`, `details`, `rename`…), `toggleComments(open?)`, `format(command)` (below). A command the
+open document has no use for does nothing. `subscribe(fn)` returns its unsubscribe; `snapshot()` the current state;
+`useViewerState(ctl)` is the state in React. Without `react`, `mount()` returns the controller (`mounted.controller`), and
+`<office-viewer headless>` has it as `element.controller`. Keep a subscription active to receive the complete DOCX
+headings and PPTX slide titles.
+
+#### Formatting
+
+One formatting API for documents, cells and slide text, for a toolbar of your own:
+
+```tsx
+const f = useViewerState(ctl).format
+<button aria-pressed={!!f?.bold} disabled={!f} onMouseDown={(e) => e.preventDefault()}
+  onClick={() => ctl.format({ op: 'toggle', mark: 'bold' })}>B</button>
+```
+
+`TextFormat`: `bold`, `italic`, `underline`, `strike`, `font`, `size` (points), `color`, `highlight` (a cell's fill in a
+spreadsheet), `align` (`'left' | 'center' | 'right' | 'justify'`), `list` (`'bullet' | 'number' | null`; undefined for
+cells). `FormatCommand`: `{ op: 'toggle', mark }`, `{ op: 'font', name }`, `{ op: 'size', pt }`, `{ op: 'color', color }`,
+`{ op: 'highlight', color }` (`null` removes either), `{ op: 'align', align }`, `{ op: 'list', list }`, `{ op: 'clear' }`.
+Sizes must be finite and in **1–400 points**, rounded to the nearest half point, just like the built-in size box.
+Invalid sizes do nothing before mutation, dirty state or history. Font names are trimmed and must be nonempty without control characters.
+
+Color commands accept opaque **`#rgb`, `#rrggbb`, or `#rrggbbff`** (normalized to six hex digits); `null` removes the color.
+Other CSS syntax, including names (`red`), functions (`rgb(...)`), and translucent colors, is rejected before mutation.
+The snapshot may still contain other CSS colors read from the original file.
+
+`list` commands **set every selected paragraph** to `'bullet'` or `'number'`, including mixed selections; `list: null`
+explicitly removes lists. Repeating a setter is idempotent. The built-in toolbar buttons still toggle.
+The snapshot reports the first selected paragraph's list, without aggregating mixed selections: `list: null` means no list;
+`list: undefined` means lists are unsupported (cells). Other optional `TextFormat` fields may be undefined when unspecified
+or unsupported; `format: null` means there is no formatting target. Unknown operations and invalid arguments do nothing.
+
+Each mutating format command is a separate undo step (caret-only pending marks follow normal typing behavior). For a live
+font/size field, keep a local draft and commit on blur or Enter when one undo step per finished value is desired; do not
+publish every prefix of a font name. The controller also supports live commands while preserving native input focus.
+
+Cells support marks, font, size, text color, fill, left/center/right alignment and clear; lists and justified alignment do
+nothing. DOCX and PPTX support every command above. Tables, pictures, tracked changes and cell borders stay with the built-in
+toolbars.
+
+Focused host buttons, menu items, inputs, textareas and selects keep the logical editor target. Formatting preserves
+the host control's focus, including keyboard activation and live `onChange` commands. Prevent mouse down on nonfocusable
+menu options to avoid moving focus to the page background and losing the target; buttons may also prevent mouse down
+to keep focus in the document. Native text fields retain their own text selection. A true selection loss, leaving edit mode, ending slide text editing, or replacing the source clears
+the target. For example, a host size input can use `disabled={!f}` and send a size on change:
+
+```tsx
+<input aria-label="Font size" type="number" disabled={!f} defaultValue={f?.size}
+  onChange={(e) => ctl.format({ op: 'size', pt: e.currentTarget.valueAsNumber })} />
+```
 
 Controller actions obey `allowSave`, `allowDownload` and `allowOpen` even when the File menu is hidden.
 `fileMenu={false}` hides the menu and disables its Open and Print shortcuts. Ctrl/⌘+S and host controller commands remain available, subject to their own permissions.

@@ -86,6 +86,7 @@ export class PptxEditor implements RichHost<EPara> {
   /** [row, column] when the text is a table cell's (`sid` is then the table's id) */
   cell?: [number, number]
   pendingSel: Sel | null = null
+  pendingNoRefocus = false
   private history: Entry[] = []
   private future: Entry[] = []
   private pend: { s: Partial<RunStyle>; d: PRunSet; at: { pa: string; o: number } } | null = null
@@ -99,6 +100,19 @@ export class PptxEditor implements RichHost<EPara> {
   onState?: (s: PptxFormat | null) => void
   /** Tab / Shift+Tab in a table cell: go to the next / previous cell */
   onCellMove?: (d: 1 | -1) => void
+  private stateSubs = new Set<(s: PptxFormat | null) => void>()
+  /** hears the current formatting state, then every one `onState` does (the viewer's controller, beside the toolbar) */
+  subscribeState(fn: (s: PptxFormat | null) => void): () => void {
+    this.stateSubs.add(fn)
+    fn(this.state())
+    return () => {
+      this.stateSubs.delete(fn)
+    }
+  }
+  private emitState(s: PptxFormat | null) {
+    this.onState?.(s)
+    for (const fn of this.stateSubs) fn(s)
+  }
 
   constructor(private client: DocumentClient) {
     this.input = new RichInput(this)
@@ -124,11 +138,12 @@ export class PptxEditor implements RichHost<EPara> {
     clearTimeout(this.timer)
     if (this.sid >= 0 && this.changedSinceCommit) this.commitInBackground()
     this.input.detach()
+    this.input.clearSelection()
     this.sid = -1
     this.slide = -1
     this.cell = undefined
     this.body = undefined
-    this.onState?.(null)
+    this.emitState(null)
   }
 
   text(): TextBody | undefined {
@@ -203,12 +218,13 @@ export class PptxEditor implements RichHost<EPara> {
       this.future = []
     }
     this.pendingSel = sel
+    this.pendingNoRefocus = this.input.formatting
     this.changedSinceCommit = true
     this.onDirty?.()
     clearTimeout(this.timer)
     this.timer = setTimeout(() => this.commitInBackground(), 400)
     this.onChange?.()
-    this.onState?.(this.state(sel))
+    this.emitState(this.state(sel))
   }
 
   undo() {
@@ -226,12 +242,13 @@ export class PptxEditor implements RichHost<EPara> {
   private restore(paras: EPara[], sel: Sel) {
     this.paras = paras
     this.pendingSel = sel
+    this.pendingNoRefocus = this.input.formatting
     this.changedSinceCommit = true
     this.onDirty?.()
     clearTimeout(this.timer)
     this.timer = setTimeout(() => this.commitInBackground(), 400)
     this.onChange?.()
-    this.onState?.(this.state(sel))
+    this.emitState(this.state(sel))
   }
 
   private commitInBackground() {
@@ -293,7 +310,7 @@ export class PptxEditor implements RichHost<EPara> {
     if (collapsed(sel)) {
       this.pend = { s: { ...(this.pend?.s ?? {}), ...s }, d: { ...(this.pend?.d ?? {}), ...d }, at: sel.a }
       this.input.restore(sel)
-      this.onState?.(this.state(sel))
+      this.emitState(this.state(sel))
       return
     }
     const [a, b] = ordered(this, sel)
@@ -332,12 +349,19 @@ export class PptxEditor implements RichHost<EPara> {
   }
 
   /** applies a paragraph-level change to the selected paragraphs */
-  private paraOp(fn: (p: EPara) => EPara, label: string) {
+  private paraOp(fn: (p: EPara) => EPara, label: string, list?: 'bullet' | 'number' | 'none') {
     const sel = this.input.sel()
     if (!sel) return
     const [a, b] = ordered(this, sel)
     const pas = this.span(a.pa, b.pa)
+    if (list && pas.every((pa) => bulletOf(this.para(pa)) === list)) return
     this.replace(pas, pas.map((pa) => fn(this.para(pa))), sel, { label })
+  }
+
+  /** Host API setter; the built-in toolbar retains toggleBullet. */
+  setList(kind: 'bullet' | 'number' | null) {
+    const next = kind ?? 'none'
+    this.paraOp((p) => ({ ...p, pp: { ...p.pp, bullet: next } }), 'bullet', next)
   }
 
   toggleBullet(kind: 'bullet' | 'number') {
@@ -410,7 +434,7 @@ export class PptxEditor implements RichHost<EPara> {
 
   onSelection(sel: Sel | null) {
     if (sel && this.pend && (sel.a.pa !== this.pend.at.pa || sel.a.o !== this.pend.at.o)) this.pend = null
-    this.onState?.(sel ? this.state(sel) : null)
+    this.emitState(sel ? this.state(sel) : null)
   }
 
   shortcut?: (e: KeyboardEvent) => boolean

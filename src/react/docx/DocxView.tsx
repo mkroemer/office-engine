@@ -9,11 +9,12 @@ import { useFileOps, useSelectAll, useViewer } from '../common/Slots'
 import { Status } from '../common/Status'
 import { ZoomControl, type Zoom } from '../common/ZoomControl'
 import { useViewCommands, useControllerObserved } from '../controller'
+import { applyDocx, docxFormat } from '../edit/format'
 import { ContextMenu, MOD, type MenuItem } from '../common/ContextMenu'
 import { PromptDialog, Toast, type PromptSpec } from '../common/Dialog'
 import { domFromPos, getSel, opInsert, paraRanges, posFromDom, selPoints } from '../edit/input'
 import { download, Icon, pickFiles } from '../edit/Toolbar'
-import { runsText, type RRun } from '../edit/rich'
+import { runsText, type RRun, type Sel } from '../edit/rich'
 import { DocxEditor, type CommentRange, type DocState, type FormatState } from './DocxEditor'
 import { markCss, useCommentsCtl, useCommentsState, type CommentHost, type PlacedThread } from '../comments/Comments'
 import { COMMENT_KEYS } from '../comments/CommentsPanel'
@@ -428,11 +429,16 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   // ---- editing wiring ----
   useEffect(() => {
     const el = pagesRef.current
-    if (!isEditing || !el) return
+    if (!isEditing || !el) { editor.input.clearSelection(); return }
     editor.input.attach(el)
-    editor.onDirty = () => viewer.setDirty(true)
     return () => editor.input.detach()
-  }, [isEditing, editor, viewer])
+  }, [isEditing, editor])
+
+  // Host callback updates must not detach the input and cancel a queued selection update.
+  const setDirty = viewer.setDirty
+  useEffect(() => {
+    if (isEditing) editor.onDirty = () => setDirty(true)
+  }, [editor, isEditing, setDirty])
 
   // Ctrl/⌘+A: every paragraph when editing, the rendered pages' text when viewing (not the viewer around them)
   useSelectAll(() => {
@@ -504,7 +510,9 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
       if (isEditing && !editor.input.repair() && cutsMoved) editor.input.reflow()
       return
     }
-    if (!editor.input.restore(sel)) {
+    const noRefocus = editor.pendingNoRefocus
+    editor.pendingNoRefocus = false
+    if (!editor.input.restore(sel, noRefocus ? 'preserve' : true)) {
       // caret paragraph not rendered (scrolled away): bring its page into view, retry next render
       const pi = pageOfPos(sel.f.pa, sel.f.o)
       if (pi >= 0 && scrollRef.current) scrollRef.current.scrollTop = Math.max(0, tops[pi] - 16)
@@ -512,6 +520,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
       return
     }
     editor.pendingSel = null
+    if (noRefocus) return
     // keep the caret visible
     const ds = getSel(pagesRef.current)
     const range = ds?.rangeCount ? ds.getRangeAt(0) : null
@@ -981,7 +990,8 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
       editor.onHistory = undefined
     }
   }, [ctl, editor, isEditing])
-  useViewCommands(ctl, {
+  const publishedSelection = useRef<Sel | null>(null)
+  const publishFormat = useViewCommands(ctl, {
     setZoom,
     goto: (id) => gotoBlock(Number(id)),
     gotoPage: (n) => {
@@ -995,7 +1005,26 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     redo: () => {
       if (isEditing) editor.redo()
     },
+    format: (c) => {
+      const sel = publishedSelection.current
+      if (isEditing && sel) editor.input.withFormatSelection(sel, () => applyDocx(editor, c))
+    },
   })
+  useEffect(() => {
+    if (!ctl) return
+    if (!isEditing) return publishFormat(null)
+    const off = editor.subscribeState((s) => {
+      const sel = s && editor.input.formatSelection()
+      publishedSelection.current = sel
+      const current = sel && editor.state(sel, { pendingList: true })
+      publishFormat(current ? docxFormat(current) : null)
+    })
+    return () => {
+      off()
+      publishedSelection.current = null
+      publishFormat(null)
+    }
+  }, [ctl, editor, isEditing, publishFormat])
 
   return (
     <div style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex' }}>

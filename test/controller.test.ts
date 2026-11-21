@@ -125,6 +125,49 @@ describe('viewer controller', () => {
     expect(observed).toEqual([true, false, true, false])
   })
 
+  test('format publication and cleanup require the current command owner, including late callbacks', () => {
+    const ctl = new InternalViewerController()
+    const { view: old } = mount(ctl)
+    const { view: next, detach: detachNext } = mount(ctl)
+    const oldCommands = {}, nextCommands = {}
+    const format = { bold: true, italic: false, underline: false, strike: false, size: 25 }
+    const detachOld = old.attachView(oldCommands)
+    next.attachView(nextCommands)
+    next.publishFormat(nextCommands, format)
+    old.publishFormat(oldCommands, null)
+    old.publishFormat(oldCommands, { ...format, size: 10 })
+    detachOld()
+    expect(ctl.snapshot().format).toEqual(format)
+    detachNext()
+    next.publishFormat(nextCommands, format)
+    expect(ctl.snapshot().format).toBeNull()
+  })
+
+  test('releasing current grid commands clears format without clearing a successor', () => {
+    const ctl = new InternalViewerController()
+    const { view } = mount(ctl)
+    const first = {}, next = {}
+    const format = { bold: true, italic: false, underline: false, strike: false, size: 25 }
+    const releaseFirst = view.attachView(first)
+    view.publishFormat(first, format)
+    const releaseNext = view.attachView(next)
+    view.publishFormat(next, { ...format, size: 15 })
+    releaseFirst()
+    expect(ctl.snapshot().format?.size).toBe(15)
+    releaseNext()
+    view.publishFormat(next, format)
+    expect(ctl.snapshot().format).toBeNull()
+  })
+
+  test('invalid sizes never reach a view command; valid sizes use the shared half-point range', () => {
+    const ctl = new InternalViewerController()
+    const sizes: number[] = []
+    mount(ctl).view.attachView({ format: (c) => { if (c.op === 'size') sizes.push(c.pt) } })
+    const { format } = ctl
+    for (const pt of [NaN, Infinity, -Infinity, 0, -1, 0.25, 0.5, 1, 12.26, 12.5, 400, 400.1, 1000]) format({ op: 'size', pt })
+    expect(sizes).toEqual([1, 12.5, 12.5, 400])
+  })
+
   test('structural mocks and wrappers fail clearly before mounting', () => {
     const real = createViewerController()
     const fake: Pick<ViewerController, Extract<keyof ViewerController, string>> = { ...real }

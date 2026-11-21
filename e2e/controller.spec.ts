@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { ViewerController, ViewerState } from '../src'
-import { docxBlocks, fromB64, useBrowser, viewer, xlsxSheet, type Viewer } from './harness'
+import { docxBlocks, docxParas, paraText, runsOf, fromB64, useBrowser, viewer, xlsxSheet, type Viewer } from './harness'
 
 useBrowser()
 
@@ -250,6 +250,180 @@ describe('controller and headless mode', () => {
     await until(v, '!s.editing && !s.canUndo && !s.canRedo')
     await v.page.evaluate(() => window.__ctl.setEditing(true))
     await until(v, 's.editing && s.canUndo')
+    expect(v.errors).toEqual([])
+  })
+
+  test('docx: formatting state and commands through the controller', async () => {
+    const v = await viewer({ controller: true, src: 'samples/sample.docx', editable: true, onSave: true, headless: true })
+    const { page } = v
+    await until(v, 's.editing')
+    await v.selectText('document')
+    await until(v, 's.format && !s.format.bold')
+    await page.evaluate(() => window.__ctl.format({ op: 'toggle', mark: 'bold' }))
+    await until(v, 's.format.bold')
+    await page.evaluate(() => window.__ctl.format({ op: 'size', pt: 20 }))
+    await until(v, 's.format.size === 20')
+    // headless: no Save button, the host saves through the controller
+    await page.evaluate(() => window.__ctl.save())
+    const saved = await v.waitEvent('save')
+    const p = (await docxParas(fromB64(saved.b64 as string))).find((x) => paraText(x).startsWith('This document'))!
+    const run = runsOf(p).find((r) => r.text.includes('document'))!
+    expect(run.s.b).toBe(true)
+    expect(run.s.sz).toBe(20)
+    // viewing: no formatting state, and commands do nothing
+    await page.evaluate(() => window.__ctl.setEditing(false))
+    await until(v, '!s.editing && s.format === null')
+    expect(v.errors).toEqual([])
+  })
+
+  test('docx: select all, then a host control: formatting reaches the whole document, not only the pages shown', async () => {
+    const v = await viewer({ controller: true, src: 'samples/sample.docx', headless: true, editable: true, onSave: true, hostControls: true })
+    const { page } = v
+    await until(v, 's.editing')
+    // a formatting command does nothing on a selection that spans a table, so the sample's text, table included, is
+    // replaced by plain paragraphs over several pages
+    await v.selectText('Quarterly Report', 'end')
+    await page.keyboard.press('ControlOrMeta+a')
+    await page.keyboard.type('Line 0')
+    for (let i = 1; i <= 150; i++) {
+      await page.keyboard.press('Enter')
+      await page.keyboard.type(`Line ${i}`)
+    }
+    await until(v, 's.page && s.page.count > 3')
+    // the pages far from the caret are not rendered
+    expect(await page.locator('.de-pages [data-pa]').count()).toBeLessThan(151)
+    await page.keyboard.press('ControlOrMeta+a')
+    await page.waitForTimeout(150)
+    // the host's control takes the focus, as a click on it would
+    await page.getByRole('button', { name: 'Host undo', exact: true }).focus()
+    await page.waitForTimeout(150)
+    await page.evaluate(() => window.__ctl.format({ op: 'toggle', mark: 'bold' }))
+    await until(v, 's.format.bold')
+    await page.evaluate(() => window.__ctl.save())
+    const saved = await v.waitEvent('save')
+    const paras = (await docxParas(fromB64(saved.b64 as string))).filter((p) => paraText(p).startsWith('Line '))
+    expect(paras).toHaveLength(151)
+    const notBold = paras.filter((p) => !runsOf(p).every((r) => r.s.b)).map((p) => JSON.stringify(runsOf(p).map((r) => [r.text, r.s.b ?? null])))
+    expect(notBold).toEqual([])
+    expect(v.errors).toEqual([])
+  })
+
+  test("xlsx: the active cell's format through the controller", async () => {
+    const v = await viewer({ controller: true, src: 'samples/sample.xlsx', editable: true, onSave: true, headless: true })
+    const { page } = v
+    await page.locator('.de-grid').waitFor()
+    await v.typeCell('J10', '12.5')
+    await v.clickCell('J10')
+    await until(v, 's.format && !s.format.bold && s.format.list === undefined')
+    await page.evaluate(() => window.__ctl.format({ op: 'toggle', mark: 'bold' }))
+    await page.evaluate(() => window.__ctl.format({ op: 'highlight', color: '#ffff00' }))
+    await until(v, "s.format.bold && /255, 255, 0|ffff00/i.test(s.format.highlight ?? '')")
+    // lists are not a cell format: nothing happens
+    await page.evaluate(() => window.__ctl.format({ op: 'list', list: 'bullet' }))
+
+    // viewing: undo is not offered and does not change the workbook
+    await until(v, 's.canUndo')
+    await page.evaluate(() => window.__ctl.setEditing(false))
+    await until(v, '!s.editing && !s.canUndo && s.format === null')
+    await page.evaluate(() => window.__ctl.undo())
+    await page.waitForTimeout(300)
+    await page.evaluate(() => window.__ctl.setEditing(true))
+    await v.clickCell('J10')
+    // the fill was the last edit: it is still there
+    await until(v, "s.format && /255, 255, 0|ffff00/i.test(s.format.highlight ?? '') && s.canUndo")
+    expect(v.errors).toEqual([])
+  })
+
+  test('xlsx: two toggles sent before the worker answers cancel out', async () => {
+    const v = await viewer({ controller: true, src: 'samples/sample.xlsx', editable: true, onSave: true, headless: true })
+    const { page } = v
+    await page.locator('.de-grid').waitFor()
+    await v.typeCell('J10', '12.5')
+    await v.clickCell('J10')
+    await until(v, 's.format && !s.format.bold')
+    await page.evaluate(() => {
+      window.__ctl.format({ op: 'toggle', mark: 'bold' })
+      window.__ctl.format({ op: 'toggle', mark: 'bold' })
+    })
+    await page.waitForTimeout(600)
+    await until(v, 's.format && !s.format.bold')
+    expect(v.errors).toEqual([])
+  })
+
+  test('xlsx: three toggles in quick succession leave the cell bold, whenever the worker answers them', async () => {
+    const v = await viewer({ controller: true, src: 'samples/sample.xlsx', editable: true, onSave: true, headless: true })
+    const { page } = v
+    await page.locator('.de-grid').waitFor()
+    await v.typeCell('J10', '12.5')
+    await v.clickCell('J10')
+    await until(v, 's.format && !s.format.bold')
+    await page.evaluate(async () => {
+      const pause = () => new Promise((r) => setTimeout(r, 30))
+      window.__ctl.format({ op: 'toggle', mark: 'bold' })
+      await pause()
+      window.__ctl.format({ op: 'toggle', mark: 'bold' })
+      await pause()
+      window.__ctl.format({ op: 'toggle', mark: 'bold' })
+    })
+    await page.waitForTimeout(800)
+    await until(v, 's.format && s.format.bold')
+    expect(v.errors).toEqual([])
+  })
+
+  test('xlsx: a toggle after undo starts from the cell as it is again', async () => {
+    const v = await viewer({ controller: true, src: 'samples/sample.xlsx', editable: true, onSave: true, headless: true })
+    const { page } = v
+    await page.locator('.de-grid').waitFor()
+    await v.typeCell('J10', '12.5')
+    await v.clickCell('J10')
+    await until(v, 's.format && !s.format.bold')
+    await page.evaluate(() => window.__ctl.format({ op: 'toggle', mark: 'bold' }))
+    await until(v, 's.format && s.format.bold')
+    await page.evaluate(() => window.__ctl.undo())
+    await until(v, 's.format && !s.format.bold')
+    await page.evaluate(() => window.__ctl.format({ op: 'toggle', mark: 'bold' }))
+    await until(v, 's.format && s.format.bold')
+    expect(v.errors).toEqual([])
+  })
+
+  test('xlsx: a column selected by its header is formatted whole through the controller, as by the toolbar', async () => {
+    const v = await viewer({ controller: true, src: 'samples/sample.xlsx', editable: true, headless: true })
+    const { page } = v
+    await page.locator('.de-grid').waitFor()
+    await page.locator('.de-head-c[data-col="12"]').click()
+    await until(v, 's.format')
+    await page.evaluate(() => window.__ctl.format({ op: 'highlight', color: '#ffff00' }))
+    await page.waitForTimeout(400)
+    // a cell of the column past the cells in use has the column's format; the next column has not
+    await v.clickCell('M20')
+    await until(v, "s.format && /255, 255, 0|ffff00/i.test(s.format.highlight ?? '')")
+    await v.clickCell('L20')
+    await until(v, "s.format && !/255, 255, 0|ffff00/i.test(s.format.highlight ?? '')")
+    expect(v.errors).toEqual([])
+  })
+
+  test('xlsx: a sheet switch clears the old grid format and publishes the new grid format', async () => {
+    const v = await viewer({ controller: true, src: 'samples/sample.xlsx', editable: true, headless: true })
+    await v.typeCell('J10', 'First sheet')
+    await v.clickCell('J10')
+    await until(v, 's.format && !s.format.bold')
+    await v.page.evaluate(() => window.__ctl.format({ op: 'toggle', mark: 'bold' }))
+    await until(v, 's.format?.bold')
+    const formats = await v.page.evaluate(() => new Promise<(boolean | null)[]>((resolve) => {
+      const ctl = window.__ctl
+      const seen: (boolean | null)[] = []
+      const off = ctl.subscribe(() => {
+        const { outline, format } = ctl.snapshot()
+        seen.push(format?.bold ?? null)
+        if (outline?.items[1].current && format?.bold === false) {
+          off()
+          resolve(seen)
+        }
+      })
+      ctl.goto(ctl.snapshot().outline!.items[1].id)
+    }))
+    expect(formats).toContain(null)
+    expect(formats.at(-1)).toBe(false)
     expect(v.errors).toEqual([])
   })
 

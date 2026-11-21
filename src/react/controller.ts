@@ -5,7 +5,8 @@
  * store), state replaced as a whole on every change (`rev` counts them). The viewer and its mounted view publish their
  * state and register the commands they can run; a command with nobody to run it does nothing.
  */
-import { useEffect, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useSyncExternalStore } from 'react'
+import { formatCommand } from './edit/format-values'
 import type { DocKind } from '../core/opc'
 import { stepZoom, type Zoom } from './common/ZoomControl'
 import { useLatest } from './common/hooks'
@@ -47,7 +48,44 @@ export interface ViewerState {
   outline: ViewerOutline | null
   /** the view's status line ("Page 2 of 7 · 1,204 words") */
   status: string
+  /** the formatting at the selection while editing (document text, the active cell, slide text being edited), else null */
+  format: TextFormat | null
 }
+
+/** Formatting at the selection, the same for documents, cells and slide text. */
+export interface TextFormat {
+  bold: boolean
+  italic: boolean
+  underline: boolean
+  strike: boolean
+  font?: string
+  /** points */
+  size?: number
+  /** CSS color of the text */
+  color?: string
+  /** text highlight; in a spreadsheet, the cell's fill */
+  highlight?: string
+  align?: 'left' | 'center' | 'right' | 'justify'
+  /** the paragraph's list; null for no list, undefined where unsupported (cells). Mixed selections are not aggregated. */
+  list?: 'bullet' | 'number' | null
+}
+
+/** A formatting command for the selection (`ViewerController.format`); one a view does not support does nothing. */
+export type FormatCommand =
+  | { op: 'toggle'; mark: 'bold' | 'italic' | 'underline' | 'strike' }
+  | { op: 'font'; name: string }
+  /** 1–400 points, rounded to half points; invalid sizes do nothing */
+  | { op: 'size'; pt: number }
+  /** Opaque #rgb, #rrggbb or #rrggbbff; null removes the color. Other CSS colors do nothing. */
+  | { op: 'color'; color: string | null }
+  | { op: 'highlight'; color: string | null }
+  | { op: 'align'; align: 'left' | 'center' | 'right' | 'justify' }
+  /** Sets every selected paragraph to this kind; null explicitly removes lists. Repeating is idempotent. */
+  | { op: 'list'; list: 'bullet' | 'number' | null }
+  | { op: 'clear' }
+
+/** the editors' names for the marks */
+export const MARK_KEY = { bold: 'b', italic: 'i', underline: 'u', strike: 'strike' } as const
 
 /** commands a mounted view runs (each optional: a spreadsheet has no zoom) */
 export interface ViewCommands {
@@ -57,6 +95,7 @@ export interface ViewCommands {
   undo?(): void
   redo?(): void
   present?(): void
+  format?(cmd: FormatCommand): void
 }
 
 /** commands the viewer runs */
@@ -67,7 +106,7 @@ export interface ViewerCommands {
   toggleComments(open?: boolean): void
 }
 
-type ViewState = Pick<ViewerState, 'canUndo' | 'canRedo' | 'zoom' | 'page' | 'outline' | 'status'>
+type ViewState = Pick<ViewerState, 'canUndo' | 'canRedo' | 'zoom' | 'page' | 'outline' | 'status' | 'format'>
 type ViewerPublication = Omit<ViewerState, keyof ViewState | 'rev'>
 
 /** Internal, document-scoped publication and command registration. Never part of the host API. */
@@ -75,12 +114,13 @@ export interface ViewController {
   activate(): () => void
   update(state: Partial<ViewState>): void
   attachView(commands: ViewCommands): () => void
+  publishFormat(commands: ViewCommands, format: TextFormat | null): void
   readonly observed: boolean
   watchObserved(fn: () => void): () => void
 }
 
 /** the view's part of the state, cleared when a view goes */
-const VIEW_STATE = { canUndo: false, canRedo: false, zoom: null, page: null, outline: null, status: '' } as const
+const VIEW_STATE = { canUndo: false, canRedo: false, zoom: null, page: null, outline: null, status: '', format: null } as const
 
 /** the viewer's part of the state, cleared when the viewer goes, so a controller that outlives it shows no document */
 const VIEWER_STATE = { kind: null, loading: false, editing: false, canEdit: false, dirty: false, saving: false } as const
@@ -178,6 +218,12 @@ export class InternalViewerController {
     this.view?.present?.()
   }
 
+  /** formats the selection while editing: `format({ op: 'toggle', mark: 'bold' })`, `format({ op: 'size', pt: 14 })` */
+  format = (cmd: FormatCommand) => {
+    const command = formatCommand(cmd)
+    if (command) this.view?.format?.(command)
+  }
+
   print = () => {
     this.fileAction('print')
   }
@@ -262,8 +308,10 @@ export class InternalViewerController {
             return () => {
               if (!current() || this.view !== commands) return
               this.view = null
+              this.update({ format: null })
             }
           },
+          publishFormat: (commands, format) => { if (current() && this.view === commands) this.update({ format }) },
           get observed() { return controller.observed },
           watchObserved: (fn) => this.watchObserved(fn),
         }
@@ -275,7 +323,7 @@ export class InternalViewerController {
 /** Host API; publishing and lifecycle methods belong to the engine. */
 export type ViewerController = { readonly [controllerBrand]: true } & Pick<InternalViewerController,
   'subscribe' | 'snapshot' | 'setEditing' | 'save' | 'undo' | 'redo' | 'setZoom' | 'zoomIn' | 'zoomOut' |
-  'goto' | 'gotoPage' | 'present' | 'print' | 'fileAction' | 'toggleComments'>
+  'goto' | 'gotoPage' | 'present' | 'format' | 'print' | 'fileAction' | 'toggleComments'>
 
 export const createViewerController = (): ViewerController => new InternalViewerController()
 /** @internal controllers supplied to viewers originate from createViewerController(). */
@@ -301,9 +349,11 @@ export function useViewerState(ctl: ViewerController): ViewerState {
 /** Registers a view's commands (the latest closures each render) while it is mounted. */
 export function useViewCommands(ctl: ViewController | null, commands: ViewCommands) {
   const latest = useLatest(commands)
-  useEffect(() => {
-    if (!ctl) return
+  const registration = useMemo(() => {
     const call = <K extends keyof ViewCommands>(k: K) => ((...a: unknown[]) => (latest.current[k] as ((...x: unknown[]) => void) | undefined)?.(...a)) as ViewCommands[K]
-    return ctl.attachView({ setZoom: call('setZoom'), goto: call('goto'), gotoPage: call('gotoPage'), undo: call('undo'), redo: call('redo'), present: call('present') })
+    const view = { setZoom: call('setZoom'), goto: call('goto'), gotoPage: call('gotoPage'), undo: call('undo'), redo: call('redo'), present: call('present'), format: call('format') }
+    return { view, publishFormat: (format: TextFormat | null) => ctl?.publishFormat(view, format) }
   }, [ctl, latest])
+  useEffect(() => ctl?.attachView(registration.view), [ctl, registration])
+  return registration.publishFormat
 }

@@ -227,6 +227,7 @@ export class DocxEditor implements RichHost<Paragraph> {
     this.pendSel = sel
     if (sel) this.input.expect(sel)
   }
+  pendingNoRefocus = false
   styles: StyleInfo[] = []
   private history: Entry[] = []
   private future: Entry[] = []
@@ -244,8 +245,17 @@ export class DocxEditor implements RichHost<Paragraph> {
   private writes = 0
   private writtenIn = new Map<number, number>()
   /** answers that came during an IME composition, applied when it ends */
-  private held: { res: EditResult; seq: number }[] = []
+  private held: { res: EditResult; seq: number; noRefocus: boolean }[] = []
   onState?: (s: FormatState | null) => void
+  private stateSubs = new Set<(s: FormatState | null) => void>()
+  /** hears the current formatting state, then every one `onState` does (the viewer's controller, beside the toolbar) */
+  subscribeState(fn: (s: FormatState | null) => void): () => void {
+    this.stateSubs.add(fn)
+    fn(this.state())
+    return () => {
+      this.stateSubs.delete(fn)
+    }
+  }
   /** whether undo / redo can run, after every change of the selection or the document (the viewer's controller) */
   onHistory?: (canUndo: boolean, canRedo: boolean) => void
   /** image selection changed (overlay with resize handles) */
@@ -480,6 +490,7 @@ export class DocxEditor implements RichHost<Paragraph> {
     // a collaborator's paragraphs may come with the look a style had before it changed
     if (opts.label === 'collab') this.catchUp()
     this.pendingSel = sel
+    this.pendingNoRefocus = this.input.formatting
     this.onDirty?.()
     this.changed()
     // the caret may not move (formatting): refresh the toolbar from the new runs
@@ -565,6 +576,8 @@ export class DocxEditor implements RichHost<Paragraph> {
     for (const pid of pids) this.writtenIn.set(pid, seq)
     for (const pid of convert) this.stale.add(pid)
     this.inflight++
+    // Asynchronous conversion must preserve the host control's focus after a format command.
+    const noRefocus = this.input.formatting
     ;(this.client.call as (m: string, op: EditOp | TableOp) => Promise<EditResult>)(method, op)
       .finally(() => this.inflight--)
       .then((res) => {
@@ -572,7 +585,7 @@ export class DocxEditor implements RichHost<Paragraph> {
         // after completing the edit, so the toolbar also sees the current history and busy state. The last answer
         // in is told even when it changed nothing (an obsolete one): what is published then is the model as it
         // stands, no longer busy, never the look of an obsolete answer.
-        if (this.applyResult(res, seq) || this.settled) this.emitState(this.input.sel())
+        if (this.applyResult(res, seq, noRefocus) || this.settled) this.emitState(this.input.sel())
       })
       // (a listener that throws included: reported here, not left as an unhandled rejection)
       .catch((e) => console.error('[office-engine] edit failed', e))
@@ -740,10 +753,10 @@ export class DocxEditor implements RichHost<Paragraph> {
   }
 
   /** applies the answer to write `seq`; true when something changed */
-  private applyResult(res: EditResult, seq: number): boolean {
+  private applyResult(res: EditResult, seq: number, noRefocus: boolean): boolean {
     // never rebuild paragraphs under an IME composition: the answer waits for its end (composed)
     if (this.input.isComposing) {
-      this.held.push({ res, seq })
+      this.held.push({ res, seq, noRefocus })
       return false
     }
     // written again since: the paragraph stays `stale`, so that write asked for the conversion too and its answer is the one applied
@@ -786,7 +799,10 @@ export class DocxEditor implements RichHost<Paragraph> {
       }
     }
     if (!touched) return false
-    if (sel && !this.pendingSel && (rebuilt.has(sel.a.pa) || rebuilt.has(sel.f.pa))) this.pendingSel = sel
+    if (sel && !this.pendingSel && (rebuilt.has(sel.a.pa) || rebuilt.has(sel.f.pa))) {
+      this.pendingSel = sel
+      this.pendingNoRefocus = noRefocus
+    }
     this.changed()
     return true
   }
@@ -794,7 +810,7 @@ export class DocxEditor implements RichHost<Paragraph> {
   /** an IME composition ended (its text is in): the answers that came meanwhile are applied, the toolbar told */
   composed() {
     let applied = false
-    for (const { res, seq } of this.held.splice(0)) applied = this.applyResult(res, seq) || applied
+    for (const { res, seq, noRefocus } of this.held.splice(0)) applied = this.applyResult(res, seq, noRefocus) || applied
     if (applied || this.settled) this.emitState(this.input.sel())
   }
 
@@ -970,7 +986,7 @@ export class DocxEditor implements RichHost<Paragraph> {
   }
 
   clearFormat() {
-    this.format({ b: false, i: false, u: 'none', strike: false, hl: undefined }, { b: false, i: false, u: 'none', strike: false, color: null, hl: null, va: null }, { want: true })
+    this.format({ b: false, i: false, u: 'none', strike: false, hl: undefined, shd: undefined }, { b: false, i: false, u: 'none', strike: false, color: null, hl: null, va: null }, { want: true })
   }
 
   setPara(patch: ParaDirty, optimistic: Partial<ParaStyle> = {}, sel = this.input.sel()) {
@@ -983,6 +999,17 @@ export class DocxEditor implements RichHost<Paragraph> {
       return { ...p, pd, ps: { ...p.ps, ...optimistic }, edited: true, sid: patch.style ?? p.sid }
     })
     this.replace(r.pas, next, sel, { label: 'para', want: true })
+  }
+
+  /** Host API setter; the built-in toolbar retains toggleList. */
+  setList(kind: 'bullet' | 'number' | null) {
+    const sel = this.input.sel()
+    const r = sel && this.selectedParas(sel)
+    if (!r || r.pas.every((pa) => {
+      const p = this.para(pa)
+      return (p?.pd?.list ?? p?.lst ?? 'none') === (kind ?? 'none')
+    })) return
+    this.setPara({ list: kind ?? 'none', ilvl: kind ? 0 : undefined }, {}, sel)
   }
 
   toggleList(kind: 'bullet' | 'number') {
@@ -1986,6 +2013,7 @@ export class DocxEditor implements RichHost<Paragraph> {
     if (!sel) return
     this.patchObjects(sel, (x) => (x.t === 'img' ? fn(x) : x))
     this.pendingSel = sel
+    this.pendingNoRefocus = this.input.formatting
   }
 
   /** exact size in pt */
@@ -2072,7 +2100,7 @@ export class DocxEditor implements RichHost<Paragraph> {
 
   // ---------------------------------------------------------------- toolbar state
 
-  state(sel = this.input.sel()): FormatState | null {
+  state(sel = this.input.sel(), { pendingList = false } = {}): FormatState | null {
     if (!sel) return null
     const [s] = ordered(this, sel)
     const p = this.para(s.pa)
@@ -2103,12 +2131,12 @@ export class DocxEditor implements RichHost<Paragraph> {
       u: !!rs.u && rs.u !== 'none',
       strike: !!rs.strike,
       color: rs.color,
-      hl: rs.hl,
+      hl: rs.hl ?? rs.shd,
       sz: rs.sz ?? p.markSz ?? this.defaultSz,
       font: rs.font ?? p.markFont ?? this.defaultFont,
       align: p.ps.align ?? 'left',
       style: p.sid,
-      lst: p.lst,
+      lst: pendingList ? listOf(p) : p.lst,
       canUndo: this.canUndo,
       canRedo: this.canRedo,
     }
@@ -2125,6 +2153,7 @@ export class DocxEditor implements RichHost<Paragraph> {
   private emitState(sel: Sel | null) {
     const st = sel ? this.state(sel) : null
     this.onState?.(st)
+    for (const fn of this.stateSubs) fn(st)
     this.onImage?.(st?.img ?? null)
     this.onHistory?.(this.canUndo, this.canRedo)
   }
