@@ -119,7 +119,17 @@ export type Inline =
   | { t: 'field'; kind: 'PAGE' | 'NUMPAGES'; s: RunStyle; src?: SrcRef; tc?: TrackMark }
   | { t: 'box'; w: number; h: number; blocks: Block[]; fill?: string; border?: string; src?: SrcRef; tc?: TrackMark }
   | { t: 'shape'; w: number; h: number; label?: string; src?: SrcRef; tc?: TrackMark }
-  | { t: 'ref'; text: string; s: RunStyle; src?: SrcRef; tc?: TrackMark }
+  /**
+   * kept whole and written back as it is (an equation, a field result, ruby…); `text` is what it reads as.
+   * `math`: a TeX formula (Markdown `$…$` / `$$…$$`), drawn from its TeX and saved back as it was written
+   */
+  | { t: 'ref'; text: string; s: RunStyle; src?: SrcRef; tc?: TrackMark; math?: TexMath }
+
+/** a TeX formula and the delimiters it was written with */
+export interface TexMath {
+  tex: string
+  delim: '$' | '$$'
+}
 
 export interface ListMarker {
   text: string
@@ -189,6 +199,8 @@ export type SpecRun =
   | { obj: 'copy'; src: SrcRef; size?: [number, number]; alt?: string; rid?: string; cm?: string[]; tc?: TrackMark }
   | { obj: 'image'; rid: string; w: number; h: number; name?: string; alt?: string; cm?: string[] }
   | { obj: 'field'; kind: 'PAGE' | 'NUMPAGES'; set?: RunSet; cm?: string[] }
+  /** a TeX formula with no source run (pasted): written as a new equation */
+  | { obj: 'math'; math: TexMath; cm?: string[]; tc?: TrackMark }
 
 export interface ParaSpec {
   pid: number

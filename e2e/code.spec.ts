@@ -98,7 +98,7 @@ describe('syntax highlighting', () => {
     const block = page.locator('.de-p.de-code[data-code="javascript"]')
     await page.waitForFunction(() => document.querySelector('.de-p.de-code[data-code="javascript"]')?.textContent?.includes('done()'))
     // still one block, colored as typed
-    expect(await page.locator('.de-p.de-code').count()).toBe(2)
+    expect(await page.locator('.de-pages .de-p.de-code').count()).toBe(2)
     expect(await block.locator('.de-tk-s', { hasText: '"!"' }).count()).toBe(1)
     expect(await block.locator('.de-tk-f', { hasText: 'done' }).count()).toBe(1)
     // Enter on the empty last line: out of the block, into a new paragraph

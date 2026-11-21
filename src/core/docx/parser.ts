@@ -6,6 +6,7 @@ import { emuToPt } from '../units'
 import { desc, descAll, kid, kids, num, DOCX_UNDERSTOOD, parseXml, parseXmlStream, path, TreeBuilder, type SaxHandler, type XEl } from '../xml'
 import { formatNumber, Numbering } from './numbering'
 import { ommlText } from './omml'
+import { mathOf } from '../math/omml'
 import { readDocxComments, type DocxComments } from './comments'
 import {
   borderCss, merge, readMargins, readPPr, readRPr, readTableBorders, shading, StyleSheet, type NumPr,
@@ -437,8 +438,10 @@ export class Converter {
         case 'oMathPara': {
           const text = ommlText(c)
           const s = { ...base, i: true, font: '"Cambria Math", "STIX Two Math", serif' }
+          // a formula of a Markdown file (ours): its TeX comes along, to be drawn and saved as it was written
+          const math = mathOf(c.a)
           // an equation is one object: it is written back as it was, not as the flat text shown here
-          if (this.cur) sink.push({ t: 'ref', text, s, ...pick(this.srcOf(c), 'src'), ...(this.tc ? { tc: this.tc } : {}) })
+          if (this.cur) sink.push({ t: 'ref', text, s, ...pick(this.srcOf(c), 'src'), ...(this.tc ? { tc: this.tc } : {}), ...(math ? { math } : {}) })
           else if (text) sink.push({ t: 'text', text, s })
           break
         }

@@ -5,7 +5,7 @@
  * knowing the paragraphs it imported as; the edited document is aligned with the imported paragraphs, a chunk whose
  * paragraphs all came back unchanged is kept verbatim, and only what was edited is written from the model.
  */
-import type { Block, Inline, Paragraph } from './docx/types'
+import type { Block, Inline, Paragraph, TexMath } from './docx/types'
 import type { ImportPara } from './convert'
 import { closesFence, fenceOf, htmlParas, markdownParas } from './plain'
 
@@ -40,6 +40,8 @@ function runsKey(parts: { key: string; text: string }[], heading: boolean): stri
 
 const norm = (c: string | undefined) => (c ?? '').replace('#', '').toLowerCase()
 
+/** a formula: its TeX as written, whatever its look */
+const mathPart = (m: TexMath) => ({ key: 'm', text: m.delim + m.tex + m.delim })
 /** a code block: its language and its exact text (an edit of its spaces is an edit), as the document holds it */
 const codeSig = (lang: string, text: string) => `CODE|${lang}|${text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\uFFFE\uFFFF]/g, '')}`
 
@@ -49,6 +51,7 @@ function importSig(p: ImportPara): string {
   if (p.code !== undefined) return codeSig(p.code, p.runs.map((r) => r.text).join(''))
   const link = (r: { href?: string }) => (r.href ? 'a' + r.href : '')
   const parts = p.runs.map((r) => {
+    if (r.math) return mathPart(r.math)
     const s = r.set ?? {}
     const href = link(r)
     const key = [s.b ? 'b' : '', s.i ? 'i' : '', s.strike ? 's' : '', !href && s.u && s.u !== 'none' ? 'u' : '', s.font && MONO.test(s.font) ? 'c' : '', href, !href && s.color ? 'k' + norm(s.color) : '', s.hl ? 'h' + norm(s.hl) : ''].join('')
@@ -73,6 +76,10 @@ function blockSig(b: Block): string {
       continue
     }
     if ((r.t !== 'text' && r.t !== 'ref') || r.tc?.k === 'del' || r.s.vanish) continue
+    if (r.t === 'ref' && r.math) {
+      parts.push(mathPart(r.math))
+      continue
+    }
     const href = r.t === 'text' && r.href ? 'a' + r.href : ''
     const s = r.s
     const key = [s.b ? 'b' : '', s.i ? 'i' : '', s.strike || s.dstrike ? 's' : '', !href && s.u && s.u !== 'none' ? 'u' : '', s.font && MONO.test(s.font) ? 'c' : '', href, !href && s.color && s.color !== 'auto' ? 'k' + norm(s.color) : '', s.hl && s.hl !== 'none' ? 'h' + norm(s.hl) : ''].join('')

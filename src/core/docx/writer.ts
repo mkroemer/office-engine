@@ -22,6 +22,7 @@ import type {
   TableOp, TableSpec, PageSet, PageSetResult, PageSetup, HFKind, HFLine, HFSet, HFSetResult, TrackMark,
 } from './types'
 import { dict } from '../dict'
+import { MC_NS, mathOmml, OE_NS } from '../math/omml'
 
 export const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 const NUMBERING_REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering'
@@ -624,6 +625,14 @@ export async function genParagraph(doc: DocxDocument, spec: ParaSpec): Promise<{
         } else if (run.obj === 'image') {
           body += imageRunXml(W, run.rid, run.w, run.h, run.name, run.alt)
           map.push({ cm: run.cm })
+        } else if (run.obj === 'math') {
+          // (from the clipboard or a peer: checked)
+          const m = run.math
+          if (m && typeof m.tex === 'string' && (m.delim === '$' || m.delim === '$$')) {
+            const xml = mathOmml({ tex: m.tex, delim: m.delim }, W, true)
+            body += run.tc ? trackXml(doc, W, run.tc, xml) : xml
+            map.push({ cm: run.cm })
+          }
         } else {
           const src = origRun(doc, run.src)
           if (src) {
@@ -1317,6 +1326,26 @@ export async function saveDocx(doc: DocxDocument): Promise<Blob> {
     const page: PageSetup = { ...doc.page, ...set }
     body = rewriteSects(body!, (sect) => applyPageSet(sect, set, page))
   }
+  // an equation made from TeX (pasted): its TeX attributes are in a namespace Word must be told to ignore
+  if (body?.includes(' oe:tex=')) body = withMathNs(body)
   if (body !== undefined) doc.pkg.setPart(doc.mainPath, body)
   return doc.pkg.save(DOCX_MIME)
+}
+
+/** the root of the main part declares the TeX namespace, ignorable (Markup Compatibility), as Word wants it */
+export function withMathNs(xml: string): string {
+  const m = /<(?:[\w.-]+:)?document\b[^>]*>/.exec(xml)
+  if (!m) return xml
+  let tag = m[0]
+  const add = (attr: string) => (tag = tag.replace(/\s*\/?>$/, (end) => ` ${attr}${end}`))
+  if (!/\sxmlns:oe=/.test(tag)) add(`xmlns:oe="${OE_NS}"`)
+  let mc = new RegExp(`\\sxmlns:([\\w.-]+)="${MC_NS.replace(/[.]/g, '\\.')}"`).exec(tag)?.[1]
+  if (!mc) {
+    mc = /\sxmlns:mc=/.test(tag) ? 'mce' : 'mc'
+    add(`xmlns:${mc}="${MC_NS}"`)
+  }
+  const ign = new RegExp(`\\s${mc}:Ignorable="([^"]*)"`).exec(tag)
+  if (!ign) add(`${mc}:Ignorable="oe"`)
+  else if (!ign[1].split(/\s+/).includes('oe')) tag = tag.replace(ign[0], ` ${mc}:Ignorable="${(ign[1] + ' oe').trim()}"`)
+  return xml.slice(0, m.index) + tag + xml.slice(m.index + m[0].length)
 }
