@@ -566,6 +566,8 @@ export class RichInput {
     if (!this.root || this.composing || this.override || !want) return false
     const now = this.readSel()
     if (now && sameSel(now, want)) return false
+    // a selection in other paragraphs is a new one (its change is not read yet), not the model's moved by the cut
+    if (now && (now.a.pa !== want.a.pa || now.f.pa !== want.f.pa)) return false
     return this.restore(want, false)
   }
 

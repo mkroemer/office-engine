@@ -229,12 +229,13 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     const sc = scrollRef.current
     const a = anchor.current
     if (!sc || !tops.length) return
-    /** the height block `bi` takes on page `pi`: of one begun on the page before, its lines / rows from the cut */
+    /** the height block `bi` takes on page `pi`: one begun on the page before, from the cut (its space after kept) */
     const partH = (pi: number, bi: number) => {
       const b = st.blocks[bi]
+      const h = st.heights.get(b) ?? 0
       const from = bi === pages[pi].start ? pages[pi].from : 0
       const l = from ? st.lines.get(b) : undefined
-      return l ? l.ys[l.ys.length - 1] - l.ys[from] : (st.heights.get(b) ?? 0)
+      return l ? h - l.ys[from] : h
     }
     const blockTop = (pi: number, bi: number) => {
       let y = tops[pi] + page.mt * PX * z
@@ -320,7 +321,8 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   const againFrom = again.current.next
   const againTo = st.frontier
   const againEnd = againFrom < 0 ? -1 : Math.min(againTo, againFrom + batch)
-  for (let i = Math.max(0, againFrom); i < againEnd; i++) if (!st.dirty.has(st.blocks[i])) enqueue(st.blocks[i], i)
+  // (a paragraph a page cuts has where its lines start read again with it, so the cut does not wait for a second pass)
+  for (let i = Math.max(0, againFrom); i < againEnd; i++) if (!st.dirty.has(st.blocks[i])) enqueue(st.blocks[i], i, st.lines.get(st.blocks[i])?.at !== undefined)
   const fontsReady = !queue.length || !meta || fonts.ready(docxFonts(queue.map((q) => q.b), docxPageFonts(meta)))
   const renderStart = performance.now()
   const measureCtx = useMemo<RenderCtx>(() => ({ client, page: -1, pages: 0, measuring: true, editable: false }), [client])
