@@ -166,6 +166,11 @@ export interface XlsxEditResult {
   recalc?: number[]
   /** the sheet reaches further than before (a formula filled cells past its last row / column): its rows and columns now */
   grown?: { rows: number; cols: number }
+  /**
+   * the steps undo and redo can take back after this edit: an edit that changed nothing (a sort of sorted rows) records
+   * none, so this, not a count of results, says what the history holds
+   */
+  history?: { undo: number; redo: number }
 }
 
 /** a copied cell: kind of value (as the workbook holds it: number, text, boolean, error…), value, format, formula (no "=") */

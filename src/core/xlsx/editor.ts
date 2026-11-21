@@ -458,6 +458,11 @@ class StyleEditor {
 export class XlsxEditor {
   private undoStack: Change[] = []
   private redoStack: Change[] = []
+
+  /** the steps undo and redo can take back now */
+  get history(): { undo: number; redo: number } {
+    return { undo: this.undoStack.length, redo: this.redoStack.length }
+  }
   private styleEd?: StyleEditor
   private stylesPath?: string
   private formulaTouched = false

@@ -125,6 +125,8 @@ export interface SlideModel {
   els: SlideEl[]
   notes?: string
   hidden?: boolean
+  /** the text of its title placeholder */
+  title?: string
 }
 
 export interface PresentationMeta {

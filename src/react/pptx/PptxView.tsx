@@ -6,6 +6,7 @@ import { useFileOps, useViewer, useSelectAll } from '../common/Slots'
 import { slidesToText } from '../file/text'
 import { Status } from '../common/Status'
 import { ZoomControl, type Zoom } from '../common/ZoomControl'
+import { useViewCommands, useControllerObserved } from '../controller'
 import { getSel } from '../edit/input'
 import { plen } from '../edit/rich'
 import { PptxEditor } from './PptxEditor'
@@ -24,21 +25,24 @@ interface SlideCache {
   models: Map<number, SlideModel>
   pending: Map<number, Promise<SlideModel>>
   listeners: Map<number, Set<(m: SlideModel) => void>>
+  /** told of every replaced slide, whichever its index */
+  edits: Set<(index: number, m: SlideModel) => void>
 }
 
 const caches = new WeakMap<DocumentClient, SlideCache>()
 
 function cacheFor(client: DocumentClient): SlideCache {
   let c = caches.get(client)
-  if (!c) caches.set(client, (c = { models: new Map(), pending: new Map(), listeners: new Map() }))
+  if (!c) caches.set(client, (c = { models: new Map(), pending: new Map(), listeners: new Map(), edits: new Set() }))
   return c
 }
 
-/** replaces a cached slide (after an edit) and notifies mounted views */
+/** replaces a cached slide (after an edit, here or a collaborator's) and notifies mounted views */
 function putSlide(client: DocumentClient, index: number, m: SlideModel) {
   const c = cacheFor(client)
   c.models.set(index, m)
   for (const fn of c.listeners.get(index) ?? []) fn(m)
+  for (const fn of c.edits) fn(index, m)
 }
 
 /** forget every cached slide (after slides were added / removed / reordered) */
@@ -210,7 +214,7 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
   const thumbRef = useRef<HTMLDivElement>(null)
   const thumbScroll = useScroll(thumbRef)
   const [zoom, setZoom] = useState<Zoom>(initialZoom)
-  const showThumbs = thumbnails && rootSize.w >= 720 && meta.count > 1
+  const showThumbs = thumbnails && !viewer.headless && rootSize.w >= 720 && meta.count > 1
   const [, bump] = useForceUpdate()
   const caretAt = useRef<{ x: number; y: number } | null>(null)
   const textRoot = useRef<HTMLDivElement | null>(null)
@@ -628,6 +632,68 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
     if (el) el.scrollTop = PAD + Math.max(0, Math.min(meta.count - 1, i)) * pitch - Math.max(0, (size.h - slideH) / 2)
   }
 
+  // ---- controller: zoom, slide, the slides as the outline, undo, slideshow ----
+  const { ctl, headless } = viewer
+  // slide titles for the outline, read only while a host reads the controller: from the slides' XML in one call
+  // once the first slides are shown, then from each slide model an edit puts in the cache
+  const observed = useControllerObserved(ctl)
+  const [titles, setTitles] = useState<string[]>([])
+  // titles edited while the scan reads the file: newer than what it reads, so they win over its answer
+  const editedDuringScan = useRef(new Map<number, string>())
+  useEffect(() => {
+    if (!observed) return
+    let live = true
+    const timer = setTimeout(() => {
+      editedDuringScan.current.clear()
+      client
+        .call('pptx.titles')
+        .then((t) => {
+          if (!live) return
+          const merged = [...t]
+          for (const [i, title] of editedDuringScan.current) if (i < merged.length) merged[i] = title
+          setTitles(merged)
+        })
+        .catch(() => {})
+    }, 800)
+    return () => {
+      live = false
+      clearTimeout(timer)
+    }
+  }, [observed, client, meta.count, slidesVer])
+  useEffect(() => {
+    if (!observed) return
+    const edits = cacheFor(client).edits
+    const on = (i: number, m: SlideModel) => {
+      editedDuringScan.current.set(i, m.title ?? '')
+      setTitles((t) => (t[i] === (m.title ?? '') ? t : Object.assign([...t], { [i]: m.title ?? '' })))
+    }
+    edits.add(on)
+    return () => {
+      edits.delete(on)
+    }
+  }, [observed, client])
+  useEffect(() => {
+    ctl?.update({ zoom: { value: zoom, effective: scale } })
+  }, [ctl, zoom, scale])
+  useEffect(() => {
+    ctl?.update({
+      page: { current: current + 1, count: meta.count },
+      outline: { kind: 'slides', items: Array.from({ length: meta.count }, (_, i) => ({ id: String(i), title: titles[i] || `${str.pptx.slide} ${i + 1}`, level: 0, current: i === current })) },
+    })
+  }, [ctl, current, meta.count, titles, str])
+  // as the toolbar's buttons: undo while there is a shape edit or text is being edited; redo whenever editing (no redo depth is kept)
+  useEffect(() => {
+    ctl?.update({ canUndo: viewer.editable && (undoDepth > 0 || editor.active), canRedo: viewer.editable })
+  })
+  useViewCommands(ctl, {
+    setZoom,
+    goto: (id) => go(Number(id)),
+    gotoPage: (n) => go(n - 1),
+    undo: () => viewer.editable && (editor.active ? editor.undo() : void undoShapes(false)),
+    redo: () => viewer.editable && (editor.active ? editor.redo() : void undoShapes(true)),
+    present: () => setPresenting(current),
+  })
+
   // ---- comments: a thread points at a point of a slide ----
   const cm = useCommentsCtl()
   const cmState = useCommentsState(cm)
@@ -823,8 +889,8 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
             {slots}
           </div>
         </div>
-        <ZoomControl zoom={zoom} effective={scale} onChange={setZoom} />
-        {!viewer.editable && (
+        {!headless && <ZoomControl zoom={zoom} effective={scale} onChange={setZoom} />}
+        {!viewer.editable && !headless && (
           <button type="button" className="de-mode de-present-btn" title={str.pptx.presentTitle} onClick={() => setPresenting(current)}>
             <Icon name="present" size={14} />
             {str.pptx.present}

@@ -7,10 +7,11 @@
  *   &fonts=[{"family":"Carlito","src":"/fonts/carlito.ttf"}]: the host's fonts (JSON)
  *   &texts=de: the optional German table; &fileLabel=… overrides the File label
  *   &components=1: the host's own Button, Separator, Dialog and Toast (`data-host-*` markers)
+ *   &headless=1: the document alone; the viewer is driven through window.__ctl (its controller) either way
  */
-import { useState } from 'react'
+import { StrictMode, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { DocViewer, type DocViewerProps, type FileMenuItem, type UIComponents } from '../../src'
+import { createViewerController, DocViewer, type DocViewerProps, type FileMenuItem, type UIComponents, type ViewerController } from '../../src'
 import { de } from '../../src/locales/de'
 
 type Ev = { type: string; [k: string]: unknown }
@@ -20,9 +21,14 @@ declare global {
     __setProps: (p: Partial<DocViewerProps>) => void
     __setLanguage: (language: 'en' | 'de-DE') => void
     __german: typeof de
+    __ctl: ViewerController
+    __overlap: (phase: number, props?: Partial<DocViewerProps>) => void
   }
 }
 window.__events = []
+window.__ctl = createViewerController()
+// a host reading the state, as the tests do through snapshot(): views read slide titles only for one
+window.__ctl.subscribe(() => {})
 const log = (e: Ev) => window.__events.push(e)
 
 const q = new URLSearchParams(location.search)
@@ -102,6 +108,8 @@ const initial: DocViewerProps = {
   injectStyles: flag('injectStyles'),
   locale: q.get('locale') ?? undefined,
   strings: q.has('fileLabel') ? { ...texts, file: { ...(texts?.file ?? {}), menu: q.get('fileLabel')! } } : texts,
+  headless: flag('headless'),
+  controller: flag('controller') ? window.__ctl : undefined,
   onSave: q.has('onSave') ? async (blob, name) => void log({ type: 'save', name, b64: await b64(blob) }) : undefined,
   onDirtyChange: (dirty) => log({ type: 'dirty', dirty }),
   onRename: (name) => log({ type: 'rename', name }),
@@ -132,9 +140,20 @@ const initial: DocViewerProps = {
 
 function App() {
   const [props, setProps] = useState(initial)
+  const [phase, setPhase] = useState(0)
+  const [nextProps, setNextProps] = useState<Partial<DocViewerProps>>({})
+  window.__overlap = (phase, next) => {
+    if (next) setNextProps(next)
+    setPhase(phase)
+  }
   window.__setProps = (p) => setProps((cur) => ({ ...cur, ...p }))
   window.__setLanguage = (language) => setProps((cur) => ({ ...cur, strings: language === 'de-DE' ? de : undefined }))
-  return <DocViewer {...props} />
+  const { undo, redo } = window.__ctl
+  return <>
+    {q.has('hostControls') && <div><button onClick={undo}>Host undo</button><button onClick={redo}>Host redo</button><button onMouseDown={(e) => e.preventDefault()} onClick={() => window.__ctl.goto(window.__ctl.snapshot().outline!.items[1].id)}>Host second sheet</button></div>}
+    {phase < 2 && <DocViewer key="old" {...props} />}
+    {phase > 0 && phase < 3 && <DocViewer key="new" {...props} {...nextProps} />}
+  </>
 }
 
-createRoot(document.getElementById('root')!).render(<App />)
+createRoot(document.getElementById('root')!).render(q.has('strict') ? <StrictMode><App /></StrictMode> : <App />)

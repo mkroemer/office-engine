@@ -8,6 +8,7 @@ import { StatusContext } from './common/Status'
 import { ConfirmDialog, PromptDialog, Toast } from './common/Dialog'
 import { download, Icon, IconsProvider, type Icons } from './edit/Toolbar'
 import { UIComponentsProvider, type UIComponents } from './ui'
+import { createViewerController, internalController, type ViewerController } from './controller'
 import { DetailsDialog } from './file/DetailsDialog'
 import { FileMenu, useFileActions, type FileMenuItem } from './file/FileMenu'
 import { importFile, type Imported } from './file/importFile'
@@ -15,7 +16,7 @@ import { blankPptx, parasToDocx, rowsToXlsx } from '../core/convert'
 import type { DocKind } from '../core/opc'
 import { extOf, HAS_SOURCE, PLAIN_EXT, PLAIN_FILE, unpackedName, type PlainFormat } from '../core/plain'
 import { injectStyles } from './injectStyles'
-import { isTextEntry, useSize } from './common/hooks'
+import { isTextEntry, useIsoLayoutEffect, useSize } from './common/hooks'
 import { useThemeRoot, type Theme } from './theme'
 import { SourceEditor } from './source/SourceEditor'
 import { CodeView } from './source/CodeView'
@@ -137,6 +138,17 @@ export interface DocViewerProps {
   /** Texts replacing the enclosing provider's or English texts, key by key (see `Strings`): a group may be given in part, e.g. `{ file: { menu: 'Datei' } }`. */
   strings?: StringsOverride
   /**
+   * The viewer's state and commands for the host (`createViewerController()`): zoom, page, outline, editing, unsaved
+   * changes, save, undo… Subscribe to it to draw your own controls; see `headless`.
+   */
+  controller?: ViewerController
+  /**
+   * The document alone: no top bar, zoom control, outline panel, sheet tabs or slide list (the host draws its own,
+   * driven by `controller`). While editing, the formatting toolbar keeps its row. The top bar shows when `toolbar` is
+   * set explicitly. Default false.
+   */
+  headless?: boolean
+  /**
    * Font files the host supplies (the library ships none): `{ family, src, weight?, style?, unicodeRange? }`, `src` a URL
    * or the bytes. A file is loaded when a document's text names its family, directly (`Calibri`) or as the fallback
    * the font list puts after it (`Carlito` for Calibri, `Caladea` for Cambria, `Liberation Sans / Serif / Mono` for
@@ -186,7 +198,13 @@ export function DocViewer(props: DocViewerProps) {
 function Viewer(props: DocViewerProps) {
   const t = useStrings()
   const fmtBytes = (n: number) => formatBytes(t, n)
-  const { src, name, className, style, toolbar = true, toolbarExtra, zoom, thumbnails, headers, credentials, worker, styleTarget, theme, onLoad, onError } = props
+  const { src, name, className, style, toolbarExtra, zoom, thumbnails, headers, credentials, worker, styleTarget, theme, onLoad, onError } = props
+  const headless = !!props.headless
+  const toolbar = props.toolbar ?? !headless
+  // without a controller from the host the viewer keeps its own: the view publishes to one either way
+  const ownCtl = useMemo(() => createViewerController(), [])
+  const controller = internalController(props.controller ?? ownCtl)
+  const ctl = useMemo(() => controller.createBinding(), [controller])
   const root = useThemeRoot(theme, style)
   const fonts = useHostFonts(props.fonts, onError)
   const { allowEdit = true, allowSave = true, allowDownload = true, fileMenu = true, allowOpen = true, captureSelectAll = true, onSave, onDirtyChange } = props
@@ -222,6 +240,7 @@ function Viewer(props: DocViewerProps) {
       saveSession.live = false
     }
   }, [saveSession])
+  const viewCtl = useMemo(() => ctl.createView(), [ctl, client])
   const docName = renamed ?? loadName
   const collab = useCollab(client, props.collab)
   const srcFormat = client?.info?.imported
@@ -447,8 +466,8 @@ function Viewer(props: DocViewerProps) {
   // next to its source, the document is a preview: it is edited through the source (a source file's code is edited as text)
   const docEditable = editing && canEdit && !codeShown && !isCode
   const api = useMemo<ViewerApi>(
-    () => ({ bar: barEl, editable: docEditable, setDirty: setDocDirty, save, canDownload: allowDownload, client, fileOps, selectAll }),
-    [barEl, docEditable, setDocDirty, save, allowDownload, client],
+    () => ({ bar: barEl, editable: docEditable, setDirty: setDocDirty, save, canDownload: allowDownload, client, fileOps, selectAll, ctl: viewCtl, headless }),
+    [barEl, docEditable, setDocDirty, save, allowDownload, client, viewCtl, headless],
   )
 
   const editSource = (text: string) => {
@@ -550,15 +569,15 @@ function Viewer(props: DocViewerProps) {
     setOpened(doc)
     if (edit) setEditing(true)
   }, [])
-  const canOpen = fileMenu && allowOpen && !props.collab
+  const canOpen = allowOpen && !props.collab
   const fileActions = useFileActions({
     kind: client?.kind,
     ext: officeExt,
     base: baseName,
     canOpen,
-    canImport: fileMenu && allowEdit && canEdit,
-    canSave: fileMenu && canSave,
-    canDownload: fileMenu && allowDownload && !!client,
+    canImport: allowEdit && canEdit,
+    canSave,
+    canDownload: allowDownload && !!client,
     ops: fileOps,
     create: (kind: DocKind) =>
       replace(t.bar.replaceNew(t.newWhat[kind]), () => {
@@ -613,6 +632,25 @@ function Viewer(props: DocViewerProps) {
   const busy = loading || (!!progress && pct < 100)
   const title = renamed ?? client?.name ?? docName ?? (typeof src === 'string' ? decodeURIComponent(src.split(/[?#]/)[0].split('/').pop() ?? '') : (src as File | undefined)?.name) ?? ''
 
+  // ---- controller: the viewer's part of the state, and its commands ----
+  const editAllowed = !readOnly && !codeShown
+  useEffect(() => {
+    ctl.update({ kind: client?.kind ?? null, loading: busy, editing: docEditable, canEdit: !!client && editAllowed && canEdit, dirty, saving })
+  }, [ctl, client, busy, docEditable, editAllowed, canEdit, dirty, saving])
+  const commands = useRef({ editAllowed, save, fileActions, cmCtl })
+  commands.current = { editAllowed, save, fileActions, cmCtl }
+  useIsoLayoutEffect(() => {
+    return ctl.attachViewer({
+      setEditing: (on) => {
+        if (!on || commands.current.editAllowed) setEditing(on)
+      },
+      save: () => commands.current.save(),
+      fileAction: (id) => commands.current.fileActions.run(id),
+      toggleComments: (open) => commands.current.cmCtl?.toggle(open),
+    })
+  }, [ctl])
+  useIsoLayoutEffect(() => viewCtl.activate(), [viewCtl])
+
   let body: ReactNode
   if (error) {
     body = (
@@ -661,7 +699,7 @@ function Viewer(props: DocViewerProps) {
   return (
     <IconsProvider icons={props.icons}>
     <UIComponentsProvider components={props.components}>
-    <div ref={rootRef} className={root.className + (className ? ` ${className}` : '')} style={root.style} onKeyDown={onKeyDown}>
+    <div ref={rootRef} className={root.className + (headless ? ' de-headless' : '') + (className ? ` ${className}` : '')} style={root.style} onKeyDown={onKeyDown}>
       {toolbar && (
         <div className="de-bar">
           {client && (
@@ -719,7 +757,7 @@ function Viewer(props: DocViewerProps) {
           <div className="de-progress" style={{ width: `${busy ? Math.max(pct, 3) : 100}%`, opacity: busy ? 1 : 0 }} />
         </div>
       )}
-      {toolbar && client && docEditable && <div className="de-ebar-host" ref={setBarEl} />}
+      {(toolbar || headless) && client && docEditable && <div className="de-ebar-host" ref={setBarEl} />}
       <div className={'de-body' + (codeShown && stacked ? ' de-body-stacked' : '')} ref={bodyRef}>
         {codeShown && (
           <div className="de-src-pane" style={stacked ? { height: `${split * 100}%` } : { width: `${split * 100}%` }}>

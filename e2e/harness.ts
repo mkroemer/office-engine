@@ -38,7 +38,8 @@ export function useBrowser() {
   beforeAll(async () => {
     server = await createServer({ configFile: 'vite.e2e.config.ts', server: { port: 0, strictPort: false } })
     await server.listen()
-    const browser = await chromium.launch()
+    // PLAYWRIGHT_CHANNEL=chrome / msedge: an installed browser instead of Playwright's own Chromium
+    const browser = await chromium.launch({ channel: process.env.PLAYWRIGHT_CHANNEL || undefined })
     shared = { base: server.resolvedUrls!.local[0], browser }
   })
   afterEach(async () => {

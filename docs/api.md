@@ -87,8 +87,73 @@ CSS is auto-injected, no import needed (or import `@p10node/office-engine/styles
 | `onDirtyChange`    | `(dirty) => void`                              | –         | Whether there are unsaved changes                                                                                        |
 | `collab`           | `CollabOptions`                                | –         | Real-time collaboration, see [collaboration](collaboration.md)                                                           |
 | `comments`         | `CommentOptions \| false`                      | `{}`      | Comments (see below); `false` hides them                                                                                 |
-| `onLoad`           | `(client) => void`                             | –         |                                                                                                                          |
+| `onLoad`           | `(client) => void`                             | –         | Once per opened document                                                                                                 |
 | `onError`          | `(error) => void`                              | –         |                                                                                                                          |
+| `controller`       | `ViewerController`                             | its own   | The viewer's state and commands for the host, see [headless mode](#headless-mode)                                        |
+| `headless`         | `boolean`                                      | `false`   | The document alone: no top bar, zoom control, outline panel, sheet tabs or slide list                                    |
+
+### Headless mode
+
+For a host that draws its own controls around the document: `headless` leaves the viewer with the document alone, and a
+`controller` (`createViewerController()`) carries its state and the commands that drive it. While editing, the formatting
+toolbar keeps its row above the document; dialogs, the find bar and the comments panel are the viewer's own. `toolbar`
+set explicitly brings back the top bar (File menu, comments, Save) and leaves the rest headless.
+
+```tsx
+import { createViewerController, DocViewer, useViewerState } from '@p10node/office-engine'
+import { useMemo } from 'react'
+
+function Viewer({ file }: { file: File }) {
+  const ctl = useMemo(() => createViewerController(), [])
+  const s = useViewerState(ctl)
+  return (
+    <>
+      <nav>
+        {s.outline?.items.map((i) => (
+          <button key={i.id} aria-current={i.current} style={{ paddingLeft: i.level * 12 }} onMouseDown={(e) => e.preventDefault()} onClick={() => ctl.goto(i.id)}>
+            {i.title}
+          </button>
+        ))}
+      </nav>
+      {s.zoom && <button onClick={() => ctl.zoomIn()}>{s.zoom.value === 'fit' ? 'Fit' : `${Math.round(s.zoom.effective * 100)}%`}</button>}
+      {s.canEdit && <button onClick={() => ctl.setEditing(!s.editing)}>{s.editing ? 'View' : 'Edit'}</button>}
+      {s.dirty && <button onClick={() => ctl.save()}>Save</button>}
+      <DocViewer src={file} controller={ctl} headless style={{ height: 600 }} />
+    </>
+  )
+}
+```
+
+| `ViewerState` | Meaning |
+|---------------|---------|
+| `rev` | counts the changes (the state object is replaced on each) |
+| `kind` | `'docx'`, `'xlsx'`, `'pptx'`, or `null` before a document is open |
+| `loading` | loading or downloading |
+| `editing`, `canEdit` | in edit mode; whether editing is possible (allowed, not view only) |
+| `dirty`, `saving` | unsaved changes; a save running |
+| `canUndo`, `canRedo` | whether undo / redo can run (spreadsheets count the edits made here; presentations offer redo whenever editing) |
+| `zoom` | `{ value: 'fit' \| number, effective }`, `null` for spreadsheets |
+| `page` | `{ current, count }` from 1: the page (documents; `count` 0 while laid out) or slide in view; `null` for spreadsheets |
+| `outline` | `{ kind, items: [{ id, title, level, current }] }`: a document's headings, a workbook's visible sheets, a presentation's slides (titled by their title placeholder, else "Slide n") |
+| `status` | the status line ("Page 2 of 7 · 1,204 words", "Slide 3 of 12", "200 rows × 8 cols") |
+
+Commands: `setEditing(on)`, `save()`, `undo()`, `redo()`, `zoomIn()`, `zoomOut()`, `setZoom('fit' | number)`,
+`goto(outlineId)`, `gotoPage(n)`, `present()` (a slideshow from the slide in view), `print()`, `fileAction(id)` (a File menu
+action: `pdf`, `html`, `text:md`, `details`, `rename`…), `toggleComments(open?)`. A command the open document has no use
+for does nothing. `subscribe(fn)` returns its unsubscribe; `snapshot()` the current state. Keep a subscription active to receive the complete DOCX headings and PPTX slide titles. Without `react`, `mount()`
+returns the controller (`mounted.controller`), and `<office-viewer headless>` has it as `element.controller`.
+
+Controller actions obey `allowSave`, `allowDownload` and `allowOpen` even when the File menu is hidden.
+`fileMenu={false}` hides the menu and disables its Open and Print shortcuts. Ctrl/⌘+S and host controller commands remain available, subject to their own permissions.
+`allowEdit` controls the Edit/View toggle and CSV import; `editable` and `setEditing()` control edit mode, including when the toggle is hidden.
+Prevent the default mouse-down action on host outline buttons (as above) to preserve the editor focus and an open XLSX formula while switching sheets.
+New/Open replace the document and remain available for a read-only file when `allowOpen` permits them.
+Import requires `allowEdit` and an editable workbook; it remains available with `allowOpen={false}`. Controllers are created with
+`createViewerController()`; publishing and attachment methods are internal to the engine.
+
+Use one controller per mounted viewer. Give a modal or fullscreen viewer its own controller, even when it shows the same file.
+During a temporary overlap, the latest mounted viewer owns a shared controller. Releasing it clears the controller;
+an older viewer that remains mounted does not automatically regain ownership.
 
 ### Comments
 
@@ -364,7 +429,7 @@ const fonts: FontSource[] = [
 </script>
 ```
 
-`<office-viewer>`: attributes `src`, `name`, `language` (a source file's, as the prop), `editable`, `toolbar="false"`, `thumbnails="false"`, `save="false"`, `download="false"`, `file-menu="false"`, `open="false"`, `capture-select-all="false"`, `theme="dark"` (or `"auto"`), `locale="de-DE"` (number/date formatting and numeric input), `collab` / `room` / `user` / `base` (real-time collaboration; `user` also writes the comments), `comments="false"`, `fonts` (a JSON list of `FontSource` with URLs: `fonts='[{"family":"Carlito","src":"/fonts/Carlito-Regular.ttf"}]'`); properties `.file = File`, `.icons` (map or resolver, as `icons` above) `.strings = { … }` (see [UI texts](#ui-texts)) and `.fonts` (as `fonts` above, bytes too; it wins over the attribute); events `load`, `error`, `comment` (`detail`: a `CommentEvent`).
+`<office-viewer>`: attributes `headless`, `src`, `name`, `language` (a source file's, as the prop), `editable`, `toolbar="false"`, `thumbnails="false"`, `save="false"`, `download="false"`, `file-menu="false"`, `open="false"`, `capture-select-all="false"`, `theme="dark"` (or `"auto"`), `locale="de-DE"` (number/date formatting and numeric input), `collab` / `room` / `user` / `base` (real-time collaboration; `user` also writes the comments), `comments="false"`, `fonts` (a JSON list of `FontSource` with URLs: `fonts='[{"family":"Carlito","src":"/fonts/Carlito-Regular.ttf"}]'`); properties `.file = File`, `.icons` (map or resolver, as `icons` above) `.strings = { … }` (see [UI texts](#ui-texts)) and `.fonts` (as `fonts` above, bytes too; it wins over the attribute), and `.controller` (see [headless mode](#headless-mode)); events `load`, `error`, `comment` (`detail`: a `CommentEvent`).
 
 ## Core API (no React)
 
