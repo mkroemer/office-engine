@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type MutableRefObject, type ReactNode } from 'react'
 import type { BookOp, CellDetail, ClipCell, CellInput, CellOut, FindMatch, FindOptions, FmtPatch, Merge, Range, SheetOp, SheetProgress, TextRun, WorkbookMeta, XlsxClip, XlsxEditResult } from '../../core/xlsx/types'
-import { parseTsv, tsvCell } from '../../core/xlsx/clip'
+import { parseTsv, shiftedClip, tsvCell } from '../../core/xlsx/clip'
 import { colName, MAX_ROWS } from '../../core/xlsx/workbook'
 import { detectSeparator, parseCsv } from '../../core/convert'
 import { closeFormula, formulaContext, isFormula, rangeText, type FormulaContext } from '../../core/xlsx/formula/assist'
@@ -17,9 +17,12 @@ import { Toast } from '../common/Dialog'
 import { FindBar } from '../docx/FindBar'
 import { XlsxToolbar, type MergeMode } from './XlsxToolbar'
 import { Icon } from '../edit/Toolbar'
+import { useLocale } from '../common/locale'
+import { numberText } from '../../core/number-input'
 import { Axis } from './axis'
 import { drawingBox, drawingEl, drawingExtent, useSheetDrawings } from './drawings'
-import { fitNumber, fontPx } from './fit'
+import { fitNumber, fontPx, forgetWidths } from './fit'
+import { useDocFonts } from '../common/fonts'
 import { htmlToTsv } from './html'
 import { fontOf, rotatedHeight, textWidth, wrapHeight } from './measure'
 import { sheetPrintable } from './print'
@@ -387,11 +390,11 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
     const old = meta.sheets[index]
     if (!old || raw === old.name) return
     const name = cleanSheetName(raw)
-    if (!name) return setNote('A sheet name cannot be empty')
-    if (meta.sheets.some((x) => x.index !== index && x.name.toLowerCase() === name.toLowerCase())) return setNote(`A sheet named “${name}” already exists`)
+    if (!name) return setNote(str.xlsx.sheetNameEmpty)
+    if (meta.sheets.some((x) => x.index !== index && x.name.toLowerCase() === name.toLowerCase())) return setNote(str.xlsx.sheetNameTaken(name))
     const said: string[] = []
-    if (raw.trim().length > 31) said.push(`Sheet names have at most 31 characters: shortened to “${name}”.`)
-    if (/[\\/?*[\]:]/.test(raw)) said.push('Sheet names cannot contain \\ / ? * [ ] : — they were replaced by _.')
+    if (raw.trim().length > 31) said.push(str.xlsx.sheetNameShortened(name))
+    if (/[\\/?*[\]:]/.test(raw)) said.push(str.xlsx.sheetNameInvalidChars)
     if (name !== old.name) void bookOp({ op: 'rename', index, name: raw })
     if (said.length) setNote(said.join(' '))
   }
@@ -664,6 +667,9 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
   const viewer = useViewer()
   const str = useStrings()
   const editable = viewer.editable
+  // numbers typed are read in it, and a number edited is shown in it (1,5 in de-DE: what is shown is read back the same)
+  const locale = useLocale()
+  const typed = locale ? { locale } : undefined
   const s = store.sheet(sheet)
   const [scrollRef, size] = useSize<HTMLDivElement>()
   const scroll = useScroll(scrollRef)
@@ -758,6 +764,17 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
 
   const styles = meta.styles
   const basePx = fontPx(meta.baseFont.fontSize, 14.67)
+  // the host's fonts the workbook is set in are loaded: numbers fitted to their columns before one arrived (or before
+  // the page's own web font did) are fitted again
+  const fonts = useDocFonts()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const stacks = useMemo(() => new Set([meta.baseFont, ...styles].map((x) => x?.fontFamily).filter((f): f is string => typeof f === 'string')), [styles.length])
+  const fontsKey = `${fonts.ready(stacks)}|${fonts.gen}`
+  const lastFonts = useRef(fontsKey)
+  if (lastFonts.current !== fontsKey) {
+    lastFonts.current = fontsKey
+    forgetWidths()
+  }
   const mergeAt = (r: number, c: number) => s.merges.find((m) => r >= m.r0 && r <= m.r1 && c >= m.c0 && c <= m.c1)
 
   // A row that says no height shows its turned text whole: Excel fits such rows when it opens the file. In the view
@@ -1156,7 +1173,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
     if (d.type === 'number' && /[dmyhs]/i.test((meta.formats[styleOf(r, c)] ?? '').replace(/"[^"]*"|\[[^\]]*\]/g, ''))) {
       return store.row(sheet, r)?.find((x) => x[0] === c)?.[1] ?? d.value
     }
-    return d.value
+    return d.type === 'number' && locale && d.value !== '' && Number.isFinite(Number(d.value)) ? numberText(Number(d.value), locale) : d.value
   }
 
   const startEdit = async (initial?: string, bar = false) => {
@@ -1180,7 +1197,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
     closed.current = e
     setEdit(null)
     const value = closeFormula(e.value)
-    if (value !== e.initial) lastRun.current = run(client.call('xlsx.set', e.sheet, [{ r: e.r, c: e.c, input: value }])).then(() => widen({ r0: e.r, c0: e.c, r1: e.r, c1: e.c }, e.sheet))
+    if (value !== e.initial) lastRun.current = run(client.call('xlsx.set', e.sheet, [{ r: e.r, c: e.c, input: value }], typed)).then(() => widen({ r0: e.r, c0: e.c, r1: e.r, c1: e.c }, e.sheet))
     if (e.sheet !== sheet) return backTo(e, move)
     if (move) moveBy(move[0], move[1], false)
     focusGrid()
@@ -1220,7 +1237,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
         cells.push({ r, c, input })
       }
     }
-    lastRun.current = run(client.call('xlsx.set', e.sheet, cells)).then(() => widen(R, e.sheet))
+    lastRun.current = run(client.call('xlsx.set', e.sheet, cells, typed)).then(() => widen(R, e.sheet))
     if (e.sheet !== sheet) return backTo(e)
     focusGrid()
   }
@@ -1470,10 +1487,16 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
 
   /** columns that show #### for the numbers written in `range` are widened, as Excel does (a width set by hand stays) */
   const widen = async (range: Range, at = sheet) => {
-    if (!editable || at !== sheet) return
+    // it runs after the edit's result: the document may have been closed (another one opened) meanwhile
+    if (!editable || at !== sheet || client.closed) return
     const live = store.sheet(sheet)
     const need = new Map<number, number>()
-    for (const [, cells] of await rowsOf(range.r0, Math.min(range.r1, range.r0 + 999))) {
+    const rows = await rowsOf(range.r0, Math.min(range.r1, range.r0 + 999)).catch((e: Error) => {
+      if (client.closed) return null
+      throw e
+    })
+    if (!rows) return
+    for (const [, cells] of rows) {
       for (const [c, text, si, kind] of cells) {
         if (c < range.c0 || c > range.c1 || kind !== 1 || !text || (meta.formats[si] ?? 'General') === 'General' || live.colAxis.size(c) !== live.colAxis.def) continue
         const css = (styles[si] ?? {}) as Record<string, string | number>
@@ -1486,7 +1509,10 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
         need.set(c, Math.max(need.get(c) ?? 0, w))
       }
     }
-    for (const [c, px] of need) await sheetOp({ op: 'colWidth', c0: c, c1: c, px: Math.min(px, 400) })
+    for (const [c, px] of need) {
+      if (client.closed) return
+      await sheetOp({ op: 'colWidth', c0: c, c1: c, px: Math.min(px, 400) })
+    }
   }
 
   /** a column as wide as its longest text (double click on its edge) */
@@ -1746,8 +1772,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
         for (let j = 0; j < cols; j++) {
           const cell = clip.cells[down ? i % h : i]?.[down ? j : j % w] ?? null
           const tile = down ? Math.floor(i / h) : Math.floor(j / w)
-          // (the worker moves every formula by the distance of the first block: the others by what is left of theirs)
-          line.push(cell && cell[3] !== undefined && tile ? ([cell[0], cell[1], cell[2], translateFormula(cell[3], down ? tile * h : 0, down ? 0 : tile * w)] as ClipCell) : cell)
+          line.push(shiftedClip(cell, down ? tile * h : 0, down ? 0 : tile * w))
         }
         cells.push(line)
       }
@@ -1993,10 +2018,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
         const line: ClipCell[] = []
         for (let j = 0; j < w * tiles.c; j++) {
           const src = copied[i % h]?.[j % w] ?? null
-          const ti = Math.floor(i / h)
-          const tj = Math.floor(j / w)
-          // (the worker moves every formula by the distance of the first block: the others by what is left of theirs)
-          line.push(src && src[3] !== undefined && (ti || tj) ? ([src[0], src[1], src[2], translateFormula(src[3], ti * h, tj * w)] as ClipCell) : src)
+          line.push(shiftedClip(src, Math.floor(i / h) * h, Math.floor(j / w) * w))
         }
         cells.push(line)
       }

@@ -176,6 +176,33 @@ export function scriptLinkDocx(): Promise<Blob> {
   })
 }
 
+/** a font name a CSS parser would read as a list with a url() in it, if it were not quoted */
+export const CSS_FONT_NAME = `Probe"), url(https://${PROBE_HOST}/css-font.woff2), local("x`
+
+/**
+ * Fonts in a document: `word/fontTable.xml` embeds "Probe Font" (one file at an address outside the package, one
+ * inside it), and runs are set in it and in a name that looks like CSS.
+ */
+export async function probeFontsDocx(): Promise<Blob> {
+  const zip = await ZipArchive.open(new BlobSource(new Blob([await Bun.file(`${SAMPLES}/sample.docx`).arrayBuffer()])))
+  const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+  const key = 'w:fontKey="{00000000-0000-0000-0000-000000000000}"'
+  const attr = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+  const run = (font: string, text: string) => `<w:p><w:r><w:rPr><w:rFonts w:ascii="${attr(font)}" w:hAnsi="${attr(font)}"/></w:rPr><w:t>${text}</w:t></w:r></w:p>`
+  const changes = new Map<string, string>([
+    ['word/fontTable.xml', before(await zip.text('word/fontTable.xml'), '</w:fonts>', `<w:font w:name="Probe Font"><w:embedRegular r:id="rIdF1" ${key}/><w:embedBold r:id="rIdF2" ${key}/></w:font>`)],
+    [
+      'word/_rels/fontTable.xml.rels',
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+        `<Relationship Id="rIdF1" Type="${REL}/font" Target="https://${PROBE_HOST}/embedded-font.odttf" TargetMode="External"/>` +
+        `<Relationship Id="rIdF2" Type="${REL}/font" Target="fonts/font2.odttf"/></Relationships>`,
+    ],
+    ['word/fonts/font2.odttf', 'not a font'],
+    ['word/document.xml', after(await zip.text('word/document.xml'), '<w:body>', run('Probe Font', 'probe font') + run(CSS_FONT_NAME, 'probe css font'))],
+  ])
+  return rebuildZip(zip, changes)
+}
+
 // ---- Visio drawings: built whole (test/visio-builder.ts), shown as slides
 
 const blobOf = async (bytes: Promise<Uint8Array<ArrayBuffer>>) => new Blob([await bytes])

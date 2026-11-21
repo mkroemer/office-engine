@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { StringsProvider, type Strings } from '../strings'
 import { stylesText } from '../injectStyles'
+import { copyFonts } from '../common/fonts'
 
 /** Content laid out for paper: PDF / print and standalone HTML. */
 export interface Printable {
@@ -192,6 +193,8 @@ async function mount(p: Printable, title: string, strings: Strings): Promise<Mou
     frame.remove()
   }
   try {
+    // the host's fonts, as the pages were laid out with them (waited for with the document's own fonts)
+    copyFonts(doc)
     await settle(doc, host)
     fitText(host)
   } catch (e) {

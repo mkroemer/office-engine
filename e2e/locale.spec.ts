@@ -7,7 +7,7 @@ useBrowser()
 
 describe('locale', () => {
   test('bar, File menu and details dialog in German', async () => {
-    const v = await viewer({ src: 'samples/sample.docx', locale: 'de-DE' })
+    const v = await viewer({ src: 'samples/sample.docx', texts: 'de' })
     expect(await v.page.locator('.de-bar .de-file').innerText()).toContain('Datei')
     expect(await v.barButton('Bearbeiten').count()).toBe(1)
 
@@ -29,7 +29,7 @@ describe('locale', () => {
   })
 
   test('PPTX in German: status, zoom, present', async () => {
-    const v = await viewer({ src: 'samples/sample.pptx', locale: 'de-DE' })
+    const v = await viewer({ src: 'samples/sample.pptx', texts: 'de' })
     expect(await v.status()).toMatch(/Folie 1 von \d+/)
     expect(await v.page.locator('.de-zoom[aria-label="Zoom"] button[aria-label="Vergrößern"]').count()).toBe(1)
     expect(await v.page.locator('.de-present-btn').innerText()).toContain('Bildschirmpräsentation')
@@ -37,7 +37,7 @@ describe('locale', () => {
   })
 
   test('a partial override keeps the other texts', async () => {
-    const v = await viewer({ src: 'samples/sample.docx', locale: 'de-DE', fileLabel: 'Ablage' })
+    const v = await viewer({ src: 'samples/sample.docx', texts: 'de', fileLabel: 'Ablage' })
     expect(await v.page.locator('.de-bar .de-file').innerText()).toContain('Ablage')
     expect(await v.barButton('Bearbeiten').count()).toBe(1)
   })
@@ -62,7 +62,7 @@ describe('locale', () => {
   }
 
   test('PPTX comment locations follow the UI language', async () => {
-    const v = await viewer({ src: 'samples/sample.pptx', locale: 'de-DE', editable: true, cmOpen: true })
+    const v = await viewer({ src: 'samples/sample.pptx', texts: 'de', editable: true, cmOpen: true })
     await v.page.locator('.de-cm-new').click()
     const draft = v.page.locator('.de-cm-draft')
     await draft.waitFor()

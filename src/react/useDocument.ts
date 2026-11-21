@@ -17,7 +17,7 @@ export interface DocumentState {
  */
 export function useDocument(src: DocSource | null | undefined, options: OpenOptions = {}, keep = false): DocumentState {
   const [state, setState] = useState<DocumentState>({ client: null, error: null, loading: !!src, progress: null })
-  const { name, worker, credentials } = options
+  const { name, worker, credentials, language } = options
   const headersKey = options.headers ? JSON.stringify(options.headers) : ''
   const shown = useRef<DocumentClient | null>(null)
   const keepRef = useRef(keep)
@@ -44,6 +44,7 @@ export function useDocument(src: DocSource | null | undefined, options: OpenOpti
       name,
       worker,
       credentials,
+      language,
       headers: headersKey ? JSON.parse(headersKey) : undefined,
       onProgress: (p) => live && setState((s) => ({ ...s, progress: p })),
     }).then(
@@ -62,6 +63,6 @@ export function useDocument(src: DocSource | null | undefined, options: OpenOpti
     return () => {
       live = false
     }
-  }, [src, name, worker, credentials, headersKey])
+  }, [src, name, worker, credentials, headersKey, language])
   return state
 }
