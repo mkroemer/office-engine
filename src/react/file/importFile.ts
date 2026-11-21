@@ -38,6 +38,6 @@ export async function importFile(file: File): Promise<Imported> {
   if (head[0] === 0x50 && head[1] === 0x4b) return { src: file, name: file.name, converted: false }
   const what = describeBinary(head)
   throw new Error(
-    `Cannot open “${file.name}”${what ? ` (it is ${what})` : ''}: supported files are Word, Excel, PowerPoint (also 97-2003), OpenDocument, RTF, Pages, Keynote, Numbers, Visio, CSV, text, Markdown, HTML, SVG, Mermaid, PlantUML and Graphviz (also gzip-compressed: .svgz, .csv.gz)`,
+    `Cannot open “${file.name}”${what ? ` (it is ${what})` : ''}: supported files are Word, Excel, PowerPoint (also 97-2003), OpenDocument, RTF, Pages, Keynote, Numbers, Visio, CSV, text, Markdown, HTML, SVG, Mermaid, PlantUML, Graphviz and source code (also gzip-compressed: .svgz, .csv.gz)`,
   )
 }

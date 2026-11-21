@@ -2,6 +2,7 @@ import { cssColor } from '../../core/color'
 import type { Block, Inline, Paragraph, RunStyle, Table } from '../../core/docx/types'
 import { findMath, mathSource } from '../../core/math/scan'
 import { texMathml } from '../../core/math/tex'
+import { codeText } from '../../core/plainmerge'
 import type { SlideModel, TextBody } from '../../core/pptx/types'
 import { safeHref } from '../../core/url'
 
@@ -124,11 +125,47 @@ function mdTable(t: Table): string {
   return [line(rows[0]), `|${' --- |'.repeat(n)}`, ...rows.slice(1).map(line)].join('\n')
 }
 
-/** Markdown: headings (outline levels), lists, bold / italic / strike, links, tables, pictures (as data URLs when given). */
+/** a fenced code block, its fence longer than any run of backticks that starts a line of the code */
+export function mdFence(lang: string, code: string): string {
+  let n = 3
+  for (const m of code.matchAll(/^[ \t]*(`{3,})/gm)) n = Math.max(n, m[1].length + 1)
+  const f = '`'.repeat(n)
+  return `${f}${lang}\n${code}${code ? '\n' : ''}${f}`
+}
+
+/** consecutive code paragraphs of one language, joined as the lines of one block */
+interface CodeRun {
+  lang: string
+  lines: string[]
+}
+
+/**
+ * Markdown: headings (outline levels), lists, bold / italic / strike, links, tables, pictures (as data URLs when given),
+ * code blocks (fenced, with their language, the code as it is).
+ */
 export function docxToMarkdown(blocks: Block[], images?: Pictures): string {
   const out: string[] = []
   let prevList = false
+  // code blocks wait in `codes` until the blank lines between blocks are made even: their own blank lines stay
+  const codes: string[] = []
+  // (typed by its initializer: endCode, a closure, sets it back to null)
+  let code = null as CodeRun | null
+  const endCode = () => {
+    if (code) out.push(`\u0000${codes.push(mdFence(code.lang, code.lines.join('\n'))) - 1}\u0000`, '')
+    code = null
+  }
   for (const b of blocks) {
+    if (b.t === 'p' && b.code !== undefined) {
+      if (code?.lang !== b.code) {
+        endCode()
+        if (prevList) out.push('')
+        code = { lang: b.code, lines: [] }
+      }
+      code.lines.push(codeText(b.runs))
+      prevList = false
+      continue
+    }
+    endCode()
     if (b.t === 'tbl') {
       out.push(mdTable(b), '')
       prevList = false
@@ -151,7 +188,14 @@ export function docxToMarkdown(blocks: Block[], images?: Pictures): string {
     if (!text) continue
     out.push(heading ? `${'#'.repeat(lvl + 1)} ${text}` : mdLead(text), '')
   }
-  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n'
+  endCode()
+  return (
+    out
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+      .replace(/\u0000(\d+)\u0000/g, (_, k: string) => codes[Number(k)]) + '\n'
+  )
 }
 
 // ---------------------------------------------------------------- DOCX → HTML
@@ -237,7 +281,7 @@ const cellHtml = (blocks: Block[], images?: Pictures) =>
 const HTML_CSS =
   'body{max-width:48em;margin:2em auto;padding:0 1em;font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#222}' +
   'table{border-collapse:collapse}td{border:1px solid #ccc;padding:4px 8px;vertical-align:top}img{max-width:100%;height:auto}' +
-  'code{font-family:ui-monospace,Menlo,Consolas,monospace;background:#f3f3f3;padding:0 .2em}' +
+  'code{font-family:ui-monospace,Menlo,Consolas,monospace;background:#f3f3f3;padding:0 .2em}pre{background:#f3f3f3;padding:.6em .8em;overflow:auto}pre code{padding:0}' +
   // MathML table columns in browsers that read only CSS for them (Chromium)
   'mtd[columnalign=left]{text-align:left}mtd[columnalign=right]{text-align:right}mtable[columnspacing="0em 2em"]>mtr>mtd{padding-left:0;padding-right:0}' +
   'mtable[columnspacing="0em 2em"]>mtr>mtd[columnalign=right]:not(:first-child){padding-left:2em}merror{border:0;background:none;color:#a33;font-family:ui-monospace,Menlo,Consolas,monospace}'
@@ -261,7 +305,23 @@ export function docxBodyHtml(blocks: Block[], images?: Pictures): string {
   const closeTo = (n: number) => {
     while (lists.length > n) out[out.length - 1] += `</li></${lists.pop()}>`
   }
+  // (typed by its initializer: endCode, a closure, sets it back to null)
+  let code = null as CodeRun | null
+  const endCode = () => {
+    if (code) out.push(`<pre><code${code.lang ? ` class="language-${hEsc(code.lang)}"` : ''}>${hEsc(code.lines.join('\n'))}</code></pre>`)
+    code = null
+  }
   for (const b of blocks) {
+    if (b.t === 'p' && b.code !== undefined) {
+      closeTo(0)
+      if (code?.lang !== b.code) {
+        endCode()
+        code = { lang: b.code, lines: [] }
+      }
+      code.lines.push(codeText(b.runs))
+      continue
+    }
+    endCode()
     if (b.t === 'tbl') {
       closeTo(0)
       out.push(`<table>\n${b.rows.map((r) => `<tr>${r.cells.map((c) => `<td>${cellHtml(c.blocks, images)}</td>`).join('')}</tr>`).join('\n')}\n</table>`)
@@ -291,6 +351,7 @@ export function docxBodyHtml(blocks: Block[], images?: Pictures): string {
     const align = b.ps.align === 'center' || b.ps.align === 'right' ? ` style="text-align:${b.ps.align}"` : ''
     out.push(heading ? `<h${lvl + 1}${align}>${inner}</h${lvl + 1}>` : `<p${align}>${inner}</p>`)
   }
+  endCode()
   closeTo(0)
   return out.join('\n')
 }

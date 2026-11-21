@@ -7,7 +7,10 @@
  */
 import type { Block, Inline, Paragraph, TexMath } from './docx/types'
 import type { ImportPara } from './convert'
-import { htmlParas, markdownParas } from './plain'
+import { closesFence, fenceOf, htmlParas, markdownParas } from './plain'
+
+/** the text of a code block as it reads (tracked deletions and hidden text left out) */
+export const codeText = (runs: Inline[]) => runs.map((r) => (r.t === 'text' && !r.s.vanish && r.tc?.k !== 'del' ? r.text : '')).join('')
 
 export type MergeFormat = 'markdown' | 'html'
 
@@ -39,10 +42,13 @@ const norm = (c: string | undefined) => (c ?? '').replace('#', '').toLowerCase()
 
 /** a formula: its TeX as written, whatever its look */
 const mathPart = (m: TexMath) => ({ key: 'm', text: m.delim + m.tex + m.delim })
+/** a code block: its language and its exact text (an edit of its spaces is an edit), as the document holds it */
+const codeSig = (lang: string, text: string) => `CODE|${lang}|${text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\uFFFE\uFFFF]/g, '')}`
 
 /** what the paragraph reads and looks like, for telling an edited one from one that came back as imported */
 function importSig(p: ImportPara): string {
   if (p.image) return 'IMG'
+  if (p.code !== undefined) return codeSig(p.code, p.runs.map((r) => r.text).join(''))
   const link = (r: { href?: string }) => (r.href ? 'a' + r.href : '')
   const parts = p.runs.map((r) => {
     if (r.math) return mathPart(r.math)
@@ -58,6 +64,7 @@ function importSig(p: ImportPara): string {
 function blockSig(b: Block): string {
   if (b.t !== 'p') return 'TABLE' + Math.random()
   const p: Paragraph = b
+  if (p.code !== undefined) return codeSig(p.code, codeText(p.runs))
   const lvl = p.ps.outline
   const heading = lvl !== undefined && lvl < 6
   const list = p.marker ? (ORDERED.test(p.marker.text.trim()) ? 'number' : 'bullet') : ''
@@ -87,7 +94,6 @@ function blockSig(b: Block): string {
 
 const lines = (s: string) => (s.match(/[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+$/g) ?? []) as string[]
 const LI = /^\s*(?:[-*+]|\d+[.)])\s/
-const FENCE = /^\s*(```|~~~)/
 
 /** Markdown cut at its block boundaries (every character belongs to a chunk); `fine`: also at headings, rules and code blocks */
 function markdownChunks(src: string, fine: boolean): string[] {
@@ -110,12 +116,12 @@ function markdownChunks(src: string, fine: boolean): string[] {
       if (!cont) push()
     }
     blankBefore = blank && !!cur
-    const fence = FENCE.exec(line)
+    const fence = fenceOf(line)
     if (fence) {
-      // a code block is one unit, blank lines in it or not
+      // a code block is one unit, blank lines in it or not (it ends as markdownParas ends it)
       if (fine) push()
       let j = k + 1
-      while (j < ls.length && !ls[j].trimStart().startsWith(fence[1])) j++
+      while (j < ls.length && !closesFence(ls[j], fence)) j++
       if (!cur) curStart = line
       cur += ls.slice(k, j + 1).join('')
       k = j

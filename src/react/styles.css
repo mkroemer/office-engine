@@ -108,6 +108,19 @@
   --de-src-attr: #0b57d0;
   --de-src-tag: #b42318;
   --de-src-meta: #8a5a00;
+  --de-src-function: #2a51a8;
+  --de-src-type: #a3236b;
+  /* code blocks on the page (paper: the same in both modes) and printed code */
+  --de-code-comment: #6a737d;
+  --de-code-keyword: #8e3bc7;
+  --de-code-string: #1a7f37;
+  --de-code-operator: #c2410c;
+  --de-code-number: #0b7a8a;
+  --de-code-attr: #0b57d0;
+  --de-code-tag: #b42318;
+  --de-code-meta: #8a5a00;
+  --de-code-function: #2a51a8;
+  --de-code-type: #a3236b;
   color-scheme: light;
   position: relative;
   display: flex;
@@ -187,6 +200,8 @@
   --de-src-attr: #8ab4f8;
   --de-src-tag: #ff7b72;
   --de-src-meta: #e3b341;
+  --de-src-function: #82aaff;
+  --de-src-type: #f778ba;
   color-scheme: dark;
 }
 
@@ -1488,3 +1503,27 @@
 .de-tk-m { color: var(--de-src-meta); }
 .de-tk-b { font-weight: 700; }
 .de-tk-i { font-style: italic; }
+.de-tk-f { color: var(--de-src-function); }
+.de-tk-y { color: var(--de-src-type); }
+/* a source file: its code is the whole view */
+.de-src-full { background: var(--de-chrome); }
+/* code blocks on the page and printed code: paper colors, the same in both themes; colors only (the layout is measured without them) */
+.de-code .de-tk-c { color: var(--de-code-comment, #6a737d); font-style: inherit; }
+.de-code .de-tk-k, .de-code .de-tk-h { color: var(--de-code-keyword, #8e3bc7); font-weight: inherit; }
+.de-code .de-tk-s { color: var(--de-code-string, #1a7f37); }
+.de-code .de-tk-o { color: var(--de-code-operator, #c2410c); }
+.de-code .de-tk-n { color: var(--de-code-number, #0b7a8a); }
+.de-code .de-tk-a { color: var(--de-code-attr, #0b57d0); }
+.de-code .de-tk-t { color: var(--de-code-tag, #b42318); }
+.de-code .de-tk-m { color: var(--de-code-meta, #8a5a00); }
+.de-code .de-tk-f { color: var(--de-code-function, #2a51a8); }
+.de-code .de-tk-y { color: var(--de-code-type, #a3236b); }
+.de-code .de-tk-b, .de-code .de-tk-i { font-weight: inherit; font-style: inherit; }
+.de-code-print {
+  margin: 0;
+  font: 9pt/1.45 var(--de-src-font, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  color: var(--de-page-ink, #000);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 4;
+}

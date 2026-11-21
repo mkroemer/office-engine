@@ -1,7 +1,8 @@
 /**
  * Plain formats opened as Office files: CSV / TSV become a workbook, text / Markdown / HTML a document, an SVG file
  * and Mermaid / PlantUML / Graphviz diagrams a document with the picture (Markdown code blocks in those languages
- * are drawn too). A gzip-compressed plain file (.svgz, .csv.gz) is unpacked first.
+ * are drawn too), a source file (code) a document of its code, shown as code. A gzip-compressed plain file (.svgz,
+ * .csv.gz) is unpacked first.
  * Used by the engine (a source that is not an Office package) and by File → Open.
  */
 import { detectSeparator, markdownToHtml, parasToDocx, parseCsv, rowsToXlsx, textToParas, type ImportPara, type ImportRun } from './convert'
@@ -12,10 +13,12 @@ import { isSvg, svgImage } from './svgfile'
 import { dict } from './dict'
 import { composes, isWindows1258, knownEncoding } from './encoding'
 import { describeBinary, unreadText } from './filetype'
+import { CODE_EXT, CODE_MIME } from './syntax'
 
-export type PlainFormat = 'csv' | 'tsv' | 'text' | 'markdown' | 'html' | 'svg' | DiagramLang
+export type PlainFormat = 'csv' | 'tsv' | 'text' | 'markdown' | 'html' | 'svg' | DiagramLang | 'code'
 
 export const PLAIN_EXT: Record<string, PlainFormat> = dict({
+  ...Object.fromEntries(Object.keys(CODE_EXT).map((e) => [e, 'code' as const])),
   csv: 'csv',
   tsv: 'tsv',
   tab: 'tsv',
@@ -49,6 +52,7 @@ const PACKAGE_EXT = new Set([
 ])
 
 const MIME: Record<string, PlainFormat> = dict({
+  ...Object.fromEntries(Object.keys(CODE_MIME).map((m) => [m, 'code' as const])),
   'text/csv': 'csv',
   'application/csv': 'csv',
   'text/comma-separated-values': 'csv',
@@ -65,8 +69,8 @@ const MIME: Record<string, PlainFormat> = dict({
   'text/x-plantuml': 'plantuml',
 })
 
-/** formats shown with their source next to the document (and edited there) */
-export const HAS_SOURCE = new Set<PlainFormat>(['markdown', 'html', 'svg', 'mermaid', 'plantuml', 'graphviz'])
+/** formats whose text is kept to be shown: next to the document (and edited there), or (code) as the view itself */
+export const HAS_SOURCE = new Set<PlainFormat>(['markdown', 'html', 'svg', 'mermaid', 'plantuml', 'graphviz', 'code'])
 
 /** a file name extension and MIME type for each plain format (sources saved from the editor) */
 export const PLAIN_FILE: Record<PlainFormat, { ext: string; mime: string }> = {
@@ -79,6 +83,8 @@ export const PLAIN_FILE: Record<PlainFormat, { ext: string; mime: string }> = {
   mermaid: { ext: 'mmd', mime: 'text/plain' },
   plantuml: { ext: 'puml', mime: 'text/plain' },
   graphviz: { ext: 'dot', mime: 'text/vnd.graphviz' },
+  // (a source file keeps its own name)
+  code: { ext: 'txt', mime: 'text/plain' },
 }
 
 /** what a plain format opens as */
@@ -92,6 +98,7 @@ export const PLAIN_KIND: Record<PlainFormat, 'xlsx' | 'docx'> = {
   mermaid: 'docx',
   plantuml: 'docx',
   graphviz: 'docx',
+  code: 'docx',
 }
 
 export const extOf = (name?: string) => /\.([^./\\]+)$/.exec(name ?? '')?.[1].toLowerCase() ?? ''
@@ -221,9 +228,9 @@ function sniff(text: string, whole: boolean): PlainFormat {
 
 /**
  * The plain format of a file from its name, MIME type and first bytes (`whole`: they are the whole file), or null
- * for an Office / iWork package or a binary file.
+ * for an Office / iWork package or a binary file. `language` (a host's hint): a text file is source code in it.
  */
-export function plainFormat(name: string | undefined, type: string | undefined, head: Uint8Array, whole: boolean): PlainFormat | null {
+export function plainFormat(name: string | undefined, type: string | undefined, head: Uint8Array, whole: boolean, language?: string): PlainFormat | null {
   // ZIP (a package, whatever its name says); OLE: legacy binary Office or encrypted, the ZIP reader says so
   if ((head[0] === 0x50 && head[1] === 0x4b) || (head[0] === 0xd0 && head[1] === 0xcf)) return null
   const ext = extOf(name)
@@ -237,7 +244,7 @@ export function plainFormat(name: string | undefined, type: string | undefined, 
   }
   // a gzip-compressed plain file (.svgz, .csv.gz): the name inside says the format, also once the server has unpacked it
   const inner = unpackedName(name)
-  const byExt = PLAIN_EXT[ext] ?? (inner ? PLAIN_EXT[extOf(inner)] : undefined)
+  const byExt = language ? 'code' : PLAIN_EXT[ext] ?? (inner ? PLAIN_EXT[extOf(inner)] : undefined)
   if (isGzip(head)) {
     if (byExt) return byExt
     throw new Error(`${name ? `“${name}”` : 'The file'} is a gzip file: only gzip-compressed CSV / text / Markdown / HTML / SVG and diagram files open (.svgz, .csv.gz…)`)
@@ -280,7 +287,40 @@ function diagramParas(lang: DiagramLang, src: string): ImportPara[] {
   }
 }
 
-/** Markdown: the text, and code blocks in a diagram language (```mermaid, ```plantuml, ```dot) as drawings */
+/** a Markdown code fence: its indentation, its mark (three ` or ~ or more) and the first word of its info string */
+export interface Fence {
+  indent: number
+  mark: string
+  lang: string
+}
+
+/** the code fence a Markdown line opens, or null */
+export function fenceOf(line: string): Fence | null {
+  const m = /^([ \t]*)(`{3,}|~{3,})[ \t]*([^\s`]*)/.exec(line)
+  return m ? { indent: m[1].length, mark: m[2], lang: m[3] } : null
+}
+
+/** whether `line` closes the block `f` opened: its fence character, as many times or more, and nothing else */
+export function closesFence(line: string, f: Fence): boolean {
+  const t = line.trim()
+  if (t.length < f.mark.length) return false
+  for (let k = 0; k < t.length; k++) if (t[k] !== f.mark[0]) return false
+  return true
+}
+
+/** a code block: one paragraph of its exact lines (less the fence's indentation), its language kept for colors and saving */
+function codePara(f: Fence, body: string[]): ImportPara {
+  const text = body
+    .map((l) => {
+      let k = 0
+      while (k < f.indent && l[k] === ' ') k++
+      return l.slice(k)
+    })
+    .join('\n')
+  return { runs: text ? [{ text }] : [], code: f.lang }
+}
+
+/** Markdown: the text; code blocks as code paragraphs, those in a diagram language (```mermaid, ```plantuml, ```dot) as drawings */
 export function markdownParas(md: string, dom = true): ImportPara[] {
   const lines = md.replace(/^﻿/, '').split(/\r\n|\r|\n/)
   const out: ImportPara[] = []
@@ -290,19 +330,18 @@ export function markdownParas(md: string, dom = true): ImportPara[] {
     text = []
   }
   for (let i = 0; i < lines.length; i++) {
-    const fence = /^\s*(```|~~~)[`~]*\s*([\w-]*)/.exec(lines[i])
+    const fence = fenceOf(lines[i])
     if (!fence) {
       text.push(lines[i])
       continue
     }
-    // the block ends like markdownToHtml ends it: a line starting with the same fence
+    // the block ends at its closing fence, or with the file
     let j = i + 1
-    while (j < lines.length && !lines[j].trimStart().startsWith(fence[1])) j++
-    const lang = FENCE_LANG[fence[2].toLowerCase()]
-    if (lang) {
-      flush()
-      out.push(...diagramParas(lang, lines.slice(i + 1, j).join('\n')))
-    } else text.push(...lines.slice(i, j + 1))
+    while (j < lines.length && !closesFence(lines[j], fence)) j++
+    const lang = FENCE_LANG[fence.lang.toLowerCase()]
+    flush()
+    if (lang) out.push(...diagramParas(lang, lines.slice(i + 1, j).join('\n')))
+    else out.push(codePara(fence, lines.slice(i + 1, j)))
     i = j
   }
   flush()
@@ -345,8 +384,11 @@ function pictureDocx(paras: ImportPara[]): Promise<Blob> {
   return parasToDocx(paras, { landscape: wide })
 }
 
-/** Builds the workbook (CSV, TSV) or document (text, Markdown, HTML, SVG, diagrams) a plain file opens as; `name` names the sheet. */
-export function plainToOffice(text: string, format: PlainFormat, name = ''): Promise<Blob> {
+/**
+ * Builds the workbook (CSV, TSV) or document (text, Markdown, HTML, SVG, diagrams, code) a plain file opens as; `name`
+ * names the sheet, `language` is a source file's.
+ */
+export function plainToOffice(text: string, format: PlainFormat, name = '', language = ''): Promise<Blob> {
   switch (format) {
     case 'csv':
     case 'tsv': {
@@ -365,5 +407,10 @@ export function plainToOffice(text: string, format: PlainFormat, name = ''): Pro
     case 'plantuml':
     case 'graphviz':
       return pictureDocx(diagramParas(format, text))
+    case 'code': {
+      // one code paragraph (Download as Word); the code view shows the file's own text
+      const code = text.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
+      return parasToDocx([{ runs: code ? [{ text: code }] : [], code: language }])
+    }
   }
 }

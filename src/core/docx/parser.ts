@@ -291,7 +291,8 @@ export class Converter {
     const base = merge<RunStyle>(this.styles.docRs, layer?.rs, st.rs)
     const markRs = merge<RunStyle>(base, readRPr(kid(pPr, 'rPr'), this.theme))
     const sid = d.styleId ?? this.styles.defaultPara ?? ''
-    let cur: Paragraph = { t: 'p', ps, runs: [], markSz: markRs.sz, markFont: markRs.font, sid }
+    const code = this.styles.code(sid)
+    let cur: Paragraph = { t: 'p', ps, runs: [], markSz: markRs.sz, markFont: markRs.font, sid, ...(code !== undefined ? { code } : {}) }
     if (ps.pageBreakBefore) cur.pb = true
     let lst: 'bullet' | 'number' | undefined
     if (level && numPr) {
@@ -352,7 +353,7 @@ export class Converter {
         else runs.splice(i, 1, { ...last, text: last.text.slice(0, -1) }, { ...last, text: last.text.slice(-1), cm })
       },
       pageBreak: () => {
-        cur = { t: 'p', ps, runs: [], markSz: markRs.sz, markFont: markRs.font, pb: true, sid }
+        cur = { t: 'p', ps, runs: [], markSz: markRs.sz, markFont: markRs.font, pb: true, sid, ...(code !== undefined ? { code } : {}) }
         if (pid !== undefined) cur.pid = pid
         parts.push(cur)
       },
@@ -782,6 +783,8 @@ export interface DocxStreamCallbacks {
 export interface PInfo extends ParaRecord {
   item: number
   ord: number
+  /** a paragraph of a table the editor regenerates: the XML it was last converted from (not converted again while the same) */
+  xml?: string
 }
 
 /** Splits document.xml into prefix / body items / suffix while streaming, keeping exact source text. */
@@ -878,6 +881,12 @@ export class DocxDocument {
   genXml = new Map<number, string>()
   /** whole body items replaced by the editor (regenerated tables; '' = deleted) */
   itemXml = new Map<number, string>()
+  /**
+   * The paragraphs of the tables the editor regenerates, in document order (list numbering counts them there): a table
+   * of the file by its body item (none once deleted), a new one by its id (placed in a paragraph group).
+   */
+  itemTables = new Map<number, number[]>()
+  newTables = new Map<number, number[]>()
   /** styles the editor changed → their definition in the file as opened (parsed, and as source) */
   styleOrig = new Map<string, { x: XEl; raw: RNode }>()
   /** page setup of the final section as opened, and the changes made to it (written to every section on save) */
@@ -1117,32 +1126,37 @@ export class DocxDocument {
   recomputeMarkers(): Map<number, PInfo> {
     const changed = new Map<number, PInfo>()
     this.numbering.reset()
+    const visit = (pid: number) => {
+      const inf = this.info.get(pid)
+      if (!inf) return
+      let next: ListMarker | undefined
+      let lst: 'bullet' | 'number' | undefined
+      if (inf.num) {
+        const base = inf.marker?.s ?? {}
+        const m = markerOf(this.numbering, inf.num, base)
+        if (m) {
+          next = { ...m.marker, s: inf.marker?.s ?? m.marker.s }
+          lst = m.lst
+        }
+      }
+      if ((next?.text ?? null) !== (inf.marker?.text ?? null) || lst !== inf.lst) {
+        inf.marker = next
+        inf.lst = lst
+        changed.set(pid, inf)
+      }
+    }
     const items = [...this.itemParas.keys()].sort((a, b) => a - b)
     for (const item of items) {
+      const regenerated = this.itemTables.get(item)
+      if (regenerated) {
+        regenerated.forEach(visit)
+        continue
+      }
       const arr = this.itemParas.get(item)!
       for (let ord = 0; ord < arr.length; ord++) {
         const pid0 = arr[ord]
         if (pid0 === undefined) continue
-        const pids = this.groups.get(`${item}:${ord}`) ?? [pid0]
-        for (const pid of pids) {
-          const inf = this.info.get(pid)
-          if (!inf) continue
-          let next: ListMarker | undefined
-          let lst: 'bullet' | 'number' | undefined
-          if (inf.num) {
-            const base = inf.marker?.s ?? {}
-            const m = markerOf(this.numbering, inf.num, base)
-            if (m) {
-              next = { ...m.marker, s: inf.marker?.s ?? m.marker.s }
-              lst = m.lst
-            }
-          }
-          if ((next?.text ?? null) !== (inf.marker?.text ?? null) || lst !== inf.lst) {
-            inf.marker = next
-            inf.lst = lst
-            changed.set(pid, inf)
-          }
-        }
+        for (const pid of this.groups.get(`${item}:${ord}`) ?? [pid0]) (this.newTables.get(pid) ?? [pid]).forEach(visit)
       }
     }
     return changed

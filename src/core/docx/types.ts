@@ -157,6 +157,11 @@ export interface Paragraph {
   /** list kind + level when numbered */
   lst?: 'bullet' | 'number'
   ilvl?: number
+  /**
+   * A code block (its paragraph style is "Source Code", or "Source Code (<language>)"): the language its code is
+   * colored in when shown ('' : none) and written back with, as a Markdown fence. The colors are never in the runs.
+   */
+  code?: string
   // ---- editor bookkeeping (main thread) ----
   /** template paragraph (original pid) */
   from?: number
@@ -234,6 +239,8 @@ export interface TableOp {
   anchor?: number
   /** null deletes the table */
   spec: TableSpec | null
+  /** paragraphs of the table whose re-converted blocks to return (after style / list changes), as `EditOp.want` */
+  want?: number[]
 }
 
 export interface EditOp {

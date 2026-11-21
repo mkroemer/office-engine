@@ -55,7 +55,8 @@ The app reads `DocViewer` props from the query string (`?src=samples/sample.docx
 | `file-menu.spec.ts`   | every File entry: New, Open (conversions), Import, Save, Rename, Download as, Details, Print      |
 | `permissions.spec.ts` | `allowSave` / `allowDownload` combinations, image download, Ctrl+S / Ctrl+P                       |
 | `color.spec.ts`       | custom colors (system picker, recent list, persistence) in the 3 formats                          |
-| `embed.spec.ts`       | `<office-viewer>` (shadow DOM, attributes, `file`) and `mount()`                                  |
+| `embed.spec.ts`       | `<office-viewer>` (shadow DOM, attributes, `file`, `fonts`) and `mount()`                         |
+| `fonts.spec.ts`       | host fonts (a generated test font): loaded before measuring, timeout, failure, late web fonts     |
 | `collab.spec.ts`      | two editors on `scripts/collab-server.ts`: live edits, presence, File menu in a room              |
 
 `bun test` only runs `test/` (`bunfig.toml`); `bun run test:e2e` runs `e2e/`.

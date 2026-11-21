@@ -1,4 +1,18 @@
 /** Cells as text on the clipboard: tab separated, a line per row, as spreadsheet programs write and read them. */
+import { translateFormula } from './formula'
+import type { ClipCell } from './types'
+
+/**
+ * A copied cell repeated `dr` rows and `dc` columns further than the first copy of a block (the worker moves every
+ * formula by the distance of the first block): its formula moved by what is left. The rest is as copied, the flag
+ * of a dynamic array formula with it.
+ */
+export function shiftedClip(cell: ClipCell, dr: number, dc: number): ClipCell {
+  if (!cell || cell[3] === undefined || (!dr && !dc)) return cell
+  const out: NonNullable<ClipCell> = [...cell]
+  out[3] = translateFormula(cell[3], dr, dc)
+  return out
+}
 
 /** a cell written for other programs: quoted when it holds what separates cells and rows there */
 export const tsvCell = (s: string) => (/["\t\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s)
