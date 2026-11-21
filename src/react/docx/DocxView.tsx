@@ -222,13 +222,16 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   const first = tops.length ? lowerIndex(tops, scroll.y - pageH * z) : 0
   const last = tops.length ? lowerIndex(tops, scroll.y + size.h + 200) : -1
   // measured again for a font: the first block in view stays where it is on screen, until the measuring is done or the
-  // reader scrolls. Placed by the model (blocks stacked from the top margin, a block begun on the page before by the
-  // part of it on this page): the text on screen may already be in the new font while the pages are not
+  // reader scrolls. Found by the model (blocks stacked from the top margin, a block begun on the page before by the part
+  // of it on this page): the text on screen is already in the new font while the pages are not. Put back by what is
+  // drawn once it is: the model's heights are measured at zoom 1, and a page at another zoom rounds its lines a little
+  // differently, which adds up over the blocks above
   const anchor = useRef<{ gen: number; bi: number; dy: number; y: number } | null>(null)
   useIsoLayoutEffect(() => {
     const sc = scrollRef.current
+    const root = pagesRef.current
     const a = anchor.current
-    if (!sc || !tops.length) return
+    if (!sc || !root || !tops.length) return
     /** the height block `bi` takes on page `pi`: one begun on the page before, from the cut (its space after kept) */
     const partH = (pi: number, bi: number) => {
       const b = st.blocks[bi]
@@ -251,9 +254,13 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
       anchor.current = { gen: fonts.gen, bi, dy: blockTop(pi, bi) - y, y }
     } else if (a && Math.abs(sc.scrollTop - a.y) <= 1) {
       const pi = pages.findIndex((p) => a.bi >= p.start && a.bi < p.end)
-      if (pi >= 0) sc.scrollTop = Math.max(0, blockTop(pi, a.bi) - a.dy)
+      // the first part of the block as drawn; not there while where its lines start is read, or when its page is out of view
+      const el = root.querySelector<HTMLElement>(`[data-pa="${a.bi}"]:not([data-from])`)
+      if (el) sc.scrollTop = Math.max(0, sc.scrollTop + el.getBoundingClientRect().top - sc.getBoundingClientRect().top - a.dy)
+      else if (pi >= 0) sc.scrollTop = Math.max(0, blockTop(pi, a.bi) - a.dy)
       a.y = sc.scrollTop
-      if (again.current.next < 0) anchor.current = null
+      // (released once the block is placed by what is drawn)
+      if (again.current.next < 0 && el) anchor.current = null
     } else anchor.current = null
   })
   const pageCount = complete ? pages.length : 0
