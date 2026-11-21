@@ -1,11 +1,13 @@
-import { memo, type CSSProperties, type PointerEvent as RPointerEvent, type ReactNode } from 'react'
+import { createElement, memo, useMemo, type CSSProperties, type PointerEvent as RPointerEvent, type ReactElement, type ReactNode } from 'react'
 import { cssColor } from '../../core/color'
-import type { Block, Inline, Paragraph, ParaStyle, RunStyle, Table, TableCell, TrackMark } from '../../core/docx/types'
+import type { Block, Inline, Paragraph, ParaStyle, RunStyle, Table, TableCell, TexMath, TrackMark } from '../../core/docx/types'
+import { texToMathml, type MNode } from '../../core/math/tex'
 import { safeHref } from '../../core/url'
 import type { DocumentClient } from '../../core/worker/client'
 import { useMediaUrl } from '../common/hooks'
 import { dict } from '../../core/dict'
 import { gridOf, type GridCell } from './tables'
+import { highlight, languageOf, type Token } from '../../core/syntax'
 
 export interface RenderCtx {
   client: DocumentClient
@@ -120,7 +122,84 @@ function Img({ ctx, target, w, h, alt }: { ctx: RenderCtx; target: string; w: nu
   return <img src={url} alt={alt ?? ''} style={{ ...size, verticalAlign: 'bottom', display: 'inline-block' }} draggable={false} />
 }
 
-function InlineView({ x, ctx, o }: { x: Inline; ctx: RenderCtx; o: number }): ReactNode {
+/** a MathML tree as elements (React puts them in the MathML namespace under `math`) */
+function mathEl(n: MNode, key?: number): ReactElement {
+  return createElement(n.t, { key, ...n.a }, n.x ?? n.k?.map(mathEl))
+}
+
+/**
+ * A TeX formula, drawn by the browser from its MathML (selectable, read by screen readers, printed); the TeX rides
+ * along as an annotation. A formula that cannot be drawn shows its source, its reason as the tooltip.
+ */
+function MathView({ math, sz, attrs }: { math: TexMath; sz?: number; attrs: { title?: string } }) {
+  const display = math.delim === '$$'
+  const { node, error } = useMemo(() => texToMathml(math.tex, display), [math.tex, display])
+  return (
+    <span {...attrs} className="de-math" data-display={display ? '' : undefined} data-error={error ? '' : undefined} title={error ?? attrs.title} style={sz ? { fontSize: `${sz}pt` } : undefined}>
+      {mathEl(node)}
+    </span>
+  )
+}
+
+/** a code block longer than this is shown without colors */
+const CODE_COLORED = 50_000
+
+interface CodeTokens {
+  toks: Token[]
+  /** where each token starts in the paragraph's text */
+  starts: number[]
+}
+
+/**
+ * the colors of a code paragraph's text, worked out once per paragraph and text (an edit makes a new paragraph; its
+ * unchanged lines come from the tokenizer's cache)
+ */
+const codeCache = new WeakMap<Paragraph, { key: string; r: CodeTokens | null }>()
+
+function codeTokens(p: Paragraph): CodeTokens | null {
+  // objects count as one character, as they do for the caret
+  const text = p.runs.map((x) => (x.t === 'text' ? x.text : '\uFFFC')).join('')
+  const key = `${p.code}\u0000${text}`
+  const hit = codeCache.get(p)
+  if (hit?.key === key) return hit.r
+  let r: CodeTokens | null = null
+  if (languageOf(p.code) && text.length <= CODE_COLORED) {
+    const toks = highlight(p.code, text, CODE_COLORED)
+    const starts: number[] = []
+    let at = 0
+    for (const t of toks) {
+      starts.push(at)
+      at += t[1].length
+    }
+    r = { toks, starts }
+  }
+  codeCache.set(p, { key, r })
+  return r
+}
+
+/** the colored pieces of the text [a, b) of a code paragraph: only drawn, the run stays as it is */
+function codePieces(c: CodeTokens, a: number, b: number): ReactNode[] {
+  const { toks, starts } = c
+  let lo = 0
+  let hi = toks.length - 1
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1
+    if (starts[mid] <= a) lo = mid
+    else hi = mid - 1
+  }
+  const out: ReactNode[] = []
+  for (let k = lo; k < toks.length && starts[k] < b; k++) {
+    const [cls, t] = toks[k]
+    const s = Math.max(a, starts[k])
+    const e = Math.min(b, starts[k] + t.length)
+    if (e <= s) continue
+    const piece = t.slice(s - starts[k], e - starts[k])
+    out.push(cls ? <span key={k} className={`de-tk-${cls}`}>{piece}</span> : piece)
+  }
+  return out
+}
+
+function InlineView({ x, ctx, o, pieces }: { x: Inline; ctx: RenderCtx; o: number; pieces?: ReactNode[] }): ReactNode {
   // an object inside a tracked change: outlined in the author's colour (dimmed when deleted)
   const objTc = x.t !== 'text' ? x.tc : undefined
   const obj = {
@@ -140,7 +219,7 @@ function InlineView({ x, ctx, o }: { x: Inline; ctx: RenderCtx; o: number }): Re
           data-tc={tc?.k}
           title={tc ? `${tc.k === 'ins' ? 'Inserted' : 'Deleted'}${tc.author ? ` by ${tc.author}` : ''}${tc.date ? ` · ${new Date(tc.date).toLocaleString()}` : ''}` : undefined}
         >
-          {x.text}
+          {pieces ?? x.text}
         </span>
       )
       const href = ctx.measuring || ctx.editable ? undefined : safeHref(x.href)
@@ -161,6 +240,7 @@ function InlineView({ x, ctx, o }: { x: Inline; ctx: RenderCtx; o: number }): Re
       )
     }
     case 'ref':
+      if (x.math) return <MathView attrs={obj} math={x.math} sz={x.s.sz} />
       return (
         <span {...obj} style={runCss(x.s)}>
           {x.text}
@@ -226,22 +306,30 @@ function ParaView({ p, ctx, pa, sp, from = 0, to, height }: { p: Paragraph; ctx:
     style.height = height
   }
   const editable = ctx.editable && pa !== undefined
+  // a code block: its text colored by its language (not while measuring: colors do not change the layout)
+  const code = p.code !== undefined && !ctx.measuring ? codeTokens(p) : null
   let o = 0
   const runs: ReactNode[] = []
   p.runs.forEach((x, i) => {
     const n = x.t === 'text' ? x.text.length : 1
     const a = Math.max(from, o)
     const b = Math.min(to ?? Infinity, o + n)
-    if (b > a || (n === 0 && first && last)) runs.push(<InlineView key={i} x={x.t === 'text' && (a > o || b < o + n) ? { ...x, text: x.text.slice(a - o, b - o) } : x} ctx={ctx} o={a} />)
+    if (b > a || (n === 0 && first && last)) {
+      // (a tracked change keeps its author's color)
+      const pieces = code && x.t === 'text' && !x.tc ? codePieces(code, a, b) : undefined
+      runs.push(<InlineView key={i} x={x.t === 'text' && (a > o || b < o + n) ? { ...x, text: x.text.slice(a - o, b - o) } : x} ctx={ctx} o={a} pieces={pieces} />)
+    }
     o += n
   })
   return (
     <div
-      className={!last && p.ps.align === 'justify' ? 'de-p de-just' : 'de-p'}
+      className={`${p.code !== undefined ? 'de-p de-code' : 'de-p'}${!last && p.ps.align === 'justify' ? ' de-just' : ''}`}
       style={style}
       data-pa={pa}
       data-from={first ? undefined : from}
       data-to={to}
+      data-code={p.code}
+      spellCheck={p.code !== undefined ? false : undefined}
       contentEditable={ctx.editable && !editable ? false : undefined}
     >
       {first && p.marker && (
@@ -294,9 +382,10 @@ function TableView({ t, ctx, pa, from = 0, to, head = 0 }: { t: Table; ctx: Rend
   else if (t.indL) style.marginLeft = `${t.indL}pt`
   const end = Math.min(to ?? t.rows.length, t.rows.length)
   const cut = from > 0 || end < t.rows.length
-  const cellView = (c: TableCell, ri: number, ci: number, rowSpan: number, copy: boolean, rest = false) => (
+  // (a continued merged cell is keyed by its grid column: two of them in one row may come from the same cell index of different rows)
+  const cellView = (c: TableCell, ri: number, ci: number, rowSpan: number, copy: boolean, rest = false, gcol = ci) => (
     <td
-      key={rest ? `m${ci}` : ci}
+      key={rest ? `m${gcol}` : ci}
       colSpan={c.colSpan > 1 ? c.colSpan : undefined}
       rowSpan={rowSpan > 1 ? rowSpan : undefined}
       contentEditable={rest && ctx.editable ? false : undefined}
@@ -333,7 +422,7 @@ function TableView({ t, ctx, pa, from = 0, to, head = 0 }: { t: Table; ctx: Rend
       for (const gc of gridRowsOf(t)[ri]) at.push({ g: gc.g, node: cellView(gc.cell, ri, gc.ci, Math.min(gc.cell.rowSpan, limit - ri), copy) })
       // merged cells from the page before go on here, empty
       if (!copy && ri === from)
-        for (const gc of gridCached(t).cells) if (gc.ri < from && gc.ri + gc.cell.rowSpan > from) at.push({ g: gc.g, node: cellView(gc.cell, ri, gc.ci, Math.min(gc.ri + gc.cell.rowSpan, limit) - ri, false, true) })
+        for (const gc of gridCached(t).cells) if (gc.ri < from && gc.ri + gc.cell.rowSpan > from) at.push({ g: gc.g, node: cellView(gc.cell, ri, gc.ci, Math.min(gc.ri + gc.cell.rowSpan, limit) - ri, false, true, gc.g) })
       cells = at.sort((a, b) => a.g - b.g).map((x) => x.node)
     }
     return (

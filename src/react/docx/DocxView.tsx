@@ -26,6 +26,8 @@ import { docxBodyHtml, docxToHtml, docxToMarkdown, docxToText, pictureData } fro
 import { BlockView, contextual, type RenderCtx } from './render'
 import { columnsOf, headOf, pageAt, pageHF, pagesOf, paginate, pieceOf, type Lines, type PageSlice } from './paginate'
 import { lineStarts, paraLines, tableLines } from './measure'
+import { docxFonts, docxPageFonts } from '../../core/fonts'
+import { useDocFonts } from '../common/fonts'
 
 const PX = 4 / 3
 const GAP = 16
@@ -219,6 +221,40 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
 
   const first = tops.length ? lowerIndex(tops, scroll.y - pageH * z) : 0
   const last = tops.length ? lowerIndex(tops, scroll.y + size.h + 200) : -1
+  // measured again for a font: the first block in view stays where it is on screen, until the measuring is done or the
+  // reader scrolls. Placed by the model (blocks stacked from the top margin, a block begun on the page before by the
+  // part of it on this page): the text on screen may already be in the new font while the pages are not
+  const anchor = useRef<{ gen: number; bi: number; dy: number; y: number } | null>(null)
+  useIsoLayoutEffect(() => {
+    const sc = scrollRef.current
+    const a = anchor.current
+    if (!sc || !tops.length) return
+    /** the height block `bi` takes on page `pi`: of one begun on the page before, its lines / rows from the cut */
+    const partH = (pi: number, bi: number) => {
+      const b = st.blocks[bi]
+      const from = bi === pages[pi].start ? pages[pi].from : 0
+      const l = from ? st.lines.get(b) : undefined
+      return l ? l.ys[l.ys.length - 1] - l.ys[from] : (st.heights.get(b) ?? 0)
+    }
+    const blockTop = (pi: number, bi: number) => {
+      let y = tops[pi] + page.mt * PX * z
+      for (let i = pages[pi].start; i < bi; i++) y += partH(pi, i) * z
+      return y
+    }
+    if (again.current.next === 0 && a?.gen !== fonts.gen) {
+      // (nothing measured again yet: these are the pages the reader sees)
+      const y = sc.scrollTop
+      const pi = lowerIndex(tops, y)
+      let bi = pages[pi].start
+      while (bi < pages[pi].end - 1 && blockTop(pi, bi + 1) <= y) bi++
+      anchor.current = { gen: fonts.gen, bi, dy: blockTop(pi, bi) - y, y }
+    } else if (a && Math.abs(sc.scrollTop - a.y) <= 1) {
+      const pi = pages.findIndex((p) => a.bi >= p.start && a.bi < p.end)
+      if (pi >= 0) sc.scrollTop = Math.max(0, blockTop(pi, a.bi) - a.dy)
+      a.y = sc.scrollTop
+      if (again.current.next < 0) anchor.current = null
+    } else anchor.current = null
+  })
   const pageCount = complete ? pages.length : 0
   // Both ends of the selection stay mounted, so the DOM selection survives scrolling. A removed page moves its end of
   // the range to the pages container, and a page mounted again there lands after that point: outside a range that ends on it.
@@ -275,12 +311,23 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   for (const [b, i] of allUnread) enqueue(b, i, true)
   const tailEnd = Math.min(total, st.frontier + batch)
   for (let i = st.frontier; i < tailEnd; i++) enqueue(st.blocks[i], i)
+  // ---- fonts: blocks are measured once the host's fonts they are set in are ready (loaded, failed or timed out). A
+  // font that arrives later (one that timed out, the page's own web font) has the measured blocks measured again in
+  // slices, their old heights and lines kept meanwhile: the pages stay, and so do the caret and the page in view ----
+  const fonts = useDocFonts()
+  const again = useRef({ gen: fonts.gen, next: -1 })
+  if (again.current.gen !== fonts.gen) again.current = { gen: fonts.gen, next: st.frontier > 0 ? 0 : -1 }
+  const againFrom = again.current.next
+  const againTo = st.frontier
+  const againEnd = againFrom < 0 ? -1 : Math.min(againTo, againFrom + batch)
+  for (let i = Math.max(0, againFrom); i < againEnd; i++) if (!st.dirty.has(st.blocks[i])) enqueue(st.blocks[i], i)
+  const fontsReady = !queue.length || !meta || fonts.ready(docxFonts(queue.map((q) => q.b), docxPageFonts(meta)))
   const renderStart = performance.now()
   const measureCtx = useMemo<RenderCtx>(() => ({ client, page: -1, pages: 0, measuring: true, editable: false }), [client])
 
   useIsoLayoutEffect(() => {
     const el = measureRef.current
-    if (!el || !queue.length || !meta) return
+    if (!el || !queue.length || !meta || !fontsReady) return
     const res = queue.map((q, k) => {
       const c = el.children[k] as HTMLElement | undefined
       let l: Lines | undefined
@@ -304,6 +351,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
         st.dirty.delete(q.b)
       })
       if (tailEnd > st.frontier) st.frontier = tailEnd
+      if (againEnd >= 0) again.current.next = againEnd >= againTo ? -1 : againEnd
       setBatch((b) => (dt < 10 ? Math.min(b * 2, 1500) : dt > 30 ? Math.max(10, b >> 1) : b))
       bump()
     }
@@ -892,7 +940,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
           }
         }}
       >
-        {meta && queue.length > 0 && (
+        {meta && queue.length > 0 && fontsReady && (
           <div ref={measureRef} className="de-measure de-doc" style={{ ...docStyle, width: `${contentW}pt` }}>
             {queue.map(({ b, i }) => (
               <BlockView key={i} block={b} ctx={measureCtx} sp={contextual(b, st.blocks[i - 1], st.blocks[i + 1])} />

@@ -75,16 +75,22 @@ describe('keepLines / widowControl', () => {
     ])
   })
 
-  test('RTF and Word 97 files: widow control only where the file has it (their paragraphs have none unless said)', async () => {
-    const rtf = String.raw`{\rtf1\ansi\deff0{\fonttbl{\f0 Times New Roman;}}` + '\n' + String.raw`\pard plain\par\pard\widctlpar kept\par\pard\nowidctlpar off\par}`
-    const r = await open(new Blob([rtf], { type: 'application/rtf' }))
+  test('RTF: widow control with \\widctlpar, or for the document with \\widowctrl; Word 97: unless the paragraph turns it off', async () => {
+    const head = String.raw`{\rtf1\ansi\deff0{\fonttbl{\f0 Times New Roman;}}`
+    const body = String.raw`\pard plain\par\pard\widctlpar kept\par\pard\nowidctlpar off\par}`
+    const r = await open(new Blob([head + '\n' + body], { type: 'application/rtf' }))
     expect(r.paras.map(text)).toEqual(['plain', 'kept', 'off'])
     expect(r.paras.map((p) => p.ps.widowControl)).toEqual([false, true, false])
+    // \widowctrl: on for the document, so a plain paragraph has it (nothing written: on is the default) and only \nowidctlpar says no
+    const all = await open(new Blob([head + String.raw`\widowctrl` + '\n' + body], { type: 'application/rtf' }))
+    expect(all.paras.map((p) => p.ps.widowControl)).toEqual([undefined, undefined, false])
+    // Word 97: a paragraph has it unless its sprm says 0 (fWidowControl defaults to 1)
     const d = new DocBuilder()
     d.p('plain')
+    d.p('off', 0, sprm(0x2431, 0))
     d.p('kept', 0, sprm(0x2431, 1))
     const w = await open(new Blob([d.build() as Uint8Array<ArrayBuffer>]))
-    expect(w.paras.map(text)).toEqual(['plain', 'kept'])
-    expect(w.paras.map((p) => p.ps.widowControl)).toEqual([false, true])
+    expect(w.paras.map(text)).toEqual(['plain', 'off', 'kept'])
+    expect(w.paras.map((p) => p.ps.widowControl)).toEqual([undefined, false, undefined])
   })
 })

@@ -36,6 +36,10 @@ export interface RichHost<P extends RichPara = RichPara> {
   tab?(sel: Sel, shift: boolean): boolean
   /** Enter in an empty paragraph (e.g. leave a list); true when handled */
   enterAtEmpty?(pa: string, p: P): boolean
+  /** line breaks stay inside this paragraph (a code block): Enter and pasted lines make "\n", not paragraphs */
+  keepsLines?(p: P): boolean
+  /** Enter on the empty last line of such a paragraph: leave it for a new paragraph; true when handled */
+  leaveLines?(pa: string, p: P): boolean
   /** ArrowRight / ArrowLeft with a caret that may have to leave a container (a table); true when handled */
   arrow?(sel: Sel, dir: 1 | -1): boolean
   /** copy / cut: puts the selection on the clipboard from the model; true when handled (the browser's own copy is skipped) */
@@ -56,6 +60,8 @@ export interface RichHost<P extends RichPara = RichPara> {
   all?(): Sel | null
   /** deletes a range that spans other blocks (tables): applies the change and returns the caret, or null when unsupported */
   deleteAcross?(s: Pos, e: Pos): Pos | null
+  /** an IME composition ended and its text was put in: what waited for the end of it can be applied */
+  composed?(): void
 }
 
 const NAV = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'])
@@ -155,9 +161,11 @@ export function opInsert(host: RichHost, sel: Sel, text: string, opts?: ReplaceO
   const p = plan.paras[0]
   const o = plan.at.o
   const lines = text.replace(/\r\n?/g, '\n').split('\n')
-  if (lines.length === 1 || opts?.label === 'linebreak') {
-    const runs = insertText(p.runs, o, text, style, host.defaultRun?.(p))
-    host.replace(plan.pas, [host.withRuns(p, runs)], caret({ pa: plan.at.pa, o: o + text.length }), { label: 'type', ...opts })
+  if (lines.length === 1 || opts?.label === 'linebreak' || host.keepsLines?.(p)) {
+    // (a code block keeps pasted lines as its own)
+    const t = lines.length > 1 ? lines.join('\n') : text
+    const runs = insertText(p.runs, o, t, style, host.defaultRun?.(p))
+    host.replace(plan.pas, [host.withRuns(p, runs)], caret({ pa: plan.at.pa, o: o + t.length }), { label: 'type', ...opts })
     return
   }
   const base = (style ? { ...(runAt(p.runs, o) ?? host.defaultRun?.(p) ?? {}), ...style } : undefined) as RRun | undefined
@@ -173,6 +181,16 @@ export function opEnter(host: RichHost, sel: Sel) {
   const p = plan.paras[0]
   // Enter in an empty paragraph of a list ends the list (Word, Docs)
   if (collapsed(sel) && !plen(p.runs) && host.enterAtEmpty?.(sel.a.pa, p)) return
+  if (host.keepsLines?.(p)) {
+    // a code block: a new line, indented as the one before; on an empty last line, out of the block
+    const text = runsText(p.runs)
+    const o = plan.at.o
+    if (collapsed(sel) && o === text.length && text.endsWith('\n') && host.leaveLines?.(sel.a.pa, p)) return
+    const start = text.lastIndexOf('\n', o - 1) + 1
+    const indent = collapsed(sel) ? /^[ \t]*/.exec(text.slice(start, o))![0] : ''
+    opInsert(host, sel, '\n' + indent, { label: 'linebreak' })
+    return
+  }
   const [l, r] = splitRuns(p.runs, plan.at.o)
   const [a, b] = host.split(p, l, r, plan.at.o >= plen(p.runs))
   host.replace(plan.pas, [a, b], caret({ pa: shiftPa(plan.at.pa, 1), o: 0 }), { label: 'enter' })
@@ -313,6 +331,13 @@ export function posFromDom(root: HTMLElement, node: Node, offset: number): Pos |
       o += t.textContent?.length ?? 0
     }
     return { pa, o: base + o }
+  }
+  // an element inside the run (a code block's colored token): the text of the run before that point
+  if (node !== span) {
+    const r = (node.ownerDocument ?? document).createRange()
+    r.setStart(span, 0)
+    r.setEnd(node, offset)
+    return { pa, o: base + r.toString().length }
   }
   // offset is a child index inside the span
   let o = 0
@@ -670,6 +695,7 @@ export class RichInput {
     if (e.data) opInsert(this.host, sel, e.data, { remount: true })
     else opInsert(this.host, sel, '', { remount: true })
     setTimeout(() => (this.justComposed = ''), 0)
+    this.host.composed?.()
   }
 
   private onKeyDown = (e: KeyboardEvent) => {

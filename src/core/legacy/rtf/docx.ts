@@ -31,11 +31,12 @@ export function packDocx(r: RtfReader): Promise<Blob> {
   // styles: the document defaults, then the stylesheet's styles
   const st = r.styles
   const dRPr = rPrSet(r.tables, st.defChp)
-  // (an RTF paragraph has widow control only with \widctlpar; OOXML without it means on, as Word reads it)
+  // (an RTF paragraph has widow control only with \widowctrl (the document) or \widctlpar; OOXML without it means on)
+  const dPPr = st.defPap.widctl ? '' : '<w:widowControl w:val="0"/>'
   add(
     'word/styles.xml',
     'styles',
-    `${XML_HEAD}<w:styles ${NS}><w:docDefaults><w:rPrDefault><w:rPr>${dRPr}</w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:widowControl w:val="0"/></w:pPr></w:pPrDefault></w:docDefaults>${st.xml()}</w:styles>`,
+    `${XML_HEAD}<w:styles ${NS}><w:docDefaults><w:rPrDefault><w:rPr>${dRPr}</w:rPr></w:rPrDefault><w:pPrDefault><w:pPr>${dPPr}</w:pPr></w:pPrDefault></w:docDefaults>${st.xml()}</w:styles>`,
   )
   doc.rel('styles', 'styles.xml')
 
