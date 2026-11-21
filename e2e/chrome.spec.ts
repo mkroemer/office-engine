@@ -76,9 +76,14 @@ describe('host-placed controls around a headless viewer', () => {
     await size.fill('12,5')
     await size.press('Enter')
     await until(v, 's.format?.size === 12.5')
-    await size.fill('17pt')
-    await size.press('Enter')
-    expect(await size.inputValue()).toBe('12,5')
+    for (const [text, key] of [['17pt', 'Enter'], ['20', 'Escape']]) {
+      await size.fill(text)
+      await size.press(key)
+      await v.page.waitForFunction(() => document.getSelection()?.toString() === 'document')
+      await v.page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+      expect(await size.inputValue()).toBe('12,5')
+      expect(await v.page.evaluate(() => window.__ctl.snapshot().format?.size)).toBe(12.5)
+    }
     await v.page.evaluate(() => window.__ctl.save())
     const saved = await v.waitEvent('save')
     const runs = (await docxParas(fromB64(saved.b64 as string))).flatMap(runsOf)

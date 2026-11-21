@@ -418,6 +418,16 @@ export function selPoints(root: HTMLElement): SelPoints | null {
 
 // ---------------------------------------------------------------- controller
 
+const attachedInputs = new WeakMap<HTMLElement, RichInput>()
+
+/** Return keyboard focus from a toolbar field to the editor's current model selection. */
+export function focusWithSelection(element: HTMLElement) {
+  const input = attachedInputs.get(element)
+  const selection = input?.formatSelection()
+  element.focus({ preventScroll: true })
+  if (selection) input?.restore(selection)
+}
+
 export class RichInput {
   root: HTMLElement | null = null
   private composing: Sel | null = null
@@ -462,6 +472,7 @@ export class RichInput {
     if (this.attachedRoot !== root) this.clearSelection()
     this.attachedRoot = root
     this.root = root
+    attachedInputs.set(root, this)
     root.addEventListener('beforeinput', this.onBeforeInput)
     root.addEventListener('compositionstart', this.onCompStart)
     root.addEventListener('compositionend', this.onCompEnd)
@@ -480,6 +491,7 @@ export class RichInput {
   detach() {
     const r = this.root
     if (!r) return
+    if (attachedInputs.get(r) === this) attachedInputs.delete(r)
     r.removeEventListener('beforeinput', this.onBeforeInput)
     r.removeEventListener('compositionstart', this.onCompStart)
     r.removeEventListener('compositionend', this.onCompEnd)
