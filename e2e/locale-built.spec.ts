@@ -1,14 +1,16 @@
 /** Production-artifact checks: run `bun run build` first, as CI does before browser tests. */
-import { beforeAll, describe, expect, test } from 'bun:test'
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { parasToDocx, rowsToXlsx } from '../src/core/convert'
 import { unzipSync, zipSync, strFromU8, strToU8 } from 'fflate'
 import { useBrowser, viewer, type Viewer, SAMPLES } from './harness'
 
+import { builtModule, useBuiltPackage } from './built-package'
+
+useBuiltPackage()
 useBrowser()
-const packageRoot = process.env.BUILT_PACKAGE_ROOT ?? process.cwd()
-const pkg = `/@fs${packageRoot}/dist/index.js`
-const german = `/@fs${packageRoot}/dist/locales/de.js`
+const pkg = builtModule('index.js')
+const german = builtModule('locales/de.js')
 
 /** Load the emitted package in a real browser, sharing the fixture's React runtime. */
 async function mount(v: Viewer, props: Record<string, unknown> = {}, outerGerman = false) {
@@ -57,20 +59,6 @@ function emfDeck() {
   files['[Content_Types].xml'] = strToU8(strFromU8(files['[Content_Types].xml']).replace('</Types>', '<Default Extension="emf" ContentType="image/x-emf"/></Types>'))
   return Buffer.from(zipSync(files))
 }
-
-// Refuse missing or stale local output rather than silently skipping or testing an old bundle.
-function newestSource(path: string): number {
-  return Math.max(...readdirSync(path, { withFileTypes: true }).map((entry) => {
-    const file = `${path}/${entry.name}`
-    return entry.isDirectory() ? newestSource(file) : statSync(file).mtimeMs
-  }))
-}
-beforeAll(() => {
-  expect(existsSync(`${packageRoot}/dist/index.js`), 'Run bun run build before browser tests').toBe(true)
-  if (!process.env.BUILT_PACKAGE_ROOT) {
-    expect(statSync(`${packageRoot}/dist/index.js`).mtimeMs, 'dist is stale; run bun run build').toBeGreaterThanOrEqual(newestSource(`${packageRoot}/src`))
-  }
-})
 
 describe('built package localization', () => {
   for (const locale of ['en-GB', 'vi-VN', 'de-DE', 'ar-EG']) {
@@ -131,7 +119,7 @@ describe('built package localization', () => {
 
   test('standalone production embed loads English and explicitly imported German', async () => {
     const v = await viewer({}, { page: 'built-locale.html', wait: false, locale: 'vi-VN' })
-    await v.page.addScriptTag({ url: `/@fs${packageRoot}/dist/office-engine.embed.js` })
+    await v.page.addScriptTag({ url: builtModule('office-engine.embed.js') })
     await v.page.evaluate(() => {
       const el = document.createElement('office-viewer')
       el.setAttribute('src', '/samples/sample.docx')

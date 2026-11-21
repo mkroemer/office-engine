@@ -3,6 +3,7 @@ import {
   createContext,
   Fragment,
   isValidElement,
+  useCallback,
   useContext,
   useEffect,
   useLayoutEffect,
@@ -10,6 +11,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type ComponentType,
   type CSSProperties,
   type ReactElement,
   type ReactNode,
@@ -17,6 +19,7 @@ import {
 } from 'react'
 import { cssColor } from '../../core/color'
 import { useStrings } from '../strings'
+import { useHostUI, type ButtonProps, type SelectProps } from '../ui'
 import { inputLocale, numberText, parseNumber } from '../../core/number-input'
 import { useLocale } from '../common/locale'
 
@@ -228,40 +231,83 @@ function PopBox(props: { className?: string; children: ReactNode; onMouseDown?: 
   )
 }
 
-/** closes a popup on outside mousedown (shadow-DOM safe: uses the composed path) */
+/** Closes on outside mousedown; attach the returned capture handler to the popup's wrapper for React portals. */
 export function useDismiss(ref: RefObject<HTMLElement | null>, open: boolean, close: () => void) {
   const cb = useRef(close)
+  const insideEvents = useRef(new WeakSet<Event>())
   cb.current = close
+  const onMouseDownCapture = useCallback((e: React.MouseEvent) => {
+    insideEvents.current.add(e.nativeEvent)
+  }, [])
   useEffect(() => {
     if (!open) return
+    let active = true
     const on = (e: MouseEvent) => {
       const el = ref.current
-      if (el && !e.composedPath().includes(el)) cb.current()
+      if (!el || e.composedPath().includes(el)) return
+      // React capture follows the logical tree through portals. Wait for it even if bubbling is stopped.
+      setTimeout(() => {
+        if (active && !insideEvents.current.has(e)) cb.current()
+        insideEvents.current.delete(e)
+      }, 0)
     }
     window.addEventListener('mousedown', on, true)
-    return () => window.removeEventListener('mousedown', on, true)
+    return () => {
+      active = false
+      window.removeEventListener('mousedown', on, true)
+    }
   }, [open, ref])
+  return onMouseDownCapture
 }
 
-export function Btn(props: { icon?: IconName; label?: ReactNode; title: string; active?: boolean; disabled?: boolean; onClick: () => void; wide?: boolean }) {
+function DefaultButton(props: ButtonProps) {
   return (
     <button
       type="button"
-      className={props.active ? 'de-tb de-tb-on' : 'de-tb'}
+      className={props.className}
       title={props.title}
       aria-label={props.title}
-      aria-pressed={props.active}
+      aria-pressed={props.expanded === undefined ? props.active : undefined}
+      aria-expanded={props.expanded}
       disabled={props.disabled}
-      onMouseDown={keep}
+      onMouseDown={props.onMouseDown}
       onClick={props.onClick}
       style={props.wide ? { width: 'auto', padding: '0 8px' } : undefined}
     >
-      {props.icon ? <Icon name={props.icon} /> : props.label}
+      {props.icon}
+      {props.label}
+      {props.children}
     </button>
   )
 }
 
-export const Sep = () => <span className="de-tb-sep" />
+/** A toolbar button through the host's `Button` where there is one. `extraClass` adds to the engine's classes. */
+function ToolButton(props: Omit<ButtonProps, 'onMouseDown' | 'className' | 'icon'> & { extraClass?: string; iconSize?: number }) {
+  const Button = useHostUI().Button ?? DefaultButton
+  const { extraClass, iconSize, ...rest } = props
+  const className = (props.active || props.expanded ? 'de-tb de-tb-on' : 'de-tb') + (extraClass ? ' ' + extraClass : '')
+  const icon = props.iconName ? <Icon name={props.iconName} size={iconSize} /> : undefined
+  return <Button {...rest} icon={icon} className={className} onMouseDown={keep} />
+}
+
+export function Btn(props: { icon?: IconName; label?: ReactNode; title: string; active?: boolean; disabled?: boolean; onClick: () => void; wide?: boolean }) {
+  return (
+    <ToolButton
+      title={props.title}
+      iconName={props.icon}
+      label={props.icon ? undefined : props.label}
+      active={props.active}
+      disabled={props.disabled}
+      onClick={props.onClick}
+      wide={props.wide}
+    />
+  )
+}
+
+export const Sep = () => {
+  const Separator = useHostUI().Separator
+  return Separator ? <Separator /> : <span className="de-tb-sep" />
+}
 
 export interface DropOption<T> {
   value: T
@@ -278,28 +324,17 @@ export interface DropOption<T> {
   head?: string
 }
 
+/** A dropdown through the host's `Select` where there is one. */
+export function Dropdown<T extends string | number>(props: SelectProps<T>) {
+  const Host = useHostUI().Select as ComponentType<SelectProps<T>> | undefined
+  return Host ? <Host {...props} /> : <DefaultSelect {...props} />
+}
+
 /**
  * Styled dropdown (listbox). Never takes focus from the editor: mouse down is prevented and,
  * while open, keys are captured at the window (arrows, Enter, Escape, type-ahead).
  */
-export function Dropdown<T extends string | number>(props: {
-  title: string
-  options: DropOption<T>[]
-  onChange: (v: T) => void
-  /** selected value (check mark); omit for command menus */
-  value?: T | ''
-  placeholder?: string
-  /** fixed trigger content (menus); null = icon only */
-  label?: ReactNode
-  icon?: IconName
-  width?: number
-  menuWidth?: number
-  disabled?: boolean
-  /** popup aligned to the trigger's right edge */
-  alignRight?: boolean
-  /** extra class of the trigger button */
-  className?: string
-}) {
+function DefaultSelect<T extends string | number>(props: SelectProps<T>) {
   const { options } = props
   const [open, setOpen] = useState(false)
   const [hi, setHi] = useState(-1)
@@ -310,7 +345,7 @@ export function Dropdown<T extends string | number>(props: {
   const check = props.value !== undefined
   const sel = check ? options.findIndex((o) => o.value === props.value) : -1
   const current = sel >= 0 ? options[sel] : undefined
-  useDismiss(ref, open, () => setOpen(false))
+  const onMouseDownCapture = useDismiss(ref, open, () => setOpen(false))
 
   const pick = (o: DropOption<T> | undefined) => {
     if (!o || o.disabled) return
@@ -379,7 +414,7 @@ export function Dropdown<T extends string | number>(props: {
 
   const label = props.label !== undefined ? props.label : (current?.label ?? props.placeholder ?? '')
   return (
-    <span ref={ref} className="de-dd-wrap">
+    <span ref={ref} className="de-dd-wrap" onMouseDownCapture={onMouseDownCapture}>
       <button
         type="button"
         className={(open ? 'de-dd de-dd-open' : 'de-dd') + (props.className ? ' ' + props.className : '')}
@@ -484,7 +519,7 @@ export function SizeBox(props: { value?: number; placeholder?: number; sizes?: n
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLSpanElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
-  useDismiss(ref, open, () => setOpen(false))
+  const onMouseDownCapture = useDismiss(ref, open, () => setOpen(false))
   const base = props.value ?? props.placeholder ?? 11
   const shown = (n: number | undefined) => (n !== undefined ? numberText(n, locale) : '')
   const set = (n: number | null) => {
@@ -500,10 +535,8 @@ export function SizeBox(props: { value?: number; placeholder?: number; sizes?: n
   const t = useStrings()
   const title = props.title ?? t.toolbar.fontSize
   return (
-    <span ref={ref} className="de-size">
-      <button type="button" className="de-tb de-size-step" title={t.toolbar.fontSizeDown} aria-label={t.toolbar.fontSizeDown} disabled={props.disabled} onMouseDown={keep} onClick={() => set(fitSize(Math.max(1, Math.ceil(base) - 1)))}>
-        <Icon name="minus" size={16} />
-      </button>
+    <span ref={ref} className="de-size" onMouseDownCapture={onMouseDownCapture}>
+      <ToolButton title={t.toolbar.fontSizeDown} iconName="minus" iconSize={16} extraClass="de-size-step" disabled={props.disabled} onClick={() => set(fitSize(Math.max(1, Math.ceil(base) - 1)))} />
       <input
         ref={inputRef}
         className="de-size-input"
@@ -540,9 +573,7 @@ export function SizeBox(props: { value?: number; placeholder?: number; sizes?: n
           setOpen(false)
         }}
       />
-      <button type="button" className="de-tb de-size-step" title={t.toolbar.fontSizeUp} aria-label={t.toolbar.fontSizeUp} disabled={props.disabled} onMouseDown={keep} onClick={() => set(fitSize(Math.floor(base) + 1))}>
-        <Icon name="plus" size={16} />
-      </button>
+      <ToolButton title={t.toolbar.fontSizeUp} iconName="plus" iconSize={16} extraClass="de-size-step" disabled={props.disabled} onClick={() => set(fitSize(Math.floor(base) + 1))} />
       {open && (
         <div className="de-dd-pop de-size-pop" role="listbox" aria-label={title} onMouseDown={keep}>
           {sizes.map((n) => (
@@ -580,29 +611,33 @@ const signature = (el: ReactElement) => {
  */
 export function ToolbarRow({ children }: { children: ReactNode }) {
   const t = useStrings()
+  const ui = useHostUI()
   const items = flatten(children)
   const sig = items.map(signature).join('|')
+  // Host replacements can change item widths without changing their titles or types.
+  const measurement = useMemo(() => ({}), [sig, ui.Button, ui.Select, ui.Separator, t.toolbar.moreTools])
   const rowRef = useRef<HTMLDivElement>(null)
   const widths = useRef<number[]>([])
-  const [fit, setFit] = useState<{ sig: string; cut: number; w: number }>({ sig: '', cut: items.length, w: 0 })
+  const [fit, setFit] = useState<{ measurement: object | null; cut: number; w: number }>({ measurement: null, cut: items.length, w: 0 })
   const [more, setMore] = useState(false)
   const moreRef = useRef<HTMLSpanElement>(null)
-  useDismiss(moreRef, more, () => setMore(false))
-  const measured = fit.sig === sig
+  const moreWidth = useRef(0)
+  const onMouseDownCapture = useDismiss(moreRef, more, () => setMore(false))
+  const measured = fit.measurement === measurement
   const cut = measured ? fit.cut : items.length
 
   const layout = (w: number) => {
     const ws = widths.current
     const gap = 2
-    const total = ws.reduce((a, b) => a + b + gap, 0)
+    const total = ws.reduce((a, b) => a + b, 0) + Math.max(0, ws.length - 1) * gap
     let k = items.length
     if (total > w) {
-      const room = w - 34
+      const room = w - moreWidth.current
       let used = 0
       k = 0
       while (k < items.length && used + ws[k] + gap <= room) used += ws[k++] + gap
     }
-    setFit((f) => (f.sig === sig && f.cut === k && f.w === w ? f : { sig, cut: k, w }))
+    setFit((f) => (f.measurement === measurement && f.cut === k && f.w === w ? f : { measurement, cut: k, w }))
   }
   const avail = () => {
     const el = rowRef.current
@@ -611,13 +646,14 @@ export function ToolbarRow({ children }: { children: ReactNode }) {
     return el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
   }
 
-  // new set of items: everything is rendered once, measured, then cut
+  // Render all items and More together at their natural widths before the first cut.
   useLayoutEffect(() => {
     const el = rowRef.current
-    if (!el || measured) return
+    if (!el) return
     widths.current = [...el.querySelectorAll<HTMLElement>(':scope > [data-i]')].map((x) => x.getBoundingClientRect().width)
+    moreWidth.current = moreRef.current?.getBoundingClientRect().width ?? 0
     layout(avail())
-  })
+  }, [measurement])
   const relayout = useRef(() => {})
   relayout.current = () => {
     if (widths.current.length === items.length) layout(avail())
@@ -641,11 +677,9 @@ export function ToolbarRow({ children }: { children: ReactNode }) {
           {el}
         </span>
       ))}
-      {rest.length > 0 && (
-        <span ref={moreRef} className="de-tb-color de-ebar-morewrap">
-          <button type="button" className={more ? 'de-tb de-tb-on' : 'de-tb'} title={t.toolbar.more} aria-label={t.toolbar.moreTools} aria-expanded={more} onMouseDown={keep} onClick={() => setMore((m) => !m)}>
-            <Icon name="more" />
-          </button>
+      {(!measured || rest.length > 0) && (
+        <span ref={moreRef} className="de-tb-color de-ebar-morewrap" onMouseDownCapture={onMouseDownCapture} style={!measured ? { visibility: 'hidden' } : undefined}>
+          <ToolButton title={t.toolbar.moreTools} iconName="more" expanded={more} onClick={() => setMore((m) => !m)} />
           {more && (
             <PopBox className="de-tb-pop de-ebar-more">
               {rest.map((el, i) => (
@@ -710,7 +744,7 @@ export function ColorBtn(props: { icon: IconName; title: string; value?: string;
   const ref = useRef<HTMLSpanElement>(null)
   const pickerRef = useRef<HTMLInputElement>(null)
   const custom = useSyncExternalStore(subscribeCustom, getCustomColors, getCustomColors)
-  useDismiss(ref, open, () => setOpen(false))
+  const onMouseDownCapture = useDismiss(ref, open, () => setOpen(false))
   const onPick = useRef(props.onPick)
   onPick.current = props.onPick
   const cur = props.value?.toLowerCase()
@@ -745,11 +779,10 @@ export function ColorBtn(props: { icon: IconName; title: string; value?: string;
     <button key={c} type="button" title={c} className={cur === c ? 'on' : undefined} style={{ background: c }} onClick={() => (props.onPick(c), setOpen(false))} />
   )
   return (
-    <span ref={ref} className="de-tb-color">
-      <button type="button" className={open ? 'de-tb de-tb-on' : 'de-tb'} title={props.title} aria-label={props.title} aria-expanded={open} onMouseDown={keep} onClick={() => setOpen((o) => !o)}>
-        <Icon name={props.icon} />
+    <span ref={ref} className="de-tb-color" onMouseDownCapture={onMouseDownCapture}>
+      <ToolButton title={props.title} iconName={props.icon} expanded={open} onClick={() => setOpen((o) => !o)}>
         <span className="de-tb-swatch" style={{ background: cssColor(props.value) ?? 'transparent' }} />
-      </button>
+      </ToolButton>
       {/* kept mounted while the OS picker is open (the popover closes) */}
       <input ref={pickerRef} type="color" className="de-tb-native" tabIndex={-1} aria-hidden />
       {open && (
@@ -807,22 +840,12 @@ export function Menu(props: { title: string; label: string; icon?: IconName; ite
 export function Pop(props: { icon: IconName; title: string; children: (close: () => void) => ReactNode; active?: boolean; disabled?: boolean; chevron?: boolean }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLSpanElement>(null)
-  useDismiss(ref, open, () => setOpen(false))
+  const onMouseDownCapture = useDismiss(ref, open, () => setOpen(false))
   return (
-    <span ref={ref} className="de-tb-color">
-      <button
-        type="button"
-        className={(props.active || open ? 'de-tb de-tb-on' : 'de-tb') + (props.chevron ? ' de-tb-chev' : '')}
-        title={props.title}
-        aria-label={props.title}
-        aria-expanded={open}
-        disabled={props.disabled}
-        onMouseDown={keep}
-        onClick={() => setOpen((o) => !o)}
-      >
-        <Icon name={props.icon} />
+    <span ref={ref} className="de-tb-color" onMouseDownCapture={onMouseDownCapture}>
+      <ToolButton title={props.title} iconName={props.icon} active={props.active} expanded={open} disabled={props.disabled} extraClass={props.chevron ? 'de-tb-chev' : undefined} onClick={() => setOpen((o) => !o)}>
         {props.chevron && <Icon name="chevron" size={14} />}
-      </button>
+      </ToolButton>
       {open && (
         <PopBox onMouseDown={(e) => (e.target as HTMLElement).closest('input, textarea') || e.preventDefault()}>
           {props.children(() => setOpen(false))}

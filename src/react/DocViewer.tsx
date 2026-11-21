@@ -7,6 +7,7 @@ import { ViewerContext, type FileOps, type ViewerApi } from './common/Slots'
 import { StatusContext } from './common/Status'
 import { ConfirmDialog, PromptDialog, Toast } from './common/Dialog'
 import { download, Icon, IconsProvider, type Icons } from './edit/Toolbar'
+import { UIComponentsProvider, type UIComponents } from './ui'
 import { DetailsDialog } from './file/DetailsDialog'
 import { FileMenu, useFileActions, type FileMenuItem } from './file/FileMenu'
 import { importFile, type Imported } from './file/importFile'
@@ -122,6 +123,11 @@ export interface DocViewerProps {
    * Each is rendered in `span.de-icon`, sized by font-size (1em).
    */
   icons?: Icons
+  /**
+   * The host's own UI components (`Button`, `Select`, `Separator`, `Dialog`, `Toast`), rendered in the toolbars and
+   * dialogs instead of the built-in ones; each one left out keeps the built-in one. See docs/theming.md.
+   */
+  components?: Partial<UIComponents>
   /**
    * BCP 47 tag for number/date display and typed numbers ("de-DE" reads 1,5). An explicitly supplied tag
    * takes precedence over the table or enclosing StringsProvider. No tag uses a decimal point for input.
@@ -654,6 +660,7 @@ function Viewer(props: DocViewerProps) {
 
   return (
     <IconsProvider icons={props.icons}>
+    <UIComponentsProvider components={props.components}>
     <div ref={rootRef} className={root.className + (className ? ` ${className}` : '')} style={root.style} onKeyDown={onKeyDown}>
       {toolbar && (
         <div className="de-bar">
@@ -818,6 +825,7 @@ function Viewer(props: DocViewerProps) {
         />
       )}
     </div>
+    </UIComponentsProvider>
     </IconsProvider>
   )
 }

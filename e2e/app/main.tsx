@@ -6,10 +6,11 @@
  *   &locale=de-DE: the tag numbers typed are read in
  *   &fonts=[{"family":"Carlito","src":"/fonts/carlito.ttf"}]: the host's fonts (JSON)
  *   &texts=de: the optional German table; &fileLabel=… overrides the File label
+ *   &components=1: the host's own Button, Separator, Dialog and Toast (`data-host-*` markers)
  */
 import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { DocViewer, type DocViewerProps, type FileMenuItem } from '../../src'
+import { DocViewer, type DocViewerProps, type FileMenuItem, type UIComponents } from '../../src'
 import { de } from '../../src/locales/de'
 
 type Ev = { type: string; [k: string]: unknown }
@@ -39,6 +40,49 @@ const items: FileMenuItem[] = [
   { label: 'Share…', icon: 'open', onClick: () => log({ type: 'item', label: 'Share' }) },
   { label: 'Version history', hint: 'beta', onClick: () => log({ type: 'item', label: 'Version history' }) },
 ]
+
+// plain host components: no engine classes, so nothing of the engine's CSS styles them
+const components: Partial<UIComponents> = {
+  Button: (p) => (
+    <button type="button" data-host-button="" data-active={p.active || undefined} title={p.title} aria-label={p.title} aria-expanded={p.expanded} disabled={p.disabled} onMouseDown={p.onMouseDown} onClick={p.onClick} style={p.iconName === 'more' ? { width: 140 } : undefined}>
+      {p.icon}
+      {p.label}
+      {p.children}
+    </button>
+  ),
+  Separator: () => <i data-host-sep="" />,
+  Dialog: (p) => {
+    const actions = p.actions.map((a, i) => (
+      <button key={i} type={a.submit ? 'submit' : 'button'} data-primary={a.primary || undefined} autoFocus={a.autoFocus} onClick={a.submit && p.onSubmit ? undefined : a.onClick}>
+        {a.label}
+      </button>
+    ))
+    const body = (
+      <>
+        <h2>{p.title}</h2>
+        {p.children}
+        {actions}
+      </>
+    )
+    return (
+      <div data-host-dialog="" role={p.kind === 'alert' ? 'alertdialog' : 'dialog'} aria-label={p.title} onKeyDown={(e) => e.key === 'Escape' && p.onClose()}>
+        {p.onSubmit ? (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              p.onSubmit!()
+            }}
+          >
+            {body}
+          </form>
+        ) : (
+          body
+        )}
+      </div>
+    )
+  },
+  Toast: ({ text }) => <output data-host-toast="">{text}</output>,
+}
 
 const initial: DocViewerProps = {
   src: q.get('src'),
@@ -74,6 +118,7 @@ const initial: DocViewerProps = {
           open: flag('cmOpen'),
           onEvent: (e) => log({ type: 'comment', action: e.type, id: e.comment.id, text: e.comment.text, thread: e.thread.id, quote: e.quote, mentioned: e.mentioned.map((m) => m.id ?? m.name), participants: e.participants.map((m) => m.id ?? m.name) }),
         },
+  components: q.has('components') ? components : undefined,
   icons: q.has('icons')
     ? (name) => (
         <svg data-host-icon={name} viewBox="0 0 24 24">

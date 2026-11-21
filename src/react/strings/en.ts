@@ -143,7 +143,6 @@ export const en = {
     fontSize: 'Font size',
     fontSizeDown: 'Decrease font size',
     fontSizeUp: 'Increase font size',
-    more: 'More',
     moreTools: 'More tools',
     custom: 'Custom',
     customColor: 'Custom color',

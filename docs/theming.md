@@ -69,8 +69,81 @@ gives the class name and style their root needs:
 
 ```tsx
 const root = useThemeRoot(theme)
-return <div className={root.className} style={root.style}><XlsxView client={client} /></div>
+return (
+  <OfficeUIProvider icons={icons} components={components} locale="de-DE">
+    <div className={root.className} style={root.style}><XlsxView client={client} /></div>
+  </OfficeUIProvider>
+)
 ```
+
+`OfficeUIProvider` carries what `DocViewer` takes as `icons`, `components`, `locale` and `strings` to views mounted on
+their own. Nested providers inherit the outer texts, icons and components. Local `strings` merge key by key;
+an explicit `locale` changes number/date formatting while preserving the inherited texts. Omitted or `undefined`
+components and string entries preserve the outer values.
+
+## Your own components
+
+Where tokens are not enough, the toolbars and dialogs render the host's own components: a design system's buttons,
+selects and dialogs instead of the built-in ones. Each one left out keeps the built-in one.
+
+```tsx
+import { DocViewer, type ButtonProps, type UIComponents } from '@p10node/office-engine'
+
+// Define component types outside the host's render so toolbar controls stay mounted.
+function ViewerButton({ title, icon, label, children, active, expanded, disabled, onClick, onMouseDown }: ButtonProps) {
+  return (
+    <MyIconButton tooltip={title} aria-label={title} pressed={active} aria-expanded={expanded}
+      disabled={disabled} onClick={onClick} onMouseDown={onMouseDown}>
+      {icon}{label}{children}
+    </MyIconButton>
+  )
+}
+
+function ViewerSeparator() {
+  return <MyDivider vertical />
+}
+
+const components: Partial<UIComponents> = { Button: ViewerButton, Separator: ViewerSeparator }
+
+<DocViewer
+  src={file}
+  editable
+  components={components}
+/>
+```
+
+| Component   | Used for                                                                                         | Props                                                                                                                                                                                                                                                                                                                                                                                |
+| ----------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Button`    | every toolbar button, the toggles that open color, table and border pickers, the overflow button | `ButtonProps`: `title`, `icon` (resolved through `icons`), `iconName`, `label`, `children`, `active`, `expanded`, `disabled`, `wide`, `onClick`, `onMouseDown`, `className` (the built-in classes)                                                                                                                                                                                   |
+| `Select`    | font, style, format and menu dropdowns                                                           | `SelectProps`: `title`, `options` (`DropOption`: `value`, `label`, `hint`, `icon`, `disabled`, `sep`, `head`, `style`), `value` (undefined for a command menu), `onChange`, `label` (`null` hides the label for an icon-only trigger), `icon` (an `IconName`, not a resolved node), `className` (extra trigger class), `placeholder`, `width`, `menuWidth`, `disabled`, `alignRight` |
+| `Separator` | between toolbar groups                                                                           | none                                                                                                                                                                                                                                                                                                                                                                                 |
+| `Dialog`    | prompts (link, rename, …) and confirmations                                                      | `DialogProps`: `title`, `kind` (`'alert'` for a question), `children` (the body), `actions` (`label`, `onClick`, `extra` for an auxiliary action such as Remove link, `primary`, `submit`, `autoFocus`), `onSubmit` (the body is a form), `onClose` (Escape, backdrop)                                                                                                               |
+| `Toast`     | short messages at the bottom                                                                     | `text` (the viewer removes it after a few seconds)                                                                                                                                                                                                                                                                                                                                   |
+
+The font-size input and list (`SizeBox`), Page setup, Header / footer and Details dialogs, and the buttons
+inside border pickers retain the built-in markup. The font-size step buttons use the host `Button`. A host
+`Select` should honor the supplied width so changes to its selected label do not disrupt toolbar overflow measurement.
+
+A host Dialog can put its footer outside the form: call the action's `onClick` from a regular button. Inside
+a form, render `submit` actions as submit buttons and let `onSubmit` run them; do not also call their `onClick`,
+which would submit twice. Keep `onClick` for the other actions.
+
+The document must keep the focus while a toolbar control is used, or the command loses its selection:
+
+- `Button`: pass `onMouseDown` to the element. It prevents the default, which keeps the focus.
+- `Select`: open on mouse down with the default prevented, and handle its keys without moving the focus into the list.
+  The built-in one captures the keys at the window while open.
+
+The overflow menu measures each toolbar item from a wrapper of its own, so a host component needs no ref.
+It measures the More button in the same pass and remeasures when Button, Select or Separator is replaced.
+
+Host Select lists rendered with React's `createPortal` remain inside their surrounding overflow menu or popover
+for outside-click handling. The portal must belong to the same React tree as the Select. An independently
+mounted React root or a non-React overlay has no such ownership path; render that list inside the Select's DOM
+subtree instead.
+
+A host `Select` can render its trigger and option icons with the exported `Icon`: `<Icon name={option.icon} size={16} />`
+(when `option.icon` is set). It uses the viewer's `icons` overrides and falls back to the built-in SVGs.
 
 ## Tokens
 
