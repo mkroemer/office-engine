@@ -50,6 +50,11 @@ export interface ViewerState {
   status: string
   /** the formatting at the selection while editing (document text, the active cell, slide text being edited), else null */
   format: TextFormat | null
+  /**
+   * a spreadsheet formula being typed can take a cell reference here (`=SUM(`): a sheet tab clicked now keeps the
+   * edit open on the other sheet, for a reference to it, and must not take the focus from the grid
+   */
+  pointing: boolean
 }
 
 /** Formatting at the selection, the same for documents, cells and slide text. */
@@ -106,7 +111,7 @@ export interface ViewerCommands {
   toggleComments(open?: boolean): void
 }
 
-type ViewState = Pick<ViewerState, 'canUndo' | 'canRedo' | 'zoom' | 'page' | 'outline' | 'status' | 'format'>
+type ViewState = Pick<ViewerState, 'canUndo' | 'canRedo' | 'zoom' | 'page' | 'outline' | 'status' | 'format' | 'pointing'>
 type ViewerPublication = Omit<ViewerState, keyof ViewState | 'rev'>
 
 /** Internal, document-scoped publication and command registration. Never part of the host API. */
@@ -120,7 +125,7 @@ export interface ViewController {
 }
 
 /** the view's part of the state, cleared when a view goes */
-const VIEW_STATE = { canUndo: false, canRedo: false, zoom: null, page: null, outline: null, status: '', format: null } as const
+const VIEW_STATE = { canUndo: false, canRedo: false, zoom: null, page: null, outline: null, status: '', format: null, pointing: false } as const
 
 /** the viewer's part of the state, cleared when the viewer goes, so a controller that outlives it shows no document */
 const VIEWER_STATE = { kind: null, loading: false, editing: false, canEdit: false, dirty: false, saving: false } as const

@@ -18,6 +18,7 @@ import {
   type RefObject,
 } from 'react'
 import { fontSize } from './format-values'
+import { focusWithSelection } from './input'
 import { cssColor } from '../../core/color'
 import { useStrings } from '../strings'
 import { useHostUI, type ButtonProps, type SelectProps } from '../ui'
@@ -533,10 +534,21 @@ export function SizeBox(props: { value?: number; placeholder?: number; sizes?: n
     setOpen(false)
     if (n !== null) props.onChange(n)
   }
+  // where the focus came from (the document, usually): Enter and Escape go back there, since a plain blur leaves the
+  // focus on the page body and a document then has no selection to format
+  const back = useRef<HTMLElement | null>(null)
+  const leave = (restoreSelection: boolean) => {
+    const to = back.current
+    back.current = null
+    if (!to?.isConnected) inputRef.current?.blur()
+    else if (restoreSelection) focusWithSelection(to)
+    else to.focus({ preventScroll: true })
+  }
   // a size that is not one (12pt, 1.2.5, 12,5 in en-US): the box shows the size it had again
   const done = () => {
-    if (draft.current !== null) set(sizeOf(draft.current, locale))
-    inputRef.current?.blur()
+    const size = draft.current === null ? null : sizeOf(draft.current, locale)
+    set(size)
+    leave(size === null)
   }
   const t = useStrings()
   const title = props.title ?? t.toolbar.fontSize
@@ -553,6 +565,7 @@ export function SizeBox(props: { value?: number; placeholder?: number; sizes?: n
         value={text ?? shown(props.value)}
         placeholder={shown(props.placeholder)}
         onFocus={(e) => {
+          back.current = e.relatedTarget instanceof HTMLElement ? e.relatedTarget : null
           e.currentTarget.select()
           setOpen(true)
         }}
@@ -566,7 +579,7 @@ export function SizeBox(props: { value?: number; placeholder?: number; sizes?: n
             e.preventDefault()
             editText(null)
             setOpen(false)
-            inputRef.current?.blur()
+            leave(true)
           } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
             e.preventDefault()
             const cur = (text !== null ? typedSize(text, locale) : null) ?? base

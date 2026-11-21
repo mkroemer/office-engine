@@ -8,10 +8,11 @@
  *   &texts=de: the optional German table; &fileLabel=… overrides the File label
  *   &components=1: the host's own Button, Separator, Dialog and Toast (`data-host-*` markers)
  *   &headless=1: the document alone; the viewer is driven through window.__ctl (its controller) either way
+ *   &chrome=1: the host-placed controls (ZoomBar, StatusText, FormatBar, OfficeUIProvider, OutlineList, SheetTabs) in `#host-chrome`
  */
 import { StrictMode, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { createViewerController, useViewerState, DocViewer, type DocViewerProps, type FileMenuItem, type UIComponents, type ViewerController } from '../../src'
+import { createViewerController, useViewerState, DocViewer, FormatBar, OfficeUIProvider, OutlineList, SheetTabs, StatusText, useThemeRoot, ZoomBar, type DocViewerProps, type FileMenuItem, type UIComponents, type ViewerController } from '../../src'
 import { de } from '../../src/locales/de'
 
 type Ev = { type: string; [k: string]: unknown }
@@ -156,11 +157,39 @@ function App() {
   window.__setLanguage = (language) => setProps((cur) => ({ ...cur, strings: language === 'de-DE' ? de : undefined }))
   const { undo, redo } = window.__ctl
   if (q.has('renderHost')) return <RenderingHost props={props} />
+  // the host's controls are drawn from the viewer's controller, so it is given one whatever `controller` says
+  if (q.has('chrome'))
+    return (
+      <OfficeUIProvider strings={props.strings} locale={props.locale}>
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+          <HostChrome />
+          <DocViewer {...props} controller={window.__ctl} style={{ flex: 1, minHeight: 0 }} />
+        </div>
+      </OfficeUIProvider>
+    )
   return <>
     {q.has('hostControls') && <div><button onClick={undo}>Host undo</button><button onClick={redo}>Host redo</button><button onMouseDown={(e) => e.preventDefault()} onClick={() => window.__ctl.goto(window.__ctl.snapshot().outline!.items[1].id)}>Host second sheet</button></div>}
     {phase < 2 && <DocViewer key="old" {...props} />}
     {phase > 0 && phase < 3 && <DocViewer key="new" {...props} {...nextProps} />}
   </>
+}
+
+function HostChrome() {
+  const root = useThemeRoot(undefined, undefined, { host: true })
+  const ctl = window.__ctl
+  return (
+    <div id="host-chrome" className={root.className} style={{ ...root.style, flex: 'none' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <ZoomBar controller={ctl} />
+        <StatusText controller={ctl} />
+      </div>
+      <FormatBar controller={ctl} />
+      <div style={{ display: 'flex' }}>
+        <OutlineList controller={ctl} style={{ maxHeight: 160, width: 300 }} />
+        <SheetTabs controller={ctl} />
+      </div>
+    </div>
+  )
 }
 
 createRoot(document.getElementById('root')!).render(q.has('strict') ? <StrictMode><App /></StrictMode> : <App />)

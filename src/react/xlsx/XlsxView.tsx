@@ -498,7 +498,7 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
   const sheetItems = meta.sheets.filter((s) => !s.hidden).map((s) => ({ id: String(s.index), title: s.name, level: 0, current: s.index === cur }))
   useEffect(() => {
     const h = store.history
-    ctl?.update({ outline: { kind: 'sheets', items: sheetItems }, canUndo: viewer.editable && h.undo > 0, canRedo: viewer.editable && h.redo > 0 })
+    ctl?.update({ outline: { kind: 'sheets', items: sheetItems }, canUndo: viewer.editable && h.undo > 0, canRedo: viewer.editable && h.redo > 0, pointing: keepEditing })
   })
   const gotoSheet = (id: string) => {
     const i = Number(id)

@@ -204,6 +204,39 @@ Use one controller per mounted viewer. Give a modal or fullscreen viewer its own
 During a temporary overlap, the latest mounted viewer owns a shared controller. Releasing it clears the controller;
 an older viewer that remains mounted does not automatically regain ownership.
 
+#### Ready-made controls
+
+For a host that wants the controls but its own layout, each of these is driven by the controller alone and placed
+anywhere around a headless viewer:
+
+```tsx
+import { DocViewer, FormatBar, OfficeUIProvider, OutlineList, SheetTabs, StatusText, useThemeRoot, ZoomBar } from '@p10node/office-engine'
+import { de } from '@p10node/office-engine/locales/de'
+
+const root = useThemeRoot(theme, undefined, { host: true })
+<OfficeUIProvider icons={icons} components={components} strings={de}>
+  <header className={root.className} style={root.style}>
+    <ZoomBar controller={ctl} /> <StatusText controller={ctl} />
+    <FormatBar controller={ctl} />
+  </header>
+  <aside className={root.className} style={root.style}><OutlineList controller={ctl} /><SheetTabs controller={ctl} /></aside>
+  <DocViewer src={file} controller={ctl} headless theme={theme} />
+</OfficeUIProvider>
+```
+
+| Control | Shows |
+|---|---|
+| `ZoomBar` | zoom out, the zoom (a click switches between fitting the width and 100 %), zoom in; nothing for spreadsheets |
+| `StatusText` | the status line |
+| `OutlineList` | headings (indented), sheets or slides; a click shows it, the one in view is marked |
+| `SheetTabs` | a workbook's sheets as tabs; nothing for other documents |
+| `FormatBar` | while editing: undo, redo, size, bold / italic / underline / strike, alignment, lists (where there are lists), clear formatting |
+
+They render through the same components, icons, texts and design tokens as the built-in toolbars: outside `DocViewer`,
+`OfficeUIProvider` supplies the components, icons and strings to both the controls and the viewer. An element with `useThemeRoot()`'s class and style supplies the tokens. Give a
+container of controls `{ host: true }`: it is sized by them, and their popups (the size list, the overflow menu) show
+beyond it, above the viewer.
+
 ### Comments
 
 ```tsx
