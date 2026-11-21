@@ -14,6 +14,9 @@ let ctx: CanvasRenderingContext2D | null | undefined
 /** widths of the characters of numbers, by font (a CSS font) */
 const widths = new Map<string, Map<string, number>>()
 
+/** a font arrived: the widths measured before it are the fallback's */
+export const forgetWidths = () => widths.clear()
+
 /**
  * Width in px of a number in `font`: the sum of its characters' (digits and signs are not kerned), each measured once.
  * Undefined where there is no canvas.

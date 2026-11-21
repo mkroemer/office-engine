@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type MutableRefObject, type ReactNode } from 'react'
 import type { BookOp, CellDetail, ClipCell, CellInput, CellOut, FindMatch, FindOptions, FmtPatch, Merge, Range, SheetOp, SheetProgress, TextRun, WorkbookMeta, XlsxClip, XlsxEditResult } from '../../core/xlsx/types'
-import { parseTsv, tsvCell } from '../../core/xlsx/clip'
+import { parseTsv, shiftedClip, tsvCell } from '../../core/xlsx/clip'
 import { colName, MAX_ROWS } from '../../core/xlsx/workbook'
 import { detectSeparator, parseCsv } from '../../core/convert'
 import { closeFormula, formulaContext, isFormula, rangeText, type FormulaContext } from '../../core/xlsx/formula/assist'
@@ -11,7 +11,7 @@ import type { DocumentClient } from '../../core/worker/client'
 import { getPeers, publishLocal, subscribePeers, getLocalHistory, subscribeLocalHistory } from '../../collab/hosts'
 import { claimFocus, useForceUpdate, useScroll, useSize } from '../common/hooks'
 import { useFileOps, useViewer, useSelectAll } from '../common/Slots'
-import { useViewCommands, type FormatCommand, type TextFormat } from '../controller'
+import { useViewCommands, type TextFormat } from '../controller'
 import { cellFormat, cellPatch, marksAfter } from '../edit/format'
 import { Status } from '../common/Status'
 import { ContextMenu, MOD, type MenuItem } from '../common/ContextMenu'
@@ -19,9 +19,12 @@ import { Toast } from '../common/Dialog'
 import { FindBar } from '../docx/FindBar'
 import { XlsxToolbar, type MergeMode } from './XlsxToolbar'
 import { Icon } from '../edit/Toolbar'
+import { useLocale } from '../common/locale'
+import { numberText } from '../../core/number-input'
 import { Axis } from './axis'
 import { drawingBox, drawingEl, drawingExtent, useSheetDrawings } from './drawings'
-import { fitNumber, fontPx } from './fit'
+import { fitNumber, fontPx, forgetWidths } from './fit'
+import { useDocFonts } from '../common/fonts'
 import { htmlToTsv } from './html'
 import { fontOf, rotatedHeight, textWidth, wrapHeight } from './measure'
 import { sheetPrintable } from './print'
@@ -421,11 +424,11 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
     const old = meta.sheets[index]
     if (!old || raw === old.name) return
     const name = cleanSheetName(raw)
-    if (!name) return setNote('A sheet name cannot be empty')
-    if (meta.sheets.some((x) => x.index !== index && x.name.toLowerCase() === name.toLowerCase())) return setNote(`A sheet named “${name}” already exists`)
+    if (!name) return setNote(str.xlsx.sheetNameEmpty)
+    if (meta.sheets.some((x) => x.index !== index && x.name.toLowerCase() === name.toLowerCase())) return setNote(str.xlsx.sheetNameTaken(name))
     const said: string[] = []
-    if (raw.trim().length > 31) said.push(`Sheet names have at most 31 characters: shortened to “${name}”.`)
-    if (/[\\/?*[\]:]/.test(raw)) said.push('Sheet names cannot contain \\ / ? * [ ] : — they were replaced by _.')
+    if (raw.trim().length > 31) said.push(str.xlsx.sheetNameShortened(name))
+    if (/[\\/?*[\]:]/.test(raw)) said.push(str.xlsx.sheetNameInvalidChars)
     if (name !== old.name) void bookOp({ op: 'rename', index, name: raw })
     if (said.length) setNote(said.join(' '))
   }
@@ -492,24 +495,18 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
 
   // ---- controller: the sheets as the outline, sheet switching, undo ----
   const { ctl, headless } = viewer
-  const gridCommands = useRef<{ undo: () => void; redo: () => void; format: (c: FormatCommand) => void } | null>(null)
   const sheetItems = meta.sheets.filter((s) => !s.hidden).map((s) => ({ id: String(s.index), title: s.name, level: 0, current: s.index === cur }))
   useEffect(() => {
     const h = store.history
     ctl?.update({ outline: { kind: 'sheets', items: sheetItems }, canUndo: viewer.editable && h.undo > 0, canRedo: viewer.editable && h.redo > 0 })
   })
-  useViewCommands(ctl, {
-    goto: (id) => {
-      const i = Number(id)
-      if (!meta.sheets[i] || meta.sheets[i].hidden) return
-      // a formula being typed stays open on the other sheet, for cross-sheet references, as with the built-in tabs
-      if (keepEditing && i !== cur) hold.current = true
-      setActive(i)
-    },
-    undo: () => gridCommands.current?.undo(),
-    redo: () => gridCommands.current?.redo(),
-    format: (c) => gridCommands.current?.format(c),
-  })
+  const gotoSheet = (id: string) => {
+    const i = Number(id)
+    if (!meta.sheets[i] || meta.sheets[i].hidden) return
+    // a formula being typed stays open on the other sheet, for cross-sheet references, as with the built-in tabs
+    if (keepEditing && i !== cur) hold.current = true
+    setActive(i)
+  }
 
   return (
     <div className="de-xlsx">
@@ -524,7 +521,7 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
         setEdit={setEdit}
         hold={hold}
         onSheet={setActive}
-        gridCommands={gridCommands}
+        gotoSheet={gotoSheet}
       />
       <div className="de-tabs" role="tablist" hidden={headless}>
         {viewer.editable && (
@@ -611,8 +608,7 @@ interface GridProps {
   setEdit: React.Dispatch<React.SetStateAction<EditState | null>>
   hold: MutableRefObject<boolean>
   onSheet: (i: number) => void
-  /** set by the grid: its undo / redo, for the viewer's controller */
-  gridCommands: MutableRefObject<{ undo: () => void; redo: () => void; format: (c: FormatCommand) => void } | null>
+  gotoSheet: (id: string) => void
 }
 
 /** text rotation (OOXML degrees, + = counter-clockwise, 255 = stacked) */
@@ -718,10 +714,13 @@ export function withMerges(r: Range, merges: Merge[]): Range {
 /** the hidden input field of a grid at rest: inside the view, so that nothing scrolls to it */
 const SINK_STYLE: CSSProperties = { left: 4, top: 4, width: 1, height: 1 }
 
-function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, gridCommands }: GridProps) {
+function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, gotoSheet }: GridProps) {
   const viewer = useViewer()
   const str = useStrings()
   const editable = viewer.editable
+  // numbers typed are read in it, and a number edited is shown in it (1,5 in de-DE: what is shown is read back the same)
+  const locale = useLocale()
+  const typed = locale ? { locale } : undefined
   const s = store.sheet(sheet)
   const [scrollRef, size] = useSize<HTMLDivElement>()
   const scroll = useScroll(scrollRef)
@@ -816,6 +815,17 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
 
   const styles = meta.styles
   const basePx = fontPx(meta.baseFont.fontSize, 14.67)
+  // the host's fonts the workbook is set in are loaded: numbers fitted to their columns before one arrived (or before
+  // the page's own web font did) are fitted again
+  const fonts = useDocFonts()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const stacks = useMemo(() => new Set([meta.baseFont, ...styles].map((x) => x?.fontFamily).filter((f): f is string => typeof f === 'string')), [styles.length])
+  const fontsKey = `${fonts.ready(stacks)}|${fonts.gen}`
+  const lastFonts = useRef(fontsKey)
+  if (lastFonts.current !== fontsKey) {
+    lastFonts.current = fontsKey
+    forgetWidths()
+  }
   const mergeAt = (r: number, c: number) => s.merges.find((m) => r >= m.r0 && r <= m.r1 && c >= m.c0 && c <= m.c1)
 
   // A row that says no height shows its turned text whole: Excel fits such rows when it opens the file. In the view
@@ -1227,7 +1237,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
     if (d.type === 'number' && /[dmyhs]/i.test((meta.formats[styleOf(r, c)] ?? '').replace(/"[^"]*"|\[[^\]]*\]/g, ''))) {
       return store.row(sheet, r)?.find((x) => x[0] === c)?.[1] ?? d.value
     }
-    return d.value
+    return d.type === 'number' && locale && d.value !== '' && Number.isFinite(Number(d.value)) ? numberText(Number(d.value), locale) : d.value
   }
 
   const startEdit = async (initial?: string, bar = false) => {
@@ -1251,7 +1261,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
     closed.current = e
     setEdit(null)
     const value = closeFormula(e.value)
-    if (value !== e.initial) lastRun.current = run(client.call('xlsx.set', e.sheet, [{ r: e.r, c: e.c, input: value }])).then(() => widen({ r0: e.r, c0: e.c, r1: e.r, c1: e.c }, e.sheet))
+    if (value !== e.initial) lastRun.current = run(client.call('xlsx.set', e.sheet, [{ r: e.r, c: e.c, input: value }], typed)).then(() => widen({ r0: e.r, c0: e.c, r1: e.r, c1: e.c }, e.sheet))
     if (e.sheet !== sheet) return backTo(e, move)
     if (move) moveBy(move[0], move[1], false)
     focusGrid()
@@ -1291,7 +1301,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
         cells.push({ r, c, input })
       }
     }
-    lastRun.current = run(client.call('xlsx.set', e.sheet, cells)).then(() => widen(R, e.sheet))
+    lastRun.current = run(client.call('xlsx.set', e.sheet, cells, typed)).then(() => widen(R, e.sheet))
     if (e.sheet !== sheet) return backTo(e)
     focusGrid()
   }
@@ -1649,32 +1659,34 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
     const p = pendingFmt.current
     if (p && (p.sel !== selKey || (p.waiting === 0 && marks(p.fmt) === marks(cellFmt)))) pendingFmt.current = null
   }
+  const publishFormat = useViewCommands(viewer.ctl, {
+    goto: gotoSheet,
+    undo: () => {
+      pendingFmt.current = null
+      if (editable) undo()
+    },
+    redo: () => {
+      pendingFmt.current = null
+      if (editable) redo()
+    },
+    format: (c) => {
+      const p = pendingFmt.current && pendingFmt.current.sel === selKey ? pendingFmt.current : null
+      const now = p ? p.fmt : cellFmt
+      const patch = editable && cellPatch(c, now)
+      if (!patch) return
+      const q = p ?? { sel: selKey, fmt: now, waiting: 0 }
+      q.fmt = marksAfter(c, now)
+      q.waiting++
+      pendingFmt.current = q
+      void fmtAt(fmtRange(), patch, false).finally(() => {
+        q.waiting--
+      })
+    },
+  })
   useEffect(() => {
-    gridCommands.current = {
-      undo: () => {
-        pendingFmt.current = null
-        if (editable) undo()
-      },
-      redo: () => {
-        pendingFmt.current = null
-        if (editable) redo()
-      },
-      format: (c) => {
-        const p = pendingFmt.current && pendingFmt.current.sel === selKey ? pendingFmt.current : null
-        const now = p ? p.fmt : cellFmt
-        const patch = editable && cellPatch(c, now)
-        if (!patch) return
-        const q = p ?? { sel: selKey, fmt: now, waiting: 0 }
-        q.fmt = marksAfter(c, now)
-        q.waiting++
-        pendingFmt.current = q
-        void fmtAt(fmtRange(), patch, false).finally(() => {
-          q.waiting--
-        })
-      },
-    }
+    publishFormat(editable ? cellFmt : null)
     const h = store.history
-    viewer.ctl?.update({ format: editable ? cellFmt : null, canUndo: editable && h.undo > 0, canRedo: editable && h.redo > 0 })
+    viewer.ctl?.update({ canUndo: editable && h.undo > 0, canRedo: editable && h.redo > 0 })
   })
 
   /** the selection as clipboard text, when all its rows are at hand (else null: the worker has them) */
@@ -1868,8 +1880,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
         for (let j = 0; j < cols; j++) {
           const cell = clip.cells[down ? i % h : i]?.[down ? j : j % w] ?? null
           const tile = down ? Math.floor(i / h) : Math.floor(j / w)
-          // (the worker moves every formula by the distance of the first block: the others by what is left of theirs)
-          line.push(cell && cell[3] !== undefined && tile ? ([cell[0], cell[1], cell[2], translateFormula(cell[3], down ? tile * h : 0, down ? 0 : tile * w)] as ClipCell) : cell)
+          line.push(shiftedClip(cell, down ? tile * h : 0, down ? 0 : tile * w))
         }
         cells.push(line)
       }
@@ -2115,10 +2126,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
         const line: ClipCell[] = []
         for (let j = 0; j < w * tiles.c; j++) {
           const src = copied[i % h]?.[j % w] ?? null
-          const ti = Math.floor(i / h)
-          const tj = Math.floor(j / w)
-          // (the worker moves every formula by the distance of the first block: the others by what is left of theirs)
-          line.push(src && src[3] !== undefined && (ti || tj) ? ([src[0], src[1], src[2], translateFormula(src[3], ti * h, tj * w)] as ClipCell) : src)
+          line.push(shiftedClip(src, Math.floor(i / h) * h, Math.floor(j / w) * w))
         }
         cells.push(line)
       }
