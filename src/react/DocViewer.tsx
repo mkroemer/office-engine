@@ -26,6 +26,8 @@ import type { CollabOptions } from '../collab'
 import { CollabBar, PeerOverlay, useCollab } from '../collab/react'
 import { CommentsContext, CommentsCtl, useCommentsState, type CommentOptions } from './comments/Comments'
 import { COMMENT_KEYS, CommentsPanel } from './comments/CommentsPanel'
+import { LocaleContext } from './common/locale'
+import { inputLocale } from '../core/number-input'
 
 export interface DocViewerProps {
   /**
@@ -112,6 +114,12 @@ export interface DocViewerProps {
    * Each is rendered in `span.de-icon`, sized by font-size (1em).
    */
   icons?: Icons
+  /**
+   * BCP 47 tag numbers typed into the viewer are read in: a cell of a sheet, the font size, a margin (`1,5` and
+   * `1.234,5` with `de-DE`). Without it (or with a tag that is not one) a number has a decimal point, whatever the
+   * browser's language. Saved values and formulas are the same in every locale.
+   */
+  locale?: string
 }
 
 const EXT: Record<string, string> = { docx: '.docx', xlsx: '.xlsx', pptx: '.pptx' }
@@ -163,6 +171,7 @@ function fmtBytes(n: number) {
 
 export function DocViewer(props: DocViewerProps) {
   const { src, name, className, style, toolbar = true, toolbarExtra, zoom, thumbnails, headers, credentials, worker, styleTarget, theme, onLoad, onError } = props
+  const locale = inputLocale(props.locale)
   const root = useThemeRoot(theme, style)
   const { allowEdit = true, allowSave = true, allowDownload = true, fileMenu = true, allowOpen = true, captureSelectAll = true, onSave, onDirtyChange } = props
   const [editing, setEditing] = useState(!!props.editable)
@@ -584,6 +593,7 @@ export function DocViewer(props: DocViewerProps) {
   else body = <PptxView client={client} initialZoom={zoom} thumbnails={thumbnails} />
 
   return (
+    <LocaleContext.Provider value={locale}>
     <IconsProvider icons={props.icons}>
     <div ref={rootRef} className={root.className + (className ? ` ${className}` : '')} style={root.style} onKeyDown={onKeyDown}>
       {toolbar && (
@@ -741,5 +751,6 @@ export function DocViewer(props: DocViewerProps) {
       )}
     </div>
     </IconsProvider>
+    </LocaleContext.Provider>
   )
 }

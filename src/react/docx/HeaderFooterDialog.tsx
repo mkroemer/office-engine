@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Block, DocxMeta, HFKind, HFLine, HFSet } from '../../core/docx/types'
+import { numberText, parseNumber } from '../../core/number-input'
+import { useLocale } from '../common/locale'
 
 const KINDS: { k: HFKind; label: string }[] = [
   { k: 'header', label: 'Header' },
@@ -27,8 +29,8 @@ interface Part {
   rich: boolean
 }
 
-/** the editable form of a header / footer as converted for display */
-export function partOf(blocks: Block[] | undefined): Part {
+/** the editable form of a header / footer as converted for display; its size as typed in `locale` */
+export function partOf(blocks: Block[] | undefined, locale?: string): Part {
   const paras = (blocks ?? []).filter((b) => b.t === 'p')
   const rich = (blocks ?? []).some((b) => b.t !== 'p' || b.runs.some((r) => r.t !== 'text' && r.t !== 'field'))
   const lines = paras.map((p) => (p.t === 'p' ? p.runs.map((r) => (r.t === 'text' ? r.text.replace(/\n/g, ' ') : r.t === 'field' ? `{${r.kind}}` : '')).join('') : ''))
@@ -38,20 +40,24 @@ export function partOf(blocks: Block[] | undefined): Part {
   const first = runs[0] as { s?: { b?: boolean; sz?: number } } | undefined
   // trailing empty lines carry nothing
   while (lines.length && !lines[lines.length - 1].trim()) lines.pop()
-  return { text: lines.join('\n'), align, b: runs.length > 0 && runs.every((r) => (r as { s?: { b?: boolean } }).s?.b), sz: first?.s?.sz ? String(first.s.sz) : '', rich }
+  return { text: lines.join('\n'), align, b: runs.length > 0 && runs.every((r) => (r as { s?: { b?: boolean } }).s?.b), sz: first?.s?.sz ? numberText(first.s.sz, locale) : '', rich }
 }
 
-const linesOf = (p: Part): HFLine[] =>
-  p.text.split('\n').length === 1 && !p.text.trim()
+/** the lines of a part; its size read in `locale` (one that is not a number from 4 up: the size of the text around, as before) */
+const linesOf = (p: Part, locale?: string): HFLine[] => {
+  const sz = parseNumber(p.sz, locale)
+  return p.text.split('\n').length === 1 && !p.text.trim()
     ? []
-    : p.text.split('\n').map((text) => ({ text, align: p.align, ...(p.b ? { b: true } : {}), ...(Number(p.sz) >= 4 ? { sz: Number(p.sz) } : {}) }))
+    : p.text.split('\n').map((text) => ({ text, align: p.align, ...(p.b ? { b: true } : {}), ...(sz !== null && sz >= 4 ? { sz } : {}) }))
+}
 
 /**
  * Headers and footers of the document: text (a line per paragraph), alignment, bold, size, page number / page count,
  * a different first page. `onOk` gets only the parts that changed.
  */
 export function HeaderFooterDialog({ meta, focus, onOk, onClose }: { meta: DocxMeta; focus?: HFKind; onOk: (set: HFSet) => void; onClose: () => void }) {
-  const init = useRef(Object.fromEntries(KINDS.map(({ k }) => [k, partOf(meta[k])])) as Record<HFKind, Part>)
+  const locale = useLocale()
+  const init = useRef(Object.fromEntries(KINDS.map(({ k }) => [k, partOf(meta[k], locale)])) as Record<HFKind, Part>)
   const [parts, setParts] = useState(init.current)
   const [first, setFirst] = useState(!!meta.titlePg)
   const [active, setActive] = useState<HFKind>(focus && (first || !focus.startsWith('first')) ? focus : 'header')
@@ -76,7 +82,7 @@ export function HeaderFooterDialog({ meta, focus, onOk, onClose }: { meta: DocxM
     for (const { k } of KINDS) {
       const a = parts[k]
       const b = init.current[k]
-      if (a.text !== b.text || a.align !== b.align || a.b !== b.b || a.sz !== b.sz) (set.parts ??= {})[k] = linesOf(a)
+      if (a.text !== b.text || a.align !== b.align || a.b !== b.b || a.sz !== b.sz) (set.parts ??= {})[k] = linesOf(a, locale)
     }
     if (first !== !!meta.titlePg) set.titlePg = first
     onClose()
@@ -134,7 +140,7 @@ export function HeaderFooterDialog({ meta, focus, onOk, onClose }: { meta: DocxM
           </label>
           <label className="de-ps-field">
             <span>Size</span>
-            <input type="number" step="any" min="4" aria-label="Font size (pt)" placeholder="auto" value={cur.sz} onChange={(e) => put({ sz: e.target.value })} />
+            <input type={locale ? 'text' : 'number'} inputMode="decimal" step="any" min="4" aria-label="Font size (pt)" placeholder="auto" value={cur.sz} onChange={(e) => put({ sz: e.target.value })} />
           </label>
         </div>
         <div className="de-ps-row">

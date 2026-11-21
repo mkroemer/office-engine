@@ -10,7 +10,7 @@ import { XlsxWorkbook } from '../xlsx/workbook'
 import { XlsxEditor } from '../xlsx/editor'
 import { readSheetDrawings } from '../xlsx/drawings'
 import { loadDelimited } from '../xlsx/import'
-import type { BookOp, CellInput, FindOptions, FmtPatch, Range, SheetOp } from '../xlsx/types'
+import type { BookOp, CellInput, FindOptions, FmtPatch, Range, SetOptions, SheetOp } from '../xlsx/types'
 import type { PParaSpec, ShapeOp, SlideOp } from '../pptx/types'
 import { addSlideImage, shapeOps, slideOp, undoShapes } from '../pptx/edit'
 import { ZipArchive } from '../zip'
@@ -192,7 +192,7 @@ export class Engine {
         return
       }
       case 'xlsx.set':
-        return this.xed().setCells(args[0] as number, args[1] as CellInput[])
+        return this.xed().setCells(args[0] as number, args[1] as CellInput[], args[2] as SetOptions | undefined)
       case 'xlsx.copy':
         return this.xed().copy(args[0] as number, args[1] as Range)
       case 'xlsx.region':

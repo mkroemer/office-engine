@@ -17,6 +17,8 @@ import { Toast } from '../common/Dialog'
 import { FindBar } from '../docx/FindBar'
 import { XlsxToolbar, type MergeMode } from './XlsxToolbar'
 import { Icon } from '../edit/Toolbar'
+import { useLocale } from '../common/locale'
+import { numberText } from '../../core/number-input'
 import { Axis } from './axis'
 import { drawingBox, drawingEl, drawingExtent, useSheetDrawings } from './drawings'
 import { fitNumber, fontPx } from './fit'
@@ -660,6 +662,9 @@ const SINK_STYLE: CSSProperties = { left: 4, top: 4, width: 1, height: 1 }
 function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }: GridProps) {
   const viewer = useViewer()
   const editable = viewer.editable
+  // numbers typed are read in it, and a number edited is shown in it (1,5 in de-DE: what is shown is read back the same)
+  const locale = useLocale()
+  const typed = locale ? { locale } : undefined
   const s = store.sheet(sheet)
   const [scrollRef, size] = useSize<HTMLDivElement>()
   const scroll = useScroll(scrollRef)
@@ -1152,7 +1157,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
     if (d.type === 'number' && /[dmyhs]/i.test((meta.formats[styleOf(r, c)] ?? '').replace(/"[^"]*"|\[[^\]]*\]/g, ''))) {
       return store.row(sheet, r)?.find((x) => x[0] === c)?.[1] ?? d.value
     }
-    return d.value
+    return d.type === 'number' && locale && d.value !== '' && Number.isFinite(Number(d.value)) ? numberText(Number(d.value), locale) : d.value
   }
 
   const startEdit = async (initial?: string, bar = false) => {
@@ -1176,7 +1181,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
     closed.current = e
     setEdit(null)
     const value = closeFormula(e.value)
-    if (value !== e.initial) lastRun.current = run(client.call('xlsx.set', e.sheet, [{ r: e.r, c: e.c, input: value }])).then(() => widen({ r0: e.r, c0: e.c, r1: e.r, c1: e.c }, e.sheet))
+    if (value !== e.initial) lastRun.current = run(client.call('xlsx.set', e.sheet, [{ r: e.r, c: e.c, input: value }], typed)).then(() => widen({ r0: e.r, c0: e.c, r1: e.r, c1: e.c }, e.sheet))
     if (e.sheet !== sheet) return backTo(e, move)
     if (move) moveBy(move[0], move[1], false)
     focusGrid()
@@ -1216,7 +1221,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
         cells.push({ r, c, input })
       }
     }
-    lastRun.current = run(client.call('xlsx.set', e.sheet, cells)).then(() => widen(R, e.sheet))
+    lastRun.current = run(client.call('xlsx.set', e.sheet, cells, typed)).then(() => widen(R, e.sheet))
     if (e.sheet !== sheet) return backTo(e)
     focusGrid()
   }
