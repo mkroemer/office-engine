@@ -79,7 +79,7 @@ CSS is auto-injected, no import needed (or import `@p10node/office-engine/styles
 | `captureSelectAll` | `boolean`                                      | `true`    | Ctrl/⌘+A from anywhere on the page selects the document; `false`: from the viewer only                                   |
 | `fileMenuItems`    | `FileMenuItem[]`                               | –         | Extra File menu entries (`label`, `onClick`, `icon`, `hint`)                                                             |
 | `icons`            | `Icons`                                        | built-in  | Your own icons: a map by `IconName` or a resolver `(name, { size }) => node`; see [Icons](#icons)                        |
-| `components`       | `Partial<UIComponents>`                        | built-in  | Your own `Button`, `Select`, `Separator`, `Dialog`, `Toast` in the toolbars and dialogs; see [Theming](theming.md#your-own-components) |
+| `components`       | `Partial<UIComponents>`                        | built-in  | Replacements for toolbar and dialog controls. See [Theming](theming.md#your-own-components).                             |
 | `fonts`            | `FontSource[]`                                 | –         | Font files for the documents' text (the library ships none), loaded when a document uses them; see [Fonts](#fonts)       |
 | `onRename`         | `(name) => void`                               | –         | File → Rename result (extension included)                                                                                |
 | `onClose`          | `() => void`                                   | –         | Adds File → Close                                                                                                        |

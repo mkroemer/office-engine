@@ -120,8 +120,9 @@ const components: Partial<UIComponents> = { Button: ViewerButton, Separator: Vie
 | `Dialog`    | prompts (link, rename, …) and confirmations                                                      | `DialogProps`: `title`, `kind` (`'alert'` for a question), `children` (the body), `actions` (`label`, `onClick`, `extra` for an auxiliary action such as Remove link, `primary`, `submit`, `autoFocus`), `onSubmit` (the body is a form), `onClose` (Escape, backdrop)                                                                                                               |
 | `Toast`     | short messages at the bottom                                                                     | `text` (the viewer removes it after a few seconds)                                                                                                                                                                                                                                                                                                                                   |
 
-The font-size input and its list (`SizeBox`), Page setup, Header / footer and Details dialogs, and the buttons
-inside border pickers retain the built-in markup. `components` replaces the controls listed above.
+The font-size input and list (`SizeBox`), Page setup, Header / footer and Details dialogs, and the buttons
+inside border pickers retain the built-in markup. The font-size step buttons use the host `Button`. A host
+`Select` should honor the supplied width so changes to its selected label do not disrupt toolbar overflow measurement.
 
 A host Dialog can put its footer outside the form: call the action's `onClick` from a regular button. Inside
 a form, render `submit` actions as submit buttons and let `onSubmit` run them; do not also call their `onClick`,
