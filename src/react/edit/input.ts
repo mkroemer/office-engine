@@ -638,7 +638,8 @@ export class RichInput {
    */
   reflow(): boolean {
     const want = this.expected ?? this.last
-    if (!this.root || this.composing || this.override || !want) return false
+    // Replacing the DOM selection can focus the editor. Keep the host's focus when wrapping changes.
+    if (!this.focused || this.composing || this.override || !want) return false
     const now = this.readSel()
     if (now && sameSel(now, want)) return false
     // a selection in other paragraphs is a new one (its change is not read yet), not the model's moved by the cut
