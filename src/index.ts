@@ -14,6 +14,7 @@ export { IconsProvider, ICON_NAMES, type IconName, type Icons } from './react/ed
 
 export { DocumentClient, setDefaultWorker, type OpenOptions } from './core/worker/client'
 export type { DocSource } from './core/source'
+export type { FontSource } from './core/fonts'
 export type { DocKind } from './core/opc'
 export type * from './core/docx/types'
 export type * from './core/xlsx/types'

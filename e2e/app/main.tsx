@@ -4,6 +4,7 @@
  *   comments: &me=Ann&meId=u1 (author), &people=1 (mentions: Ann, Bob Stone, Cid), &comments=0 (hidden), &cmOpen=1
  *   &icons=1: every icon from a host resolver, as `<svg data-host-icon={name}>`
  *   &locale=de-DE: the tag numbers typed are read in
+ *   &fonts=[{"family":"Carlito","src":"/fonts/carlito.ttf"}]: the host's fonts (JSON)
  */
 import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -73,6 +74,7 @@ const initial: DocViewerProps = {
         </svg>
       )
     : undefined,
+  fonts: q.get('fonts') ? JSON.parse(q.get('fonts')!) : undefined,
   collab: q.get('collab') ? { transport: q.get('collab')!, room: q.get('room') ?? 'e2e', base: Number(q.get('base')) || 0, user: { name: q.get('user') ?? 'Tester' } } : undefined,
 }
 

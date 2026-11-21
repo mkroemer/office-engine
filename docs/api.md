@@ -13,6 +13,7 @@ import { DocViewer } from '@p10node/office-engine'
 <DocViewer src={file} fileMenu={false} />                         // no File menu
 <DocViewer src={file} theme="dark" />                             // dark chrome; "auto" follows the OS setting
 <DocViewer src={file} editable locale="de-DE" />                  // numbers typed as 1,5 and 1.234,5
+<DocViewer src={file} fonts={[{ family: 'Carlito', src: '/fonts/Carlito-Regular.ttf' }]} />  // font files, see Fonts
 ```
 
 ### File menu
@@ -73,6 +74,7 @@ CSS is auto-injected, no import needed (or import `@p10node/office-engine/styles
 | `captureSelectAll` | `boolean`                                      | `true`    | Ctrl/⌘+A from anywhere on the page selects the document; `false`: from the viewer only                                   |
 | `fileMenuItems`    | `FileMenuItem[]`                               | –         | Extra File menu entries (`label`, `onClick`, `icon`, `hint`)                                                             |
 | `icons`            | `Icons`                                        | built-in  | Your own icons: a map by `IconName` or a resolver `(name, { size }) => node`; see [Icons](#icons)                        |
+| `fonts`            | `FontSource[]`                                 | –         | Font files for the documents' text (the library ships none), loaded when a document uses them; see [Fonts](#fonts)       |
 | `onRename`         | `(name) => void`                               | –         | File → Rename result (extension included)                                                                                |
 | `onClose`          | `() => void`                                   | –         | Adds File → Close                                                                                                        |
 | `onSave`           | `(blob, name) => void`                         | download  | Receives saved file (downloads by default): the Office file, or a Markdown / HTML / SVG file as itself                   |
@@ -211,6 +213,49 @@ import { IconsProvider, XlsxView } from '@p10node/office-engine'
 
 Without `DocViewer`: `client.call('xlsx.set', sheet, cells, { locale: 'de-DE' })`; `mount(el, { src, locale: 'de-DE' })`; `<office-viewer locale="de-DE">`.
 
+### Fonts
+
+The library ships no font files. Text is shown in the fonts the browser has, and where a line or a page breaks depends on them: a document in Calibri on a machine without Calibri is set in another font and breaks elsewhere. Documents name metric-compatible fallbacks after their fonts (the same widths, under the SIL Open Font License), so supplying those files is enough for most Office documents to break as they do in Office:
+
+| Document font          | Fallback                 |
+|------------------------|--------------------------|
+| Calibri, Calibri Light | Carlito                  |
+| Cambria                | Caladea                  |
+| Arial, Helvetica       | Liberation Sans, Arimo   |
+| Times New Roman        | Liberation Serif, Tinos  |
+| Courier New            | Liberation Mono, Cousine |
+
+```tsx
+import { DocViewer, type FontSource } from '@p10node/office-engine'
+
+// Served by your app (Carlito and Caladea: Google Fonts / Debian fonts-crosextra-*; Liberation: github.com/liberationfonts)
+const fonts: FontSource[] = [
+  { family: 'Carlito', src: '/fonts/Carlito-Regular.ttf' },
+  { family: 'Carlito', src: '/fonts/Carlito-Bold.ttf', weight: 700 },
+  { family: 'Carlito', src: '/fonts/Carlito-Italic.ttf', style: 'italic' },
+  { family: 'Carlito', src: '/fonts/Carlito-BoldItalic.ttf', weight: 700, style: 'italic' },
+  { family: 'Caladea', src: '/fonts/Caladea-Regular.ttf' },
+  { family: 'Liberation Sans', src: '/fonts/LiberationSans-Regular.ttf' },
+  { family: 'Liberation Serif', src: '/fonts/LiberationSerif-Regular.ttf' },
+  { family: 'Liberation Mono', src: '/fonts/LiberationMono-Regular.ttf' },
+]
+
+<DocViewer src={file} fonts={fonts} />
+```
+
+| `FontSource`   | Type                                               | Notes                                                                                 |
+|----------------|----------------------------------------------------|---------------------------------------------------------------------------------------|
+| `family`       | `string`                                           | The name text asks for: a fallback (`Carlito`) or the document's own name (`Calibri`) |
+| `src`          | `string \| ArrayBuffer \| ArrayBufferView \| Blob` | A URL (resolved against the page) or the file's bytes: TTF, OTF, WOFF, WOFF2          |
+| `weight`       | `number \| string`                                 | CSS `font-weight` of the file: `700`, `'bold'`, `'100 900'` for a variable font       |
+| `style`        | `string`                                           | `'normal'`, `'italic'`, `'oblique'`                                                   |
+| `unicodeRange` | `string`                                           | CSS `unicode-range`, when a family comes in several files                             |
+
+- **Which name**: under a fallback's name (`Carlito`), the file is used where the original is not installed, and a machine that has Calibri keeps it. Under the document's own name (`Calibri`), it is used everywhere, before an installed font of that name.
+- **When**: a file is fetched when a document whose text is set in its family is shown (through the fallback list too: a declared `Carlito` is fetched for a document in Calibri), not before. Nothing is fetched when no font is declared. The faces are added to the page's `document.fonts` (the `FontFace` API, no stylesheet) and shared by the viewers on the page that declare the same file; they are removed when no viewer declares them any more.
+- **Layout**: a document is measured and paginated once the fonts it uses are loaded. A file that fails to load is reported to `onError` and in the console, and the text is shown in the next font of its list; one that takes more than 3 s is not waited for any longer: the document is laid out without it, and again when it arrives (the page in view and the caret stay where they are). A font the page provides itself (an `@font-face` of the host page) that arrives late also has the document laid out again. Spreadsheets fit numbers to their columns again; slides are laid out by the browser and follow by themselves. Printing and *Download as PDF* use the same files.
+- **Only from the host**: fonts are taken from this list only. A document's font names pick among them, and fonts embedded in a document (`word/fontTable.xml`) are not read.
+
 ## Without a React build
 
 ```html
@@ -226,7 +271,7 @@ Without `DocViewer`: `client.call('xlsx.set', sheet, cells, { locale: 'de-DE' })
 </script>
 ```
 
-`<office-viewer>`: attributes `src`, `name`, `editable`, `toolbar="false"`, `thumbnails="false"`, `save="false"`, `download="false"`, `file-menu="false"`, `open="false"`, `capture-select-all="false"`, `theme="dark"` (or `"auto"`), `locale="de-DE"` (numbers typed, see [above](#numbers-typed-in-a-locale)), `collab` / `room` / `user` / `base` (real-time collaboration; `user` also writes the comments), `comments="false"`; properties `.file = File` and `.icons` (map or resolver, as `icons` above); events `load`, `error`, `comment` (`detail`: a `CommentEvent`).
+`<office-viewer>`: attributes `src`, `name`, `editable`, `toolbar="false"`, `thumbnails="false"`, `save="false"`, `download="false"`, `file-menu="false"`, `open="false"`, `capture-select-all="false"`, `theme="dark"` (or `"auto"`), `locale="de-DE"` (numbers typed, see [above](#numbers-typed-in-a-locale)), `collab` / `room` / `user` / `base` (real-time collaboration; `user` also writes the comments), `comments="false"`, `fonts` (a JSON list of `FontSource` with URLs: `fonts='[{"family":"Carlito","src":"/fonts/Carlito-Regular.ttf"}]'`); properties `.file = File`, `.icons` (map or resolver, as `icons` above) and `.fonts` (as `fonts` above, bytes too; it wins over the attribute); events `load`, `error`, `comment` (`detail`: a `CommentEvent`).
 
 ## Core API (no React)
 

@@ -21,7 +21,8 @@ import { useLocale } from '../common/locale'
 import { numberText } from '../../core/number-input'
 import { Axis } from './axis'
 import { drawingBox, drawingEl, drawingExtent, useSheetDrawings } from './drawings'
-import { fitNumber, fontPx } from './fit'
+import { fitNumber, fontPx, forgetWidths } from './fit'
+import { useDocFonts } from '../common/fonts'
 import { htmlToTsv } from './html'
 import { fontOf, rotatedHeight, textWidth, wrapHeight } from './measure'
 import { sheetPrintable } from './print'
@@ -759,6 +760,17 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
 
   const styles = meta.styles
   const basePx = fontPx(meta.baseFont.fontSize, 14.67)
+  // the host's fonts the workbook is set in are loaded: numbers fitted to their columns before one arrived (or before
+  // the page's own web font did) are fitted again
+  const fonts = useDocFonts()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const stacks = useMemo(() => new Set([meta.baseFont, ...styles].map((x) => x?.fontFamily).filter((f): f is string => typeof f === 'string')), [styles.length])
+  const fontsKey = `${fonts.ready(stacks)}|${fonts.gen}`
+  const lastFonts = useRef(fontsKey)
+  if (lastFonts.current !== fontsKey) {
+    lastFonts.current = fontsKey
+    forgetWidths()
+  }
   const mergeAt = (r: number, c: number) => s.merges.find((m) => r >= m.r0 && r <= m.r1 && c >= m.c0 && c <= m.c1)
 
   // A row that says no height shows its turned text whole: Excel fits such rows when it opens the file. In the view

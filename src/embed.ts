@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import './core/default-worker'
 import { DocViewer, type DocViewerProps } from './react/DocViewer'
 import type { Icons } from './react/edit/Toolbar'
+import type { FontSource } from './core/fonts'
 
 export type MountOptions = Omit<DocViewerProps, 'styleTarget'>
 
@@ -37,14 +38,17 @@ export function mount(el: HTMLElement, options: MountOptions): MountedViewer {
  * Rendered inside a shadow root so host page CSS cannot leak in.
  * Attributes: src, name, editable, toolbar / thumbnails / save / download / file-menu / open / capture-select-all ("false" to turn off),
  * theme ("light" | "dark" | "auto"), locale (BCP 47 tag numbers typed are read in: "de-DE" reads 1,5);
+ * theme ("light" | "dark" | "auto"), fonts (a JSON list of `{ family, src, weight?, style?, unicodeRange? }` with URLs);
  * real-time collaboration: collab (hub WebSocket URL), room, user (display name), base (snapshot seq `src` was opened at).
- * Properties: `file` (File/Blob/ArrayBuffer) for local data; `icons` (map or resolver, as DocViewer's `icons`).
+ * Properties: `file` (File/Blob/ArrayBuffer) for local data; `icons` (map or resolver, as DocViewer's `icons`);
+ * `fonts` (as DocViewer's `fonts`, bytes too; over the attribute).
  */
 export class OfficeViewerElement extends HTMLElement {
-  static observedAttributes = ['src', 'name', 'toolbar', 'thumbnails', 'editable', 'save', 'download', 'file-menu', 'open', 'capture-select-all', 'theme', 'collab', 'room', 'user', 'base', 'comments', 'locale']
+  static observedAttributes = ['src', 'name', 'toolbar', 'thumbnails', 'editable', 'save', 'download', 'file-menu', 'open', 'capture-select-all', 'theme', 'collab', 'room', 'user', 'base', 'comments', 'locale', 'fonts']
   private viewer?: MountedViewer
   private _file?: Blob | ArrayBuffer
   private _icons?: Icons
+  private _fonts?: readonly FontSource[]
   // one function each for the element's life: a new one with every update would run the viewer's load effect again (a `load` event per update)
   private readonly onLoad: NonNullable<MountOptions['onLoad']> = (client) => this.dispatchEvent(new CustomEvent('load', { detail: { kind: client.kind, name: client.name } }))
   private readonly onError: NonNullable<MountOptions['onError']> = (error) => this.dispatchEvent(new CustomEvent('error', { detail: error }))
@@ -63,6 +67,14 @@ export class OfficeViewerElement extends HTMLElement {
   }
   set icons(v: Icons | undefined) {
     this._icons = v
+    this.sync()
+  }
+
+  get fonts() {
+    return this._fonts
+  }
+  set fonts(v: readonly FontSource[] | undefined) {
+    this._fonts = v
     this.sync()
   }
 
@@ -101,6 +113,7 @@ export class OfficeViewerElement extends HTMLElement {
       theme: THEMES.find((t) => t === this.getAttribute('theme')),
       icons: this._icons,
       locale: this.getAttribute('locale') ?? undefined,
+      fonts: this._fonts ?? fontsAttr(this.getAttribute('fonts')),
       collab:
         this.getAttribute('collab') && this.getAttribute('room')
           ? {
@@ -125,6 +138,19 @@ export class OfficeViewerElement extends HTMLElement {
   private sync() {
     this.viewer?.update(this.props())
   }
+}
+
+/** the `fonts` attribute: a JSON list of fonts by URL; anything else is ignored, with a warning */
+function fontsAttr(v: string | null): FontSource[] | undefined {
+  if (!v) return undefined
+  try {
+    const list = JSON.parse(v) as unknown
+    if (Array.isArray(list)) return list.filter((f): f is FontSource => !!f && typeof f.family === 'string' && typeof f.src === 'string')
+  } catch {
+    // reported below
+  }
+  console.warn('[office-engine] the fonts attribute is not a JSON list of { family, src } objects; it is ignored')
+  return undefined
 }
 
 export function defineElement(tag = 'office-viewer') {

@@ -28,6 +28,8 @@ import { CommentsContext, CommentsCtl, useCommentsState, type CommentOptions } f
 import { COMMENT_KEYS, CommentsPanel } from './comments/CommentsPanel'
 import { LocaleContext } from './common/locale'
 import { inputLocale } from '../core/number-input'
+import type { FontSource } from '../core/fonts'
+import { FontsContext, useHostFonts } from './common/fonts'
 
 export interface DocViewerProps {
   /**
@@ -120,6 +122,15 @@ export interface DocViewerProps {
    * browser's language. Saved values and formulas are the same in every locale.
    */
   locale?: string
+  /**
+   * Font files the host supplies (the library ships none): `{ family, src, weight?, style?, unicodeRange? }`, `src` a URL
+   * or the bytes. A file is loaded when a document's text names its family, directly (`Calibri`) or as the fallback
+   * the font list puts after it (`Carlito` for Calibri, `Caladea` for Cambria, `Liberation Sans / Serif / Mono` for
+   * Arial, Times New Roman, Courier New); documents are laid out once it is there. One that fails is reported to
+   * `onError`, one slower than 3 s is waited for no longer: the text is shown in the next font of its list, and laid
+   * out again when it arrives.
+   */
+  fonts?: readonly FontSource[]
 }
 
 const EXT: Record<string, string> = { docx: '.docx', xlsx: '.xlsx', pptx: '.pptx' }
@@ -173,6 +184,7 @@ export function DocViewer(props: DocViewerProps) {
   const { src, name, className, style, toolbar = true, toolbarExtra, zoom, thumbnails, headers, credentials, worker, styleTarget, theme, onLoad, onError } = props
   const locale = inputLocale(props.locale)
   const root = useThemeRoot(theme, style)
+  const fonts = useHostFonts(props.fonts, onError)
   const { allowEdit = true, allowSave = true, allowDownload = true, fileMenu = true, allowOpen = true, captureSelectAll = true, onSave, onDirtyChange } = props
   const [editing, setEditing] = useState(!!props.editable)
   useEffect(() => {
@@ -701,7 +713,9 @@ export function DocViewer(props: DocViewerProps) {
         <div className="de-main" ref={mainRef}>
           <ViewerContext.Provider value={api}>
             <CommentsContext.Provider value={cmCtl}>
-              <StatusContext.Provider value={statusEl}>{body}</StatusContext.Provider>
+              <StatusContext.Provider value={statusEl}>
+                <FontsContext.Provider value={fonts}>{body}</FontsContext.Provider>
+              </StatusContext.Provider>
             </CommentsContext.Provider>
           </ViewerContext.Provider>
         </div>

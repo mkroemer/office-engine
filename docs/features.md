@@ -9,6 +9,7 @@
   - DOCX: blocks (paragraph/table) stream in → offscreen height measurement in time slices → pagination → only visible pages render
   - XLSX: rows stream in, 2D virtualized grid (only cells in viewport render), freeze panes, merge, number format, sheet tabs
   - PPTX: slides parsed on demand when scrolled into view, virtualized thumbnails
+- **Fonts**: the host can supply font files (`fonts`: URLs or bytes, loaded with the `FontFace` API when a document uses the family); a declared fallback serves the fonts named before it (Carlito for Calibri, Caladea for Cambria, Liberation for Arial, Times New Roman and Courier New). DOCX pages are measured once those fonts are loaded (at most 3 s, not past a failure; a font that comes later has the pages measured again); a late web font of the page also has the pages measured again; XLSX fits its numbers again. No font file ships with the library, and fonts embedded in a document are not read. See [API](api.md#fonts)
 
 ## Format support
 
