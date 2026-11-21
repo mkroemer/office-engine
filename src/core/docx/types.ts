@@ -222,6 +222,8 @@ export interface TableOp {
   anchor?: number
   /** null deletes the table */
   spec: TableSpec | null
+  /** paragraphs of the table whose re-converted blocks to return (after style / list changes), as `EditOp.want` */
+  want?: number[]
 }
 
 export interface EditOp {

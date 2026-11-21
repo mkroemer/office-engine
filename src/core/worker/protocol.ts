@@ -59,7 +59,7 @@ export interface Methods {
   'plain.source'(): string | null
   'docx.start'(): void
   'docx.edit'(op: EditOp): EditResult
-  'docx.table'(op: TableOp): void
+  'docx.table'(op: TableOp): EditResult
   'docx.image'(bytes: ArrayBuffer, ext: string): { rid: string; path: string }
   'docx.link'(url: string): string
   /** id of a built-in paragraph style, created in styles.xml when missing */
