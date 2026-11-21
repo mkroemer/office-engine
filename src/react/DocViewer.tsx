@@ -122,6 +122,7 @@ export interface DocViewerProps {
    * browser's language. Saved values and formulas are the same in every locale.
    */
   locale?: string
+  /**
    * Font files the host supplies (the library ships none): `{ family, src, weight?, style?, unicodeRange? }`, `src` a URL
    * or the bytes. A file is loaded when a document's text names its family, directly (`Calibri`) or as the fallback
    * the font list puts after it (`Carlito` for Calibri, `Caladea` for Cambria, `Liberation Sans / Serif / Mono` for
