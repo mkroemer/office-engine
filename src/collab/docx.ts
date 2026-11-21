@@ -14,7 +14,7 @@ import type { Block, HFSetResult, Inline, PageSetResult, Paragraph, StyleInfo } 
 import type { DocumentClient } from '../core/worker/client'
 import type { Methods } from '../core/worker/protocol'
 import type { DocState, DocxCommit, DocxEditor } from '../react/docx/DocxEditor'
-import { domFromPos } from '../react/edit/input'
+import { domFromPos, paraRanges } from '../react/edit/input'
 import { normalize, plen, runsText, splitRuns, type Pos, type RRun, type Sel } from '../react/edit/rich'
 import { watchHost } from './hosts'
 import type { Adapter, ApplyResult } from './session'
@@ -762,10 +762,13 @@ export class DocxCollab implements Adapter<DocxOp> {
     }
     const sel: DOMRect[] = []
     const ad = domFromPos(pages, a)
-    if (ad && fd && (a.pa !== f.pa || a.o !== f.o)) {
+    if (a.pa === f.pa && a.o !== f.o) {
+      // one paragraph, maybe over the end of a page: only its parts, not what is between them
+      for (const r of paraRanges(pages, a.pa, Math.min(a.o, f.o), Math.max(a.o, f.o))) for (const x of Array.from(r.getClientRects())) if (x.width > 0.5) sel.push(x)
+    } else if (ad && fd && a.pa !== f.pa) {
       const r = document.createRange()
       try {
-        const forward = this.ed.cmp(a.pa, f.pa) < 0 || (a.pa === f.pa && a.o < f.o)
+        const forward = this.ed.cmp(a.pa, f.pa) < 0
         if (forward) {
           r.setStart(ad[0], ad[1])
           r.setEnd(fd[0], fd[1])

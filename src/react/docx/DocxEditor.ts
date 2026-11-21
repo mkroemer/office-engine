@@ -14,6 +14,7 @@ import { htmlToParas, type PastedCell, type PastedPara } from '../../core/html'
 import { docxBodyHtml, docxToText } from '../file/text'
 import { cellsIn, deleteCol, deleteRow, distributeCols, gridOf, insertCol, insertRow, mergeCells, newTable, patchCells, rectOf, setBorders, tableFromRows, unmergeCell, type BorderPreset, type CellRect } from './tables'
 import { changeSpans, hasChanges, resolveRuns, trackEdit } from './track'
+import type { Lines } from './paginate'
 import { collapsed, deleteRange, formatRange, linkSpan, markRange, normalize, plen, rlen, runAt, runsText, shiftPa, splitRuns, type Pos, type RRun, type Sel } from '../edit/rich'
 
 /** a place in a paragraph that survives edits elsewhere: paragraph id, page-break part, offset */
@@ -53,6 +54,8 @@ const marksOf = (ps: Paragraph[]) => {
 export interface DocState {
   blocks: Block[]
   heights: WeakMap<Block, number>
+  /** where the lines of a measured paragraph / the rows of a measured table are (where pages can cut them) */
+  lines?: WeakMap<Block, Lines>
   dirty: Set<Block>
   /** leading blocks measured at least once */
   frontier: number
@@ -188,6 +191,18 @@ function moveSel(sel: Sel, from: string, to: string): Sel {
   const d = Number(to.split('.').pop()) - Number(from.split('.').pop())
   const mv = (p: Sel['a']) => (dir(p.pa) === dir(from) ? { ...p, pa: dir(to) ? `${dir(to)}.${Number(p.pa.split('.').pop()) + d}` : String(Number(p.pa.split('.').pop()) + d) } : p)
   return { a: mv(sel.a), f: mv(sel.f) }
+}
+
+/** lines of a paragraph whose text went from `a` to `b`: the lines starting after the change move with the text */
+function shifted(l: Lines, a: string, b: string): Lines {
+  if (!l.at) return { ys: l.ys }
+  let pre = 0
+  while (pre < a.length && pre < b.length && a[pre] === b[pre]) pre++
+  let suf = 0
+  while (suf < a.length - pre && suf < b.length - pre && a[a.length - 1 - suf] === b[b.length - 1 - suf]) suf++
+  const at = l.at.map((x) => (x === undefined || x <= pre ? x : x >= a.length - suf ? x + b.length - a.length : pre))
+  for (let k = 1; k < at.length; k++) if (at[k] === undefined || at[k]! <= at[k - 1]! || at[k]! >= b.length) return { ys: l.ys }
+  return { ys: l.ys, at }
 }
 
 /** a model change: contiguous paragraphs replaced, or top-level blocks replaced */
@@ -395,6 +410,18 @@ export class DocxEditor implements RichHost<Paragraph> {
 
   // ---------------------------------------------------------------- mutation core
 
+  /**
+   * `next` replaces `was` on the page: measured again soon, laid out meanwhile as `was` was (its height; its rows when
+   * a table keeps the same rows; its lines when it is the same paragraph edited, `same`)
+   */
+  private estimate(was: Block | undefined, next: Block, same = false) {
+    this.st.heights.set(next, (was && this.st.heights.get(was)) ?? 0)
+    const l = was && this.st.lines?.get(was)
+    if (l && next.t === 'tbl' && was.t === 'tbl' && next.rows.length === was.rows.length) this.st.lines!.set(next, l)
+    else if (l && same && next.t === 'p' && was.t === 'p') this.st.lines!.set(next, shifted(l, runsText(was.runs as RRun[]), runsText(next.runs as RRun[])))
+    this.st.dirty.add(next)
+  }
+
   private splice(pa: string, count: number, next: Block[]): Block[] {
     const c = this.container(pa)!
     if (!c.cell) {
@@ -406,8 +433,7 @@ export class DocxEditor implements RichHost<Paragraph> {
     const blocks = [...c.list]
     blocks.splice(c.at, count, ...next)
     const nt: Table = { ...t, rows: t.rows.map((r, i) => (i !== ri ? r : { ...r, cells: r.cells.map((cell, j) => (j !== ci ? cell : { ...cell, blocks })) })) }
-    this.st.heights.set(nt, this.st.heights.get(t) ?? 0)
-    this.st.dirty.add(nt)
+    this.estimate(t, nt)
     this.st.blocks[bi] = nt
     return blocks
   }
@@ -438,10 +464,7 @@ export class DocxEditor implements RichHost<Paragraph> {
     }
     // heights: estimate from what was there, remeasure soon
     if (!c.cell) {
-      next.forEach((p, i) => {
-        this.st.heights.set(p, this.st.heights.get(before[i] ?? before[0]) ?? 0)
-        this.st.dirty.add(p)
-      })
+      next.forEach((p, i) => this.estimate(before[i] ?? before[0], p, before.length === next.length))
       for (const k of [at - 1, at + next.length]) if (list[k]) this.st.dirty.add(list[k])
       if (at < this.st.frontier) this.st.frontier = Math.max(0, this.st.frontier + next.length - pas.length)
     }
@@ -726,10 +749,7 @@ export class DocxEditor implements RichHost<Paragraph> {
     if (!c) return
     const old = c.list[c.at]
     this.splice(pa, 1, [p])
-    if (!c.cell) {
-      this.st.heights.set(p, this.st.heights.get(old) ?? 0)
-      this.st.dirty.add(p)
-    }
+    if (!c.cell) this.estimate(old, p, true)
   }
 
   /** applies the answer to write `seq`; true when something changed */
@@ -1136,10 +1156,7 @@ export class DocxEditor implements RichHost<Paragraph> {
   replaceBlocks(bi: number, count: number, next: Block[], sel: Sel | null, history = true) {
     const before = this.st.blocks.slice(bi, bi + count)
     this.st.blocks.splice(bi, count, ...next)
-    next.forEach((b, i) => {
-      this.st.heights.set(b, this.st.heights.get(before[i] ?? before[0]) ?? 0)
-      this.st.dirty.add(b)
-    })
+    next.forEach((b, i) => this.estimate(before[i] ?? before[0], b))
     if (bi < this.st.frontier) this.st.frontier = Math.max(0, this.st.frontier + next.length - count)
     const key = (b: Block) => (b.t === 'tbl' ? `t${b.tid ?? 'i' + b.item}` : b.t === 'p' ? `p${b.pid}` : '')
     const nextKeys = new Set(next.map(key))

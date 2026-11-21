@@ -401,6 +401,9 @@
   -moz-tab-size: 36pt;
 }
 .de-p > span { white-space: inherit; }
+/* a justified paragraph going on on the next page: its last line here is not its last, it is justified (an empty
+   line after it takes the place of the last; the part's height is set, that line is outside it) */
+.de-p.de-just::after { content: ''; display: inline-block; width: 100%; }
 .de-marker { display: inline-block; text-indent: 0; white-space: pre; }
 .de-tbl {
   border-collapse: collapse;
@@ -1256,7 +1259,6 @@
 .de-ps-radio input { width: auto; padding: 0; margin: 0; }
 .de-ps-preset { font-weight: 400; font-size: 12px; }
 .de-ps select, .de-hfd select { padding: 6px 8px; border: 1px solid var(--de-input-border); border-radius: var(--de-radius); background: var(--de-input-bg); color: var(--de-text); font: inherit; }
-.de-page-cols > * { break-inside: avoid; }
 .de-ps-bad { color: var(--de-danger); }
 .de-dialog-btns .de-btn:disabled { opacity: 0.5; cursor: default; }
 .de-dialog-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
