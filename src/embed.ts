@@ -37,13 +37,14 @@ export function mount(el: HTMLElement, options: MountOptions): MountedViewer {
  * `<office-viewer src="/file.xlsx" style="height:600px"></office-viewer>`
  * Rendered inside a shadow root so host page CSS cannot leak in.
  * Attributes: src, name, editable, toolbar / thumbnails / save / download / file-menu / open / capture-select-all ("false" to turn off),
+ * theme ("light" | "dark" | "auto"), locale (BCP 47 tag numbers typed are read in: "de-DE" reads 1,5);
  * theme ("light" | "dark" | "auto"), fonts (a JSON list of `{ family, src, weight?, style?, unicodeRange? }` with URLs);
  * real-time collaboration: collab (hub WebSocket URL), room, user (display name), base (snapshot seq `src` was opened at).
  * Properties: `file` (File/Blob/ArrayBuffer) for local data; `icons` (map or resolver, as DocViewer's `icons`);
  * `fonts` (as DocViewer's `fonts`, bytes too; over the attribute).
  */
 export class OfficeViewerElement extends HTMLElement {
-  static observedAttributes = ['src', 'name', 'toolbar', 'thumbnails', 'editable', 'save', 'download', 'file-menu', 'open', 'capture-select-all', 'theme', 'collab', 'room', 'user', 'base', 'comments', 'fonts']
+  static observedAttributes = ['src', 'name', 'toolbar', 'thumbnails', 'editable', 'save', 'download', 'file-menu', 'open', 'capture-select-all', 'theme', 'collab', 'room', 'user', 'base', 'comments', 'locale', 'fonts']
   private viewer?: MountedViewer
   private _file?: Blob | ArrayBuffer
   private _icons?: Icons
@@ -111,6 +112,7 @@ export class OfficeViewerElement extends HTMLElement {
       captureSelectAll: this.getAttribute('capture-select-all') !== 'false',
       theme: THEMES.find((t) => t === this.getAttribute('theme')),
       icons: this._icons,
+      locale: this.getAttribute('locale') ?? undefined,
       fonts: this._fonts ?? fontsAttr(this.getAttribute('fonts')),
       collab:
         this.getAttribute('collab') && this.getAttribute('room')

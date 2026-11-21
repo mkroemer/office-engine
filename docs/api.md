@@ -12,6 +12,7 @@ import { DocViewer } from '@p10node/office-engine'
 <DocViewer src={file} allowSave={false} allowDownload={false} />  // no Save/Download, no image download
 <DocViewer src={file} fileMenu={false} />                         // no File menu
 <DocViewer src={file} theme="dark" />                             // dark chrome; "auto" follows the OS setting
+<DocViewer src={file} editable locale="de-DE" />                  // numbers typed as 1,5 and 1.234,5
 <DocViewer src={file} fonts={[{ family: 'Carlito', src: '/fonts/Carlito-Regular.ttf' }]} />  // font files, see Fonts
 ```
 
@@ -63,6 +64,7 @@ CSS is auto-injected, no import needed (or import `@p10node/office-engine/styles
 | `styleTarget`      | `Document \| ShadowRoot`                       | document  | Where CSS is injected                                                                                                    |
 | `injectStyles`     | `boolean`                                      | `true`    | Inject the stylesheet; false when the page loads `@p10node/office-engine/styles.css` itself                              |
 | `theme`            | `'light' \| 'dark' \| 'auto' \| ThemeOptions`  | `'light'` | Color scheme of the chrome; `'auto'` follows `prefers-color-scheme`; an object adds token overrides ([Theming](theming.md)). Documents keep their own colors |
+| `locale`           | `string`                                       | –         | BCP 47 tag the numbers typed are read in (`de-DE`: `1,5`); none: a decimal point. [More](#numbers-typed-in-a-locale)     |
 | `editable`         | `boolean`                                      | `false`   | Open in edit mode (Pages, Keynote, Numbers and Visio files stay view only)                                               |
 | `allowEdit`        | `boolean`                                      | `true`    | Show Edit/View button                                                                                                    |
 | `allowSave`        | `boolean`                                      | `true`    | Show Save/Download button, enable Ctrl+S                                                                                 |
@@ -192,6 +194,25 @@ import { IconsProvider, XlsxView } from '@p10node/office-engine'
 </IconsProvider>
 ```
 
+### Numbers typed in a locale
+
+`locale` (a BCP 47 tag) says how the numbers a person types are read: into a cell of a sheet, the font size box, the margins and column spacing of Page setup, the size in Header & footer. Its decimal and grouping separators, minus and percent signs and digits come from `Intl.NumberFormat`:
+
+```tsx
+<DocViewer src={file} editable locale="de-DE" />   // 1,5 → 1.5; 1.234,5 → 1234.5; 50 % → 0.5; 1.5 stays text
+<DocViewer src={file} editable locale="fr-FR" />   // 1 234,5 (any space) → 1234.5
+<DocViewer src={file} editable />                  // as before: 1.5 and 1,234.5; 1,5 stays text
+```
+
+- Without `locale` (or with a tag that is not one, such as `de_DE`) a number has a decimal point and commas grouping by thousands, as before; the browser's language is not used.
+- The whole text is read as one number or not at all: `12,5` without a locale is not 12, `1.5` with `de-DE` is not 15. A cell keeps what is not a number as text; a field keeps its previous value (the font size box shows it again, Page setup disables Apply). The rules, grouping included: [Features](features.md#numbers-typed-in-a-locale).
+- What is saved is the number (`<v>1.5</v>`), the same in every locale; changing `locale` changes no value of a workbook. A number edited again shows the locale's decimal separator (`1,5` in the formula bar and the cell), which reads back as the same number.
+- Formulas are not localized: `=1.5+A1`, `=SUM(1,5)` and the English function names, whatever the locale.
+- With `locale`, the Page setup and Header & footer fields are text fields read by the same rules; without it they stay the browser's number fields.
+- Collaboration: the tag goes with each cell edit (`locale` of the shared `set` operation), so every participant, and a server replaying the log with `compact`, reads `1,5` the same. Participants should run a version that knows it: an older one reads such an edit with a decimal point.
+
+Without `DocViewer`: `client.call('xlsx.set', sheet, cells, { locale: 'de-DE' })`; `mount(el, { src, locale: 'de-DE' })`; `<office-viewer locale="de-DE">`.
+
 ### Fonts
 
 The library ships no font files. Text is shown in the fonts the browser has, and where a line or a page breaks depends on them: a document in Calibri on a machine without Calibri is set in another font and breaks elsewhere. Documents name metric-compatible fallbacks after their fonts (the same widths, under the SIL Open Font License), so supplying those files is enough for most Office documents to break as they do in Office:
@@ -250,7 +271,7 @@ const fonts: FontSource[] = [
 </script>
 ```
 
-`<office-viewer>`: attributes `src`, `name`, `editable`, `toolbar="false"`, `thumbnails="false"`, `save="false"`, `download="false"`, `file-menu="false"`, `open="false"`, `capture-select-all="false"`, `theme="dark"` (or `"auto"`), `collab` / `room` / `user` / `base` (real-time collaboration; `user` also writes the comments), `comments="false"`, `fonts` (a JSON list of `FontSource` with URLs: `fonts='[{"family":"Carlito","src":"/fonts/Carlito-Regular.ttf"}]'`); properties `.file = File`, `.icons` (map or resolver, as `icons` above) and `.fonts` (as `fonts` above, bytes too; it wins over the attribute); events `load`, `error`, `comment` (`detail`: a `CommentEvent`).
+`<office-viewer>`: attributes `src`, `name`, `editable`, `toolbar="false"`, `thumbnails="false"`, `save="false"`, `download="false"`, `file-menu="false"`, `open="false"`, `capture-select-all="false"`, `theme="dark"` (or `"auto"`), `locale="de-DE"` (numbers typed, see [above](#numbers-typed-in-a-locale)), `collab` / `room` / `user` / `base` (real-time collaboration; `user` also writes the comments), `comments="false"`, `fonts` (a JSON list of `FontSource` with URLs: `fonts='[{"family":"Carlito","src":"/fonts/Carlito-Regular.ttf"}]'`); properties `.file = File`, `.icons` (map or resolver, as `icons` above) and `.fonts` (as `fonts` above, bytes too; it wins over the attribute); events `load`, `error`, `comment` (`detail`: a `CommentEvent`).
 
 ## Core API (no React)
 
@@ -270,6 +291,7 @@ doc.on('xlsx:progress', (p) => {})
 await doc.call('xlsx.block', 0, 1000, 1100) // formatted cells, rows [1000, 1100)
 await doc.call('pptx.slide', 12)           // slide model with layout/master/theme resolved
 await doc.call('xlsx.set', 0, [{ r: 4, c: 1, input: '=SUM(A1:A4)' }])
+await doc.call('xlsx.set', 0, [{ r: 5, c: 1, input: '1.234,5' }], { locale: 'de-DE' }) // numbers typed in a locale: 1234.5
 const clip = await doc.call('xlsx.copy', 0, { r0: 0, c0: 0, r1: 9, c1: 2 })   // cells as they are (values, formats, formulas) + `text` for the clipboard
 await doc.call('xlsx.sheetOp', 0, { op: 'paste', range: { r0: 20, c0: 0, r1: 29, c1: 2 }, cells: clip.cells, from: { sheet: clip.sheet, r0: 0, c0: 0 } })
 await doc.call('xlsx.sheetOp', 0, { op: 'clear', range: { r0: 0, c0: 3, r1: 1048575, c1: 3 } })   // a whole column, every row of it

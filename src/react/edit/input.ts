@@ -56,6 +56,8 @@ export interface RichHost<P extends RichPara = RichPara> {
   all?(): Sel | null
   /** deletes a range that spans other blocks (tables): applies the change and returns the caret, or null when unsupported */
   deleteAcross?(s: Pos, e: Pos): Pos | null
+  /** an IME composition ended and its text was put in: what waited for the end of it can be applied */
+  composed?(): void
 }
 
 const NAV = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'])
@@ -598,6 +600,7 @@ export class RichInput {
     if (e.data) opInsert(this.host, sel, e.data, { remount: true })
     else opInsert(this.host, sel, '', { remount: true })
     setTimeout(() => (this.justComposed = ''), 0)
+    this.host.composed?.()
   }
 
   private onKeyDown = (e: KeyboardEvent) => {

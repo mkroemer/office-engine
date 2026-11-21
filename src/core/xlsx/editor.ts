@@ -12,8 +12,9 @@ import {
 } from '../raw'
 import { decodeEntities, parseXml } from '../xml'
 import { BUILTIN_FORMATS, isDateFormat } from './numfmt'
+import { readTyped, type TypedNumber } from '../number-input'
 import { parseSheetStyles } from './styles'
-import type { BookOp, BorderKind, CellInput, ClipCell, ColInfo, FindOptions, FmtPatch, Merge, Range, RowAttrs, SheetOp, SheetProgress, XlsxClip, XlsxEditResult } from './types'
+import type { BookOp, BorderKind, CellInput, ClipCell, ColInfo, FindOptions, FmtPatch, Merge, Range, RowAttrs, SetOptions, SheetOp, SheetProgress, XlsxClip, XlsxEditResult } from './types'
 import { expandShared, overflows, restore, setColStyle, setColWidth, setFormula, setMerge, setRowHeight, shiftSheet, snapshot, type Snapshot } from './structure'
 import { dropSheetInFormula, moveRefsInFormula, parseFormula, renameSheetInFormula, translateFormula, withFunctionPrefixes, type Ast, type MoveOp, type RefAddr } from './formula'
 import { loadDelimited, type DelimitedImport } from './import'
@@ -193,27 +194,21 @@ interface InputContext {
   /** its number format ('' or "General": none) */
   fmt: string
   date1904: boolean
+  /** the BCP 47 tag numbers are typed in (undefined: a decimal point) */
+  locale?: string
 }
 
 const noQuotes = (fmt: string) => fmt.replace(/"[^"]*"|\\.|\[[^\]]*\]/g, '')
 
 const ERROR_INPUT = /^#(?:N\/A|DIV\/0!|VALUE!|REF!|NAME\?|NUM!|NULL!)$/i
-const MONEY = '$€£¥₫₩₹₽₱฿'
-const AMOUNT = new RegExp(`^([-+]?)\\s*([${MONEY}]?)\\s*(\\d{1,3}(?:,\\d{3})+|\\d+)(\\.\\d+)?\\s*([${MONEY}]?)$`)
 
 /**
- * An amount typed with thousands separators and / or a currency sign ("1,234,567", "$50", "€1,200.50", "50 ₫"): the
- * number, and the format that shows it as typed. Not a plain number (read before), not two signs.
+ * The format that shows an amount as typed ("1,234,567", "$50", "€1,200.50", "50 ₫"): grouped, with the decimals typed
+ * (a currency shows cents when cents were typed), the currency where it was. A format code, the same in every locale.
  */
-function amountInput(t: string): { n: number; fmt: string } | undefined {
-  const m = AMOUNT.exec(t)
-  if (!m || (m[2] && m[5]) || (!m[2] && !m[5] && !m[3].includes(','))) return undefined
-  const n = Number(m[3].replace(/,/g, '') + (m[4] ?? ''))
-  if (!Number.isFinite(n)) return undefined
-  // (a currency shows cents when cents were typed)
-  const digits = '#,##0' + (m[4] ? '.' + '0'.repeat(m[2] || m[5] ? Math.max(2, m[4].length - 1) : m[4].length - 1) : '')
-  const fmt = m[2] ? `"${m[2]}"${digits}` : m[5] ? `${digits}" ${m[5]}"` : digits
-  return { n: m[1] === '-' ? -n : n, fmt }
+function amountFormat(n: TypedNumber): string {
+  const digits = '#,##0' + (n.decimals ? '.' + '0'.repeat(n.currency ? Math.max(2, n.decimals) : n.decimals) : '')
+  return !n.currency ? digits : n.after ? `${digits}" ${n.currency}"` : `"${n.currency}"${digits}`
 }
 
 /** whether text reads as a formula that reads a cell or calls a function (what makes "+A1+B1" one, and not "-5" or "- item") */
@@ -262,21 +257,16 @@ function parseInput(input: string, style: number, ctx: InputContext = { fmt: '',
     if (readsOrCalls(f)) return { e: [T_STR, '=' + f, style], f }
   }
   if (ERROR_INPUT.test(t)) return { e: [T_ERR, t.toUpperCase(), style] }
+  // a number in the separators of the locale it is typed in (a number too large to be one, 1e999, stays the text
+  // typed: the file has no way to say Infinity)
+  const n = readTyped(t, ctx.locale)
   // more digits than a number holds (a card number, an id): kept as typed, where a number would end in zeros
-  if (/^[-+]?\d{16,}$/.test(t)) return { e: [T_STR, input, style] }
-  // a number too large to be one (1e999) stays the text typed: the file has no way to say Infinity
-  if (/^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i.test(t) && Number.isFinite(Number(t))) {
-    const n = Number(t)
-    // in a cell that shows percentages, 50 is 50% (as Excel reads it); a number under 1 is the fraction itself
-    return { e: [T_NUM, Math.abs(n) >= 1 && noQuotes(ctx.fmt).includes('%') ? n / 100 : n, style] }
-  }
-  if (/^[-+]?(\d+\.?\d*|\.\d+)%$/.test(t) && Number.isFinite(Number(t.slice(0, -1)))) {
-    const dec = /\.(\d+)%$/.exec(t)?.[1].length ?? 0
-    return { e: [T_NUM, Number(t.slice(0, -1)) / 100, style], want: general ? (dec ? `0.${'0'.repeat(Math.min(dec, 10))}%` : '0%') : undefined }
-  }
+  if (n?.kind === 'plain' && /^[-+]?\d{16,}$/.test(n.canon)) return { e: [T_STR, input, style] }
+  // in a cell that shows percentages, 50 is 50% (as Excel reads it); a number under 1 is the fraction itself
+  if (n?.kind === 'plain') return { e: [T_NUM, Math.abs(n.value) >= 1 && noQuotes(ctx.fmt).includes('%') ? n.value / 100 : n.value, style] }
+  if (n?.kind === 'percent') return { e: [T_NUM, n.value / 100, style], want: general ? (n.decimals ? `0.${'0'.repeat(Math.min(n.decimals, 10))}%` : '0%') : undefined }
   if (/^(true|false)$/i.test(t)) return { e: [T_BOOL, /^true$/i.test(t) ? 1 : 0, style] }
-  const amount = amountInput(t)
-  if (amount) return { e: [T_NUM, amount.n, style], want: general ? amount.fmt : undefined }
+  if (n) return { e: [T_NUM, n.value, style], want: general ? amountFormat(n) : undefined }
   if (general || isDateFormat(ctx.fmt)) {
     const date = dateInput(t, ctx.date1904)
     if (date) return { e: [T_NUM, date.serial, style], want: general ? date.fmt : undefined }
@@ -706,7 +696,8 @@ export class XlsxEditor {
     return [...this.wb.calc.recalc([], all)]
   }
 
-  async setCells(sheet: number, inputs: CellInput[]): Promise<XlsxEditResult> {
+  /** `opts.locale`: the BCP 47 tag the numbers among `inputs` were typed in (undefined: a decimal point; formulas are never read in it) */
+  async setCells(sheet: number, inputs: CellInput[], opts: SetOptions = {}): Promise<XlsxEditResult> {
     await this.ready()
     const d = this.sheet(sheet)
     if (d.protection) for (const { r, c } of inputs) this.denyLocked(d, { r0: r, c0: c, r1: r, c1: c })
@@ -722,7 +713,7 @@ export class XlsxEditor {
       const prev = getEntry(d, r, c)
       // (a cell typed into an empty place takes the format of its row, else of its column)
       const st = prev?.[2] ?? this.lockStyleAt(d, r, c)
-      const { e, f, want: typed } = parseInput(input, st, { fmt: xfs[st]?.numFmt ?? '', date1904: this.wb.date1904 })
+      const { e, f, want: typed } = parseInput(input, st, { fmt: xfs[st]?.numFmt ?? '', date1904: this.wb.date1904, locale: opts?.locale })
       // a formula typed into a cell without a format shows as what it computes: a date, or as the cell it is
       const want = typed ?? (e && f && !/[^\s]/.test((xfs[st]?.numFmt ?? '').replace(/^general$/i, '')) ? this.formulaFormat(sheet, f) : undefined)
       if (e && want) e[2] = (ed ??= await this.styles()).derive(st, { numFmt: want })

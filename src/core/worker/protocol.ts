@@ -6,7 +6,7 @@ import type { XOp } from '../../collab/xlsx-ops'
 import type { POp } from '../../collab/pptx-ops'
 import type { PptxCollabResult } from '../../collab/pptx-worker'
 import type { CanonStyle, DocxMeta, Block, EditOp, EditResult, HFSet, HFSetResult, PageSet, PageSetResult, ParaSpec, StyleInfo, StyleLook, StyleSetResult, TableOp } from '../docx/types'
-import type { BlockOut, BookOp, CellDetail, CellInput, FindMatch, FindOptions, FmtPatch, Range, SheetOp, SheetProgress, WorkbookMeta, XlsxClip, XlsxEditResult } from '../xlsx/types'
+import type { BlockOut, BookOp, CellDetail, CellInput, FindMatch, FindOptions, FmtPatch, Range, SetOptions, SheetOp, SheetProgress, WorkbookMeta, XlsxClip, XlsxEditResult } from '../xlsx/types'
 import type { SheetDrawing } from '../xlsx/drawings'
 import type { PParaSpec, PresentationMeta, ShapeOp, SlideModel, SlideOp } from '../pptx/types'
 
@@ -59,7 +59,7 @@ export interface Methods {
   'plain.source'(): string | null
   'docx.start'(): void
   'docx.edit'(op: EditOp): EditResult
-  'docx.table'(op: TableOp): void
+  'docx.table'(op: TableOp): EditResult
   'docx.image'(bytes: ArrayBuffer, ext: string): { rid: string; path: string }
   'docx.link'(url: string): string
   /** id of a built-in paragraph style, created in styles.xml when missing */
@@ -90,7 +90,8 @@ export interface Methods {
   'xlsx.text'(sheet: number, sep: string): Blob
   /** replaces text in matching cells (or only `at`); null when nothing changed */
   'xlsx.replace'(sheet: number, query: string, by: string, opts?: FindOptions, at?: { r: number; c: number }): XlsxEditResult | null
-  'xlsx.set'(sheet: number, cells: CellInput[]): XlsxEditResult
+  /** what was typed into cells; `opts.locale`: the BCP 47 tag numbers were typed in (`1,5` in `de-DE`), a decimal point without one */
+  'xlsx.set'(sheet: number, cells: CellInput[], opts?: SetOptions): XlsxEditResult
   /** the block of filled cells a range is part of (the table around it), and whether its first row reads as a header */
   'xlsx.region'(sheet: number, range: Range): { range: Range; header: boolean }
   /** the cells of a range as they are (values, formulas, formats) for the `paste` sheet operation, and as text for the clipboard; rows not shown yet included */
