@@ -419,6 +419,10 @@ def('keepn', ptog('keepn'))
 def('keep', ptog('keep'))
 def('pagebb', ptog('pagebb'))
 def('contextualspace', ptog('contextual'))
+def('widowctrl', (r) => {
+  r.styles.setDefaults(r.styles.defChp, { ...r.styles.defPap, widctl: true })
+  r.invalidate()
+})
 def('widctlpar', (r) => {
   r.pap().widctl = true
 })
