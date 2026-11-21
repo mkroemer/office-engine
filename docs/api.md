@@ -79,7 +79,7 @@ CSS is auto-injected, no import needed (or import `@p10node/office-engine/styles
 | `captureSelectAll` | `boolean`                                      | `true`    | Ctrl/⌘+A from anywhere on the page selects the document; `false`: from the viewer only                                   |
 | `fileMenuItems`    | `FileMenuItem[]`                               | –         | Extra File menu entries (`label`, `onClick`, `icon`, `hint`)                                                             |
 | `icons`            | `Icons`                                        | built-in  | Your own icons: a map by `IconName` or a resolver `(name, { size }) => node`; see [Icons](#icons)                        |
-| `components`       | `Partial<UIComponents>`                        | built-in  | Your own `Button`, `Select`, `Separator`, `Dialog`, `Toast` in the toolbars and dialogs; see [Theming](theming.md#your-own-components) |
+| `components`       | `Partial<UIComponents>`                        | built-in  | Replacements for toolbar and dialog controls. See [Theming](theming.md#your-own-components).                             |
 | `fonts`            | `FontSource[]`                                 | –         | Font files for the documents' text (the library ships none), loaded when a document uses them; see [Fonts](#fonts)       |
 | `onRename`         | `(name) => void`                               | –         | File → Rename result (extension included)                                                                                |
 | `onClose`          | `() => void`                                   | –         | Adds File → Close                                                                                                        |
@@ -143,7 +143,8 @@ Commands: `setEditing(on)`, `save()`, `undo()`, `redo()`, `zoomIn()`, `zoomOut()
 action: `pdf`, `html`, `text:md`, `details`, `rename`…), `toggleComments(open?)`, `format(command)` (below). A command the
 open document has no use for does nothing. `subscribe(fn)` returns its unsubscribe; `snapshot()` the current state;
 `useViewerState(ctl)` is the state in React. Without `react`, `mount()` returns the controller (`mounted.controller`), and
-`<office-viewer headless>` has it as `element.controller`.
+`<office-viewer headless>` has it as `element.controller`. Keep a subscription active to receive the complete DOCX
+headings and PPTX slide titles.
 
 #### Formatting
 
@@ -192,7 +193,7 @@ the target. For example, a host size input can use `disabled={!f}` and send a si
 ```
 
 Controller actions obey `allowSave`, `allowDownload` and `allowOpen` even when the File menu is hidden.
-`fileMenu={false}` hides that menu and its keyboard shortcuts; it does not disable a host's controller controls.
+`fileMenu={false}` hides the menu and disables its Open and Print shortcuts. Ctrl/⌘+S and host controller commands remain available, subject to their own permissions.
 `allowEdit` controls the Edit/View toggle and CSV import; `editable` and `setEditing()` control edit mode, including when the toggle is hidden.
 Prevent the default mouse-down action on host outline buttons (as above) to preserve the editor focus and an open XLSX formula while switching sheets.
 New/Open replace the document and remain available for a read-only file when `allowOpen` permits them.
