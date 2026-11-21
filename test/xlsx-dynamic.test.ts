@@ -1,5 +1,6 @@
 /** Dynamic array formulas in a workbook (spilling, #SPILL!, saving), defined names, tables and 3-D references. */
 import { describe, expect, test } from 'bun:test'
+import { shiftedClip } from '../src/core/xlsx/clip'
 import { at, book, openBook, rows } from './xlsx-builder'
 
 const SHEET = 'xl/worksheets/sheet1.xml'
@@ -116,6 +117,23 @@ describe('dynamic array formulas', () => {
     await o.set(0, 'G1', '=SEQUENCE(2)')
     await o.engine.call('xlsx.sheetOp', [0, { op: 'fill', range: { r0: 0, c0: 6, r1: 0, c1: 7 }, dir: 'right' }])
     expect(await shown(o, ['G1', 'G2', 'H1', 'H2'])).toEqual(['1', '2', '1', '2'])
+  })
+
+  test('#35: a copied block repeated by the view keeps its formulas dynamic in every copy', async () => {
+    const o = await openBook(await book({ sheets: [{ name: 'S', rows: rows([[5], [6], [7]]) }] }))
+    await o.set(0, 'C1', '=A1:A3*2')
+    const clip: any = await o.engine.call('xlsx.copy', [0, { r0: 0, c0: 2, r1: 0, c1: 2 }])
+    const cell = clip.cells[0][0]
+    expect(cell[4]).toBe(true)
+    // (as the view repeats one copied cell into E1:F1: the worker moves both by the first copy's distance)
+    const second = shiftedClip(cell, 0, 1)
+    expect(second).toEqual([cell[0], cell[1], cell[2], 'B1:B3*2', true])
+    expect(shiftedClip(cell, 0, 0)).toBe(cell)
+    expect(shiftedClip(null, 1, 1)).toBeNull()
+    await o.engine.call('xlsx.sheetOp', [0, { op: 'paste', range: { r0: 0, c0: 4, r1: 0, c1: 5 }, cells: [[cell, second]], from: { sheet: clip.sheet, r0: 0, c0: 2 } }])
+    expect(await o.formula(0, 0, 5)).toBe('=D1:D3*2')
+    expect(await shown(o, ['E1', 'E3', 'F1', 'F3'])).toEqual(['20', '28', '0', '0'])
+    expect(cellXml(await (await o.save()).text(SHEET), 'F1')).toMatch(/ cm="\d+"/)
   })
 
   test('#SPILL! of a file read: cleared when the cell in the way is', async () => {
