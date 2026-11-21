@@ -739,6 +739,21 @@ describe('xlsx sheets and merging (QA 19/11/2026, N1-018, N1-019)', () => {
     expect(v.errors).toEqual([])
   })
 
+  test('sheet rename validation uses the German strings table', async () => {
+    const v = await viewer({ src: 'samples/sample.xlsx', editable: true, texts: 'de' })
+    await rename(v, 'Notes', 'sales')
+    expect(await v.toast()).toContain('„sales“ ist bereits vorhanden')
+    await rename(v, 'Notes', '   ')
+    expect(await v.toast()).toContain('darf nicht leer sein')
+    await rename(v, 'Notes', 'x'.repeat(40))
+    expect(await v.toast()).toContain('höchstens 31 Zeichen')
+    expect(await tabName(v, 1, 'x'.repeat(31))).toBe('x'.repeat(31))
+    await rename(v, 'x'.repeat(31), 'a/b?c')
+    expect(await v.toast()).toContain('durch _ ersetzt')
+    expect(await tabName(v, 1, 'a_b_c')).toBe('a_b_c')
+    expect(v.errors).toEqual([])
+  })
+
   test('N1-018: merging cells that hold data says what was dropped, and Undo brings it back', async () => {
     const v = await open()
     await v.typeCell('K24', 'a')

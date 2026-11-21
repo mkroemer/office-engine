@@ -18,6 +18,7 @@ import { publishLocal, registerHost } from '../../collab/hosts'
 import { initialsOf, type CommentThread } from '../../core/comments'
 import { useCommentsCtl, useCommentsState, type PendingComment, type PlacedThread } from '../comments/Comments'
 import { COMMENT_KEYS } from '../comments/CommentsPanel'
+import { formatCount, formatNumber, useStrings } from '../strings'
 
 interface SlideCache {
   models: Map<number, SlideModel>
@@ -170,6 +171,7 @@ const THUMB_W = 188
 
 export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = true }: PptxViewProps) {
   const viewer = useViewer()
+  const str = useStrings()
   const meta = client.info.pptx as PresentationMeta
   const editor = useMemo(() => new PptxEditor(client), [client])
   useFileOps({
@@ -197,8 +199,8 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
     stats: () => {
       const m = client.info.pptx as PresentationMeta
       return [
-        ['Slides', m.count.toLocaleString()],
-        ['Slide size', `${+(m.w / 96).toFixed(2)} × ${+(m.h / 96).toFixed(2)} in`],
+        [str.pptx.slides, formatCount(str, m.count)],
+        [str.pptx.slideSize, str.format.inches(formatNumber(str, +(m.w / 96).toFixed(2)), formatNumber(str, +(m.h / 96).toFixed(2)))],
       ]
     },
   })
@@ -577,30 +579,30 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
   }
 
   const shapeMenu = (): MenuItem[] => [
-    ...(cm?.canComment ? [{ label: 'Comment', icon: 'commentAdd', hint: COMMENT_KEYS, run: () => cm.start() } as MenuItem] : []),
-    { label: 'Duplicate', icon: 'copy', hint: `${MOD}D`, run: shapeCmd.duplicate, sep: !!cm?.canComment },
-    { label: 'Delete', icon: 'trash', hint: 'Del', run: shapeCmd.remove },
-    { label: 'Bring to front', icon: 'front', hint: `${MOD}⇧↑`, sep: true, run: () => shapeCmd.arrange('front') },
-    { label: 'Bring forward', hint: `${MOD}↑`, run: () => shapeCmd.arrange('forward') },
-    { label: 'Send backward', hint: `${MOD}↓`, run: () => shapeCmd.arrange('backward') },
-    { label: 'Send to back', icon: 'back', hint: `${MOD}⇧↓`, run: () => shapeCmd.arrange('back') },
-    { label: 'Rotate 90° clockwise', icon: 'rotate', sep: true, run: () => shapeCmd.rotate('cw') },
-    { label: 'Rotate 90° counter-clockwise', icon: 'rotateCcw', run: () => shapeCmd.rotate('ccw') },
-    { label: 'Flip horizontally', icon: 'flipH', run: () => shapeCmd.rotate('flipH') },
-    { label: 'Flip vertically', icon: 'flipV', run: () => shapeCmd.rotate('flipV') },
-    { label: 'Center on slide', icon: 'alignObj', sep: true, run: () => shapeCmd.align('both') },
+    ...(cm?.canComment ? [{ label: str.edit.comment, icon: 'commentAdd', hint: COMMENT_KEYS, run: () => cm.start() } as MenuItem] : []),
+    { label: str.pptx.duplicate, icon: 'copy', hint: `${MOD}D`, run: shapeCmd.duplicate, sep: !!cm?.canComment },
+    { label: str.common.delete, icon: 'trash', hint: str.edit.delKey, run: shapeCmd.remove },
+    { label: str.pptx.front, icon: 'front', hint: `${MOD}⇧↑`, sep: true, run: () => shapeCmd.arrange('front') },
+    { label: str.pptx.forward, hint: `${MOD}↑`, run: () => shapeCmd.arrange('forward') },
+    { label: str.pptx.backward, hint: `${MOD}↓`, run: () => shapeCmd.arrange('backward') },
+    { label: str.pptx.back, icon: 'back', hint: `${MOD}⇧↓`, run: () => shapeCmd.arrange('back') },
+    { label: str.pptx.cw, icon: 'rotate', sep: true, run: () => shapeCmd.rotate('cw') },
+    { label: str.pptx.ccw, icon: 'rotateCcw', run: () => shapeCmd.rotate('ccw') },
+    { label: str.pptx.flipH, icon: 'flipH', run: () => shapeCmd.rotate('flipH') },
+    { label: str.pptx.flipV, icon: 'flipV', run: () => shapeCmd.rotate('flipV') },
+    { label: str.pptx.centerOnSlide, icon: 'alignObj', sep: true, run: () => shapeCmd.align('both') },
   ]
   const slideMenu = (i: number, at?: { x: number; y: number }): MenuItem[] => [
-    ...(cm?.canComment ? [{ label: 'Comment', icon: 'commentAdd', hint: COMMENT_KEYS, run: () => cm.start((at && commentAt(i, at.x, at.y)) || undefined) } as MenuItem] : []),
-    { label: 'New slide', icon: 'slideAdd', hint: `${MOD}M`, run: () => slideCmd('add', i), sep: !!cm?.canComment },
-    { label: 'Duplicate slide', icon: 'copy', run: () => slideCmd('duplicate', i) },
-    { label: 'Delete slide', icon: 'trash', run: () => slideCmd('delete', i), disabled: meta.count <= 1 },
-    { label: modelOf(i)?.hidden ? 'Show slide' : 'Hide slide', icon: 'hide', run: () => slideCmd('hide', i) },
-    { label: 'Move slide up', icon: 'up', sep: true, run: () => slideCmd('up', i), disabled: i === 0 },
-    { label: 'Move slide down', icon: 'down', run: () => slideCmd('down', i), disabled: i >= meta.count - 1 },
-    { label: 'Insert text box', icon: 'textbox', sep: true, run: () => void insert('text', i) },
-    { label: 'Insert image…', icon: 'image', run: () => void insert('image', i) },
-    { label: 'Present from this slide', icon: 'play', sep: true, run: () => setPresenting(i) },
+    ...(cm?.canComment ? [{ label: str.edit.comment, icon: 'commentAdd', hint: COMMENT_KEYS, run: () => cm.start((at && commentAt(i, at.x, at.y)) || undefined) } as MenuItem] : []),
+    { label: str.pptx.newSlide, icon: 'slideAdd', hint: `${MOD}M`, run: () => slideCmd('add', i), sep: !!cm?.canComment },
+    { label: str.pptx.duplicateSlide, icon: 'copy', run: () => slideCmd('duplicate', i) },
+    { label: str.pptx.deleteSlide, icon: 'trash', run: () => slideCmd('delete', i), disabled: meta.count <= 1 },
+    { label: modelOf(i)?.hidden ? str.pptx.showSlide : str.pptx.hideSlide, icon: 'hide', run: () => slideCmd('hide', i) },
+    { label: str.pptx.moveUp, icon: 'up', sep: true, run: () => slideCmd('up', i), disabled: i === 0 },
+    { label: str.pptx.moveDown, icon: 'down', run: () => slideCmd('down', i), disabled: i >= meta.count - 1 },
+    { label: str.pptx.insertTextBox, icon: 'textbox', sep: true, run: () => void insert('text', i) },
+    { label: str.edit.imageMenu, icon: 'image', run: () => void insert('image', i) },
+    { label: str.pptx.presentFrom, icon: 'play', sep: true, run: () => setPresenting(i) },
   ]
 
   const onShapeKey = (e: React.KeyboardEvent) => {
@@ -632,7 +634,7 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
   const commentAt = (i: number, x: number, y: number): PendingComment | null => {
     const s = meta.slides[i]
     if (!s) return null
-    return { quote: `Slide ${i + 1}`, at: { slide: s.path, x: Math.max(0, Math.min(meta.w - 1, x)), y: Math.max(0, Math.min(meta.h - 1, y)) } }
+    return { quote: (cm?.t ?? str).pptx.slideNumber(i + 1, (cm?.t ?? str).locale), at: { slide: s.path, x: Math.max(0, Math.min(meta.w - 1, x)), y: Math.max(0, Math.min(meta.h - 1, y)) } }
   }
   const cmLive = useRef({ selected, current, go })
   cmLive.current = { selected, current, go }
@@ -645,7 +647,7 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
     }
     cm.setHost({
       kind: 'pptx',
-      hint: 'Select a shape, or right-click the slide where the comment goes.',
+      hint: () => cm.t.pptx.commentHint,
       pending: () => {
         const { selected, current } = cmLive.current
         // the selected shape's top right corner, else the slide's top left
@@ -656,7 +658,7 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
         const out: (PlacedThread & { k: number[] })[] = []
         for (const t of threads) {
           const x = slideOf(t)
-          if (x) out.push({ ...t, quote: `Slide ${x.i + 1}`, k: [x.i, x.a.y, x.a.x] })
+          if (x) out.push({ ...t, quote: cm.t.pptx.slideNumber(x.i + 1, cm.t.locale), k: [x.i, x.a.y, x.a.x] })
         }
         return out.sort((a, b) => a.k[0] - b.k[0] || a.k[1] - b.k[1] || a.k[2] - b.k[2])
       },
@@ -759,8 +761,8 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
             type="button"
             className={'de-cm-pin' + (cmState.active === p.id ? ' on' : '')}
             style={{ left: p.x * scale, top: p.y * scale }}
-            title="Comment"
-            aria-label="Show comment"
+            title={str.edit.comment}
+            aria-label={str.edit.showComment}
             data-thread={p.id}
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => {
@@ -823,12 +825,12 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
         </div>
         <ZoomControl zoom={zoom} effective={scale} onChange={setZoom} />
         {!viewer.editable && (
-          <button type="button" className="de-mode de-present-btn" title="Present (F5)" onClick={() => setPresenting(current)}>
+          <button type="button" className="de-mode de-present-btn" title={str.pptx.presentTitle} onClick={() => setPresenting(current)}>
             <Icon name="present" size={14} />
-            Present
+            {str.pptx.present}
           </button>
         )}
-        <Status text={`Slide ${current + 1} of ${meta.count}`} onStatus={onStatus} />
+        <Status text={str.pptx.status(current + 1, meta.count, str.locale)} onStatus={onStatus} />
         {viewer.editable && (
           <PptxToolbar
             editor={editor}

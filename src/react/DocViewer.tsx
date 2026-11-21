@@ -8,12 +8,11 @@ import { StatusContext } from './common/Status'
 import { ConfirmDialog, PromptDialog, Toast } from './common/Dialog'
 import { download, Icon, IconsProvider, type Icons } from './edit/Toolbar'
 import { DetailsDialog } from './file/DetailsDialog'
-import { FileMenu, KIND_LABEL, useFileActions, type FileMenuItem } from './file/FileMenu'
+import { FileMenu, useFileActions, type FileMenuItem } from './file/FileMenu'
 import { importFile, type Imported } from './file/importFile'
 import { blankPptx, parasToDocx, rowsToXlsx } from '../core/convert'
 import type { DocKind } from '../core/opc'
 import { extOf, HAS_SOURCE, PLAIN_EXT, PLAIN_FILE, unpackedName, type PlainFormat } from '../core/plain'
-import type { LegacyFormat } from '../core/legacy'
 import { injectStyles } from './injectStyles'
 import { isTextEntry, useSize } from './common/hooks'
 import { useThemeRoot, type Theme } from './theme'
@@ -28,8 +27,7 @@ import type { CollabOptions } from '../collab'
 import { CollabBar, PeerOverlay, useCollab } from '../collab/react'
 import { CommentsContext, CommentsCtl, useCommentsState, type CommentOptions } from './comments/Comments'
 import { COMMENT_KEYS, CommentsPanel } from './comments/CommentsPanel'
-import { LocaleContext } from './common/locale'
-import { inputLocale } from '../core/number-input'
+import { formatBytes, StringsProvider, useStrings, type Locale, type StringsOverride } from './strings'
 import type { FontSource } from '../core/fonts'
 import { FontsContext, useHostFonts } from './common/fonts'
 
@@ -125,11 +123,13 @@ export interface DocViewerProps {
    */
   icons?: Icons
   /**
-   * BCP 47 tag numbers typed into the viewer are read in: a cell of a sheet, the font size, a margin (`1,5` and
-   * `1.234,5` with `de-DE`). Without it (or with a tag that is not one) a number has a decimal point, whatever the
-   * browser's language. Saved values and formulas are the same in every locale.
+   * BCP 47 tag for number/date display and typed numbers ("de-DE" reads 1,5). An explicitly supplied tag
+   * takes precedence over the table or enclosing StringsProvider. No tag uses a decimal point for input.
+   * This does not select UI texts or change formulas or saved values.
    */
-  locale?: string
+  locale?: Locale
+  /** Texts replacing the enclosing provider's or English texts, key by key (see `Strings`): a group may be given in part, e.g. `{ file: { menu: 'Datei' } }`. */
+  strings?: StringsOverride
   /**
    * Font files the host supplies (the library ships none): `{ family, src, weight?, style?, unicodeRange? }`, `src` a URL
    * or the bytes. A file is loaded when a document's text names its family, directly (`Calibri`) or as the fallback
@@ -142,34 +142,7 @@ export interface DocViewerProps {
 }
 
 const EXT: Record<string, string> = { docx: '.docx', xlsx: '.xlsx', pptx: '.pptx' }
-const FROM_LABEL: Record<'pages' | 'keynote' | 'numbers' | 'visio', string> = {
-  pages: 'Apple Pages document',
-  keynote: 'Apple Keynote presentation',
-  numbers: 'Apple Numbers spreadsheet',
-  visio: 'Microsoft Visio drawing',
-}
-const CONVERTED_LABEL: Record<LegacyFormat, string> = {
-  doc: 'Word 97-2003 document',
-  xls: 'Excel 97-2003 workbook',
-  ppt: 'PowerPoint 97-2003 presentation',
-  rtf: 'Rich Text Format document',
-  odt: 'OpenDocument text',
-  ods: 'OpenDocument spreadsheet',
-  odp: 'OpenDocument presentation',
-}
 const IMPORTED_BADGE: Record<PlainFormat, string> = { csv: 'csv', tsv: 'tsv', text: 'txt', markdown: 'md', html: 'html', svg: 'svg', mermaid: 'mmd', plantuml: 'puml', graphviz: 'dot', code: 'code' }
-const IMPORTED_LABEL: Record<PlainFormat, string> = {
-  csv: 'CSV file',
-  tsv: 'Tab-separated values',
-  text: 'Plain text',
-  markdown: 'Markdown',
-  html: 'HTML page',
-  svg: 'SVG picture',
-  mermaid: 'Mermaid diagram',
-  plantuml: 'PlantUML diagram',
-  graphviz: 'Graphviz diagram',
-  code: 'Source code',
-}
 /** plain formats saved back as themselves: Markdown and HTML built again from the document when it was edited, SVG and source files from their text */
 const SAVES_SOURCE = new Set<PlainFormat>(['markdown', 'html', 'svg', 'code'])
 /** the language of each plain format shown in the source pane, and what the pane calls it */
@@ -186,7 +159,6 @@ function codeDocx(text: string, language: string): Promise<Blob> {
   const code = text.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
   return parasToDocx([{ runs: code ? [{ text: code }] : [], code: language }])
 }
-const UNTITLED: Record<DocKind, string> = { docx: 'Untitled document', xlsx: 'Untitled spreadsheet', pptx: 'Untitled presentation' }
 
 /** a key per opened client: a view is built again for each (the edited source's previews have one name) */
 const clientIds = new WeakMap<object, number>()
@@ -197,15 +169,18 @@ const clientKey = (c: object) => {
   return id
 }
 
-function fmtBytes(n: number) {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`
-  return `${(n / 1024 / 1024).toFixed(1)} MB`
+export function DocViewer(props: DocViewerProps) {
+  return (
+    <StringsProvider locale={props.locale} strings={props.strings}>
+      <Viewer {...props} />
+    </StringsProvider>
+  )
 }
 
-export function DocViewer(props: DocViewerProps) {
+function Viewer(props: DocViewerProps) {
+  const t = useStrings()
+  const fmtBytes = (n: number) => formatBytes(t, n)
   const { src, name, className, style, toolbar = true, toolbarExtra, zoom, thumbnails, headers, credentials, worker, styleTarget, theme, onLoad, onError } = props
-  const locale = inputLocale(props.locale)
   const root = useThemeRoot(theme, style)
   const fonts = useHostFonts(props.fonts, onError)
   const { allowEdit = true, allowSave = true, allowDownload = true, fileMenu = true, allowOpen = true, captureSelectAll = true, onSave, onDirtyChange } = props
@@ -342,6 +317,7 @@ export function DocViewer(props: DocViewerProps) {
   const cmOpts = props.comments || {}
   if (cmCtl) {
     cmCtl.opts = cmOpts
+    cmCtl.t = t
     cmCtl.me = cmOpts.user ?? props.collab?.user ?? { name: 'Me' }
     cmCtl.canComment = !readOnly && (cmOpts.canComment ?? (editing && canEdit))
   }
@@ -402,6 +378,7 @@ export function DocViewer(props: DocViewerProps) {
   const officeExt = client ? (client.info?.ext ? `.${client.info.ext}` : EXT[client.kind]) : ''
   const fileName = baseName + officeExt
   // what Save writes: the Office file, or a Markdown / HTML / SVG / source file in its own format (a source file keeps its extension)
+  const codeLanguage = LANGUAGE_NAME[languageOf(codeLang) ?? ''] ?? codeLang
   const codeExt = isCode ? extOf(unpackedName(client?.name ?? '') ?? client?.name) || LANGUAGE_EXT[languageOf(codeLang) ?? ''] || 'txt' : ''
   const saveExt = isCode ? `.${codeExt}` : saveFormat ? `.${PLAIN_FILE[saveFormat].ext}` : officeExt
   const saveName = baseName + saveExt
@@ -578,19 +555,19 @@ export function DocViewer(props: DocViewerProps) {
     canDownload: fileMenu && allowDownload && !!client,
     ops: fileOps,
     create: (kind: DocKind) =>
-      replace(`A new ${UNTITLED[kind].split(' ')[1]} replaces the current document. Your changes are not saved.`, () => {
+      replace(t.bar.replaceNew(t.newWhat[kind]), () => {
         const blank = kind === 'docx' ? parasToDocx([]) : kind === 'xlsx' ? rowsToXlsx([], 'Sheet1') : blankPptx()
-        blank.then((src) => show({ src, name: UNTITLED[kind] + EXT[kind], converted: false }, allowEdit), (e: Error) => setToast(e.message))
+        blank.then((src) => show({ src, name: t.untitled[kind] + EXT[kind], converted: false }, allowEdit), (e: Error) => setToast(e.message))
       }),
     open: (file) =>
-      replace(`Opening “${file.name}” replaces the current document. Your changes are not saved.`, () => {
-        importFile(file).then(show, (e: Error) => setToast(e.message))
+      replace(t.bar.replaceOpen(file.name), () => {
+        importFile(file, t.file.unsupported).then(show, (e: Error) => setToast(e.message))
       }),
     save,
     downloadOriginal: () => saveFile(true),
     picture: isPicture
       ? {
-          label: 'SVG picture',
+          label: t.file.picture,
           ext: '.svg',
           download: async () => download(new Blob([await sourceText()], { type: 'image/svg+xml' }), saveName),
         }
@@ -635,7 +612,7 @@ export function DocViewer(props: DocViewerProps) {
     body = (
       <div className="de-center">
         <div className="de-error" role="alert">
-          <strong>Cannot open document.</strong>
+          <strong>{t.bar.cannotOpen}</strong>
           <div>{error.message}</div>
         </div>
       </div>
@@ -644,10 +621,10 @@ export function DocViewer(props: DocViewerProps) {
     body = src || opened ? (
       <div className="de-center">
         <div className="de-spinner" />
-        <div>{progress?.phase === 'download' && progress.total ? `Downloading… ${fmtBytes(progress.loaded)} / ${fmtBytes(progress.total)}` : 'Opening…'}</div>
+        <div>{progress?.phase === 'download' && progress.total ? t.bar.downloading(fmtBytes(progress.loaded), fmtBytes(progress.total)) : t.bar.opening}</div>
       </div>
     ) : (
-      <div className="de-center">No document</div>
+      <div className="de-center">{t.bar.noDocument}</div>
     )
   } else if (isPicture) body = <PictureView key={clientKey(client)} client={client} />
   else if (isCode)
@@ -665,8 +642,8 @@ export function DocViewer(props: DocViewerProps) {
           onChange={editCode}
           onCopy={() =>
             navigator.clipboard?.writeText(code).then(
-              () => setToast('Code copied'),
-              () => setToast('Cannot copy here'),
+              () => setToast(t.bar.codeCopied),
+              () => setToast(t.bar.cannotCopy),
             )
           }
         />
@@ -676,7 +653,6 @@ export function DocViewer(props: DocViewerProps) {
   else body = <PptxView client={client} initialZoom={zoom} thumbnails={thumbnails} />
 
   return (
-    <LocaleContext.Provider value={locale}>
     <IconsProvider icons={props.icons}>
     <div ref={rootRef} className={root.className + (className ? ` ${className}` : '')} style={root.style} onKeyDown={onKeyDown}>
       {toolbar && (
@@ -700,11 +676,11 @@ export function DocViewer(props: DocViewerProps) {
               className={'de-mode' + (codeShown ? ' de-mode-on' : '')}
               onClick={() => setCodeOpen((v) => !v)}
               aria-pressed={codeShown}
-              title={codeShown ? 'Hide the source' : 'Edit the source side by side with the document'}
+              title={codeShown ? t.bar.codeHide : t.bar.codeShow}
               data-testid="de-code-toggle"
             >
               <Icon name="code" size={16} />
-              Code
+              {t.bar.code}
             </button>
           )}
           {cmCtl && (
@@ -712,25 +688,25 @@ export function DocViewer(props: DocViewerProps) {
               type="button"
               className={'de-mode de-cm-toggle' + (cmState.open ? ' de-mode-on' : '')}
               onClick={() => cmCtl.toggle()}
-              title={cmCtl.canComment ? `Comments (${COMMENT_KEYS} to comment on the selection)` : 'Comments'}
+              title={cmCtl.canComment ? t.bar.commentsTitle(COMMENT_KEYS) : t.bar.comments}
               aria-pressed={cmState.open}
               data-testid="de-comments-toggle"
             >
               <Icon name="comment" size={16} />
-              Comments
+              {t.bar.comments}
               {cmCount > 0 && <span className="de-cm-n">{cmCount}</span>}
             </button>
           )}
           {client && allowEdit && !readOnly && !codeShown && (
-            <button type="button" className={editing ? 'de-mode de-mode-on' : 'de-mode'} onClick={() => setEditing((v) => !v)} title={editing ? 'Switch to viewing' : 'Edit document'}>
+            <button type="button" className={editing ? 'de-mode de-mode-on' : 'de-mode'} onClick={() => setEditing((v) => !v)} title={editing ? t.bar.toView : t.bar.toEdit}>
               <Icon name={editing ? 'view' : 'edit'} size={16} />
-              {editing ? 'View' : 'Edit'}
+              {editing ? t.bar.view : t.bar.edit}
             </button>
           )}
           {client && canSave && ((editing && !readOnly) || dirty) && (
-            <button type="button" className={dirty ? 'de-mode de-save-dirty' : 'de-mode'} disabled={saving} onClick={() => void save()} title="Save a copy (Ctrl+S)">
+            <button type="button" className={dirty ? 'de-mode de-save-dirty' : 'de-mode'} disabled={saving} onClick={() => void save()} title={t.bar.saveTitle}>
               <Icon name="save" size={16} />
-              {saving ? 'Saving…' : dirty || onSave ? 'Save' : 'Download'}
+              {saving ? t.bar.saving : dirty || onSave ? t.bar.save : t.bar.download}
             </button>
           )}
           <div className="de-progress" style={{ width: `${busy ? Math.max(pct, 3) : 100}%`, opacity: busy ? 1 : 0 }} />
@@ -753,13 +729,13 @@ export function DocViewer(props: DocViewerProps) {
                 readOnly={!allowEdit || !!props.collab}
                 notice={
                   dirty && !sourceEdited.current && !rebuilds
-                    ? 'Changes made in the document are not in this source: editing it builds the document again from the source.'
+                    ? t.bar.sourceStale
                     : undefined
                 }
                 onCopy={() =>
                   navigator.clipboard?.writeText(code).then(
-                    () => setToast('Source copied'),
-                    () => setToast('Cannot copy here'),
+                    () => setToast(t.bar.sourceCopied),
+                    () => setToast(t.bar.cannotCopy),
                   )
                 }
                 onDownload={allowDownload ? () => download(new Blob([code], { type: PLAIN_FILE[srcFormat!].mime }), sourceName()) : undefined}
@@ -772,7 +748,7 @@ export function DocViewer(props: DocViewerProps) {
             className="de-split-handle"
             role="separator"
             aria-orientation={stacked ? 'horizontal' : 'vertical'}
-            aria-label="Resize the source"
+            aria-label={t.bar.resizeSource}
             aria-valuenow={Math.round(split * 100)}
             aria-valuemin={15}
             aria-valuemax={85}
@@ -799,14 +775,14 @@ export function DocViewer(props: DocViewerProps) {
         {cmCtl && cmState.open && <CommentsPanel ctl={cmCtl} />}
       </div>
       {toast && <Toast text={toast} onDone={clearToast} />}
-      {confirm && <ConfirmDialog title="Discard unsaved changes?" message={confirm.message} ok="Continue" onOk={confirm.run} onClose={() => setConfirm(null)} />}
+      {confirm && <ConfirmDialog title={t.bar.discardTitle} message={confirm.message} ok={t.bar.discardOk} onOk={confirm.run} onClose={() => setConfirm(null)} />}
       {renaming && client && (
         <PromptDialog
           spec={{
-            title: 'Rename',
-            label: 'File name',
+            title: t.bar.renameTitle,
+            label: t.bar.renameLabel,
             initial: baseName,
-            ok: 'Rename',
+            ok: t.bar.renameOk,
             onOk: (v) => {
               const next = v.trim().replace(/[\\/:*?"<>|]+/g, ' ').replace(new RegExp(`(\\${officeExt}|\\${saveExt})$`, 'i'), '')
               if (!next) return
@@ -821,21 +797,21 @@ export function DocViewer(props: DocViewerProps) {
         <DetailsDialog
           client={client}
           file={[
-            ['Name', saveName],
+            [t.details.name, saveName],
             [
-              'Type',
+              t.details.type,
               client.info?.from
-                ? `${FROM_LABEL[client.info.from]} (view only)`
+                ? t.details.viewOnly(t.from[client.info.from])
                 : client.info?.converted
-                  ? `${CONVERTED_LABEL[client.info.converted]}, opened as ${KIND_LABEL[client.kind]}`
+                  ? t.details.openedAs(t.converted[client.info.converted], t.kind[client.kind])
                   : isCode
-                    ? `${IMPORTED_LABEL.code}${codeLang ? ` (${LANGUAGE_NAME[languageOf(codeLang) ?? ''] ?? codeLang})` : ''}`
+                    ? codeLanguage ? `${t.imported.code} (${codeLanguage})` : t.imported.code
                     : client.info?.imported
-                      ? `${IMPORTED_LABEL[client.info.imported]}, opened as ${KIND_LABEL[client.kind]}`
-                      : KIND_LABEL[client.kind],
+                      ? t.details.openedAs(t.imported[client.info.imported], t.kind[client.kind])
+                      : t.kind[client.kind],
             ],
-            ...(client.size > 0 ? [['File size', fmtBytes(client.size)] as [string, string]] : []),
-            ...(dirty ? [['Status', 'Unsaved changes'] as [string, string]] : []),
+            ...(client.size > 0 ? [[t.details.fileSize, fmtBytes(client.size)] as [string, string]] : []),
+            ...(dirty ? [[t.details.status, t.details.unsaved] as [string, string]] : []),
           ]}
           stats={fileOps.current?.stats() ?? []}
           onClose={() => setDetails(false)}
@@ -843,6 +819,5 @@ export function DocViewer(props: DocViewerProps) {
       )}
     </div>
     </IconsProvider>
-    </LocaleContext.Provider>
   )
 }

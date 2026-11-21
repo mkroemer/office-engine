@@ -32,6 +32,7 @@ import type { CommentThread } from '../../core/comments'
 import { cssColor, cssPaint } from '../../core/color'
 import { cssFont } from '../../core/fonts'
 import { dict } from '../../core/dict'
+import { formatCount, useStrings } from '../strings'
 
 const BLOCK = 128
 const HH = 22
@@ -311,21 +312,23 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
   const [, bump] = useForceUpdate()
   useEffect(() => store.subscribe(bump), [store, bump])
   const state = store.sheet(active)
+  const str = useStrings()
+  const n = (v: number) => formatCount(str, v)
 
   const status = state.error
-    ? `Error: ${state.error}`
-    : `${state.rows.toLocaleString()} rows × ${state.cols.toLocaleString()} cols${state.done ? '' : ' · loading…'}${state.rows > MAX_ROWS ? ` · over Excel’s ${MAX_ROWS.toLocaleString()}-row limit: save as CSV` : ''}`
+    ? str.common.error(state.error)
+    : `${str.xlsx.status(state.rows, state.cols, str.locale)}${state.done ? '' : str.xlsx.statusLoading}${state.rows > MAX_ROWS ? str.xlsx.overLimit(MAX_ROWS, str.locale) : ''}`
 
   const viewer = useViewer()
   useFileOps({
-    printable: () => sheetPrintable(client, cur, store.sheet(cur), meta),
+    printable: () => sheetPrintable(client, cur, store.sheet(cur), meta, str),
     text: (format) => client.call('xlsx.text', cur, format === 'tsv' ? '\t' : ','),
     stats: () => {
       const s = store.sheet(cur)
       return [
-        ['Sheets', `${meta.sheets.length}${meta.sheets.some((x) => x.hidden) ? ` (${meta.sheets.filter((x) => x.hidden).length} hidden)` : ''}`],
-        ['Current sheet', meta.sheets[cur]?.name ?? ''],
-        ['Used range', `${s.rows.toLocaleString()} rows × ${s.cols.toLocaleString()} columns${s.done ? '' : ' (loading)'}`],
+        [str.xlsx.sheets, `${n(meta.sheets.length)}${meta.sheets.some((x) => x.hidden) ? str.xlsx.hiddenSheets(meta.sheets.filter((x) => x.hidden).length, str.locale) : ''}`],
+        [str.xlsx.currentSheet, meta.sheets[cur]?.name ?? ''],
+        [str.xlsx.usedRange, `${str.xlsx.usedRangeValue(s.rows, s.cols, str.locale)}${s.done ? '' : str.xlsx.usedRangeLoading}`],
       ]
     },
     importText: async (file, name) => {
@@ -387,11 +390,11 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
     const old = meta.sheets[index]
     if (!old || raw === old.name) return
     const name = cleanSheetName(raw)
-    if (!name) return setNote('A sheet name cannot be empty')
-    if (meta.sheets.some((x) => x.index !== index && x.name.toLowerCase() === name.toLowerCase())) return setNote(`A sheet named “${name}” already exists`)
+    if (!name) return setNote(str.xlsx.sheetNameEmpty)
+    if (meta.sheets.some((x) => x.index !== index && x.name.toLowerCase() === name.toLowerCase())) return setNote(str.xlsx.sheetNameTaken(name))
     const said: string[] = []
-    if (raw.trim().length > 31) said.push(`Sheet names have at most 31 characters: shortened to “${name}”.`)
-    if (/[\\/?*[\]:]/.test(raw)) said.push('Sheet names cannot contain \\ / ? * [ ] : — they were replaced by _.')
+    if (raw.trim().length > 31) said.push(str.xlsx.sheetNameShortened(name))
+    if (/[\\/?*[\]:]/.test(raw)) said.push(str.xlsx.sheetNameInvalidChars)
     if (name !== old.name) void bookOp({ op: 'rename', index, name: raw })
     if (said.length) setNote(said.join(' '))
   }
@@ -411,7 +414,7 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
     }
     cm.setHost({
       kind: 'xlsx',
-      hint: 'Select a cell to comment on.',
+      hint: () => cm.t.xlsx.commentHint,
       pending: () => {
         const i = curRef.current
         const sh = meta.sheets[i]
@@ -472,7 +475,7 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
       />
       <div className="de-tabs" role="tablist">
         {viewer.editable && (
-          <button type="button" className="de-tab de-tab-add" title="Add sheet" onClick={() => void bookOp({ op: 'add', after: cur }, cur + 1)}>
+          <button type="button" className="de-tab de-tab-add" title={str.xlsx.addSheet} onClick={() => void bookOp({ op: 'add', after: cur }, cur + 1)}>
             <Icon name="sheetAdd" size={16} />
           </button>
         )}
@@ -524,11 +527,11 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
           y={tabMenu.y}
           onClose={() => setTabMenu(null)}
           items={[
-            { label: 'Rename', run: () => setRenaming(tabMenu.index) },
-            { label: 'Duplicate sheet', run: () => void bookOp({ op: 'duplicate', index: tabMenu.index }, tabMenu.index + 1) },
-            { label: 'Move left', disabled: tabMenu.index === 0, run: () => void bookOp({ op: 'move', from: tabMenu.index, to: tabMenu.index - 1 }, tabMenu.index - 1) },
-            { label: 'Move right', disabled: tabMenu.index >= meta.sheets.length - 1, run: () => void bookOp({ op: 'move', from: tabMenu.index, to: tabMenu.index + 1 }, tabMenu.index + 1) },
-            { label: 'Delete sheet', disabled: meta.sheets.length <= 1, run: () => void bookOp({ op: 'delete', index: tabMenu.index }, Math.max(0, tabMenu.index - 1)) },
+            { label: str.xlsx.renameSheet, run: () => setRenaming(tabMenu.index) },
+            { label: str.xlsx.duplicateSheet, run: () => void bookOp({ op: 'duplicate', index: tabMenu.index }, tabMenu.index + 1) },
+            { label: str.xlsx.moveLeft, disabled: tabMenu.index === 0, run: () => void bookOp({ op: 'move', from: tabMenu.index, to: tabMenu.index - 1 }, tabMenu.index - 1) },
+            { label: str.xlsx.moveRight, disabled: tabMenu.index >= meta.sheets.length - 1, run: () => void bookOp({ op: 'move', from: tabMenu.index, to: tabMenu.index + 1 }, tabMenu.index + 1) },
+            { label: str.xlsx.deleteSheet, disabled: meta.sheets.length <= 1, run: () => void bookOp({ op: 'delete', index: tabMenu.index }, Math.max(0, tabMenu.index - 1)) },
           ]}
         />
       )}
@@ -662,6 +665,7 @@ const SINK_STYLE: CSSProperties = { left: 4, top: 4, width: 1, height: 1 }
 
 function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }: GridProps) {
   const viewer = useViewer()
+  const str = useStrings()
   const editable = viewer.editable
   // numbers typed are read in it, and a number edited is shown in it (1,5 in de-DE: what is shown is read back the same)
   const locale = useLocale()
@@ -945,7 +949,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
     drawings.forEach((d, i) => {
       const b = drawingBox(d, colAxis, rowAxis)
       if (!b || b.x > px1 || b.x + b.w < px0 || b.y > py1 || b.y + b.h < py0) return
-      out.push(drawingEl('dr' + i, d, { left: b.x - ox, top: b.y - oy, width: b.w, height: b.h }))
+      out.push(drawingEl('dr' + i, d, { left: b.x - ox, top: b.y - oy, width: b.w, height: b.h }, str))
     })
     // the fill handle: the corner of the selection, dragged to copy it down or to the right
     if (editable && !edit && !fillRef.current && rect.r1 >= rr0 && rect.r1 <= rr1 && rect.c1 >= cc0 && rect.c1 <= cc1 && rect.r1 - rect.r0 < 5000 && rect.c1 - rect.c0 < 200) {
@@ -1213,7 +1217,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
     const e = edit
     if (!e || closed.current === e) return
     const R = e.sheet === sheet ? rect : { r0: e.r, c0: e.c, r1: e.r, c1: e.c }
-    if ((R.r1 - R.r0 + 1) * (R.c1 - R.c0 + 1) > 100_000) return setToast('The selection has more than 100,000 cells: select fewer to fill them')
+    if ((R.r1 - R.r0 + 1) * (R.c1 - R.c0 + 1) > 100_000) return setToast(str.xlsx.fillLimit(100_000, str.locale))
     closed.current = e
     setEdit(null)
     const value = closeFormula(e.value)
@@ -1610,7 +1614,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
         store.clip = { text: local ?? data.text, data, cut }
         if (cut) await sheetOp({ op: 'clear', range })
       })
-      .catch((err: Error) => setToast(local === null && err.name === 'NotAllowedError' ? 'The browser blocked clipboard access: select fewer rows to copy them' : err.message))
+      .catch((err: Error) => setToast(local === null && err.name === 'NotAllowedError' ? str.xlsx.clipboardCopyBlocked : err.message))
   }
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -1925,7 +1929,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
       }
     }
     await sheetOp({ op: 'merge', range, mode })
-    if (dropped) setToast(`Merging keeps only the upper-left value of each merged cell: ${dropped} other value${dropped > 1 ? 's were' : ' was'} removed. Undo (${MOD}Z) brings ${dropped > 1 ? 'them' : 'it'} back.`)
+    if (dropped) setToast(str.xlsx.mergeDropped(dropped, `${MOD}Z`))
   }
   const freeze = (kind: 'none' | 'row' | 'col' | 'sel') =>
     void sheetOp({ op: 'freeze', rows: kind === 'row' ? 1 : kind === 'sel' ? sel.ar : 0, cols: kind === 'col' ? 1 : kind === 'sel' ? sel.ac : 0 })
@@ -1995,7 +1999,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
       for (let r = Math.max(m.r0, b.r0); r <= Math.min(m.r1, b.r1); r++) for (let c = Math.max(m.c0, b.c0); c <= Math.min(m.c1, b.c1); c++) if ((r !== m.r0 || c !== m.c0) && filledAt(r, c)) return true
       return false
     })
-  const MERGED_PASTE = 'Cannot paste here: the cells would fill merged cells. Unmerge them, or paste into one cell.'
+  const MERGED_PASTE = str.xlsx.mergedPaste
   const pasteText = (raw: string) => {
     const norm = (t: string) => t.replace(/\r\n?/g, '\n').replace(/\n$/, '')
     const at = { r: rect.r0, c: rect.c0 }
@@ -2029,7 +2033,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
     // one value into a selection of several cells: all of them get it
     if (rows.length === 1 && rows[0].length === 1 && !oneCell) {
       const cells: CellInput[] = []
-      if ((rect.r1 - rect.r0 + 1) * (rect.c1 - rect.c0 + 1) > 100_000) return setToast('The selection has more than 100,000 cells: select fewer to fill them')
+      if ((rect.r1 - rect.r0 + 1) * (rect.c1 - rect.c0 + 1) > 100_000) return setToast(str.xlsx.fillLimit(100_000, str.locale))
       for (let r = rect.r0; r <= rect.r1; r++) {
         for (let c = rect.c0; c <= rect.c1; c++) {
           const m = mergeAt(r, c)
@@ -2041,55 +2045,55 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
     }
     const cells = rows.flatMap((line, i) => line.map((v, j) => ({ r: at.r + i, c: at.c + j, input: v })))
     const block = { r0: at.r, c0: at.c, r1: at.r + rows.length - 1, c1: at.c + Math.max(1, ...rows.map((l) => l.length)) - 1 }
-    if (cells.length > 1 && mergedHit(block, (r, c) => (rows[r - block.r0]?.[c - block.c0] ?? '') !== '')) return setToast(MERGED_PASTE)
-    if (cells.length > 100_000) setToast(`Only the first 100,000 of the ${cells.length.toLocaleString()} cells were pasted`)
+    if (cells.length > 1 && mergedHit(block, (r, c) => (rows[r - block.r0]?.[c - block.c0] ?? '') !== '')) return setToast(str.xlsx.mergedPaste)
+    if (cells.length > 100_000) setToast(str.xlsx.pasteLimit(100_000, cells.length, str.locale))
     if (cells.length) void run(client.call('xlsx.set', sheet, cells.slice(0, 100_000)))
   }
   const ctxItems = (): MenuItem[] => {
     const nr = rect.r1 - rect.r0 + 1
     const nc = rect.c1 - rect.c0 + 1
-    const rows = nr === 1 ? `row ${rect.r0 + 1}` : `rows ${rect.r0 + 1}–${rect.r1 + 1}`
-    const cols = nc === 1 ? `column ${colName(rect.c0)}` : `columns ${colName(rect.c0)}–${colName(rect.c1)}`
+    const rows = nr === 1 ? str.xlsx.row(String(rect.r0 + 1)) : str.xlsx.rows(String(rect.r0 + 1), String(rect.r1 + 1))
+    const cols = nc === 1 ? str.xlsx.col(colName(rect.c0)) : str.xlsx.cols(colName(rect.c0), colName(rect.c1))
     const single = nr === 1 && nc === 1
     const thread = cmAt(sel.ar, sel.ac)
     const comment: MenuItem[] = thread
-      ? [{ label: 'Show comment', icon: 'comment', run: () => cm?.select(thread) }]
+      ? [{ label: str.edit.showComment, icon: 'comment', run: () => cm?.select(thread) }]
       : cm?.canComment
-        ? [{ label: 'Comment', icon: 'commentAdd', hint: COMMENT_KEYS, run: () => cm.start() }]
+        ? [{ label: str.edit.comment, icon: 'commentAdd', hint: COMMENT_KEYS, run: () => cm.start() }]
         : []
     return [
       ...comment,
-      { label: 'Cut', icon: 'cut', hint: `${MOD}X`, sep: comment.length > 0, run: () => document.execCommand('cut') },
-      { label: 'Copy', icon: 'copy', hint: `${MOD}C`, run: () => document.execCommand('copy') },
+      { label: str.edit.cut, icon: 'cut', hint: `${MOD}X`, sep: comment.length > 0, run: () => document.execCommand('cut') },
+      { label: str.edit.copy, icon: 'copy', hint: `${MOD}C`, run: () => document.execCommand('copy') },
       {
-        label: 'Paste',
+        label: str.edit.paste,
         icon: 'paste',
         hint: `${MOD}V`,
         run: () =>
           void navigator.clipboard
             ?.readText()
             .then(pasteText)
-            .catch(() => setToast(`The browser blocked clipboard access — use ${MOD}V to paste`)),
+            .catch(() => setToast(str.edit.clipboardBlocked(`${MOD}V`))),
       },
-      { label: `Insert ${nr} row${nr > 1 ? 's' : ''} above`, icon: 'rowAbove', sep: true, run: () => rowsOp('rowAbove') },
-      { label: `Insert ${nr} row${nr > 1 ? 's' : ''} below`, icon: 'rowBelow', run: () => rowsOp('rowBelow') },
-      { label: `Insert ${nc} column${nc > 1 ? 's' : ''} left`, icon: 'colLeft', run: () => rowsOp('colLeft') },
-      { label: `Insert ${nc} column${nc > 1 ? 's' : ''} right`, icon: 'colRight', run: () => rowsOp('colRight') },
-      { label: `Delete ${rows}`, icon: 'delRow', sep: true, run: () => rowsOp('delRow') },
-      { label: `Delete ${cols}`, icon: 'delCol', run: () => rowsOp('delCol') },
-      { label: `Hide ${rows}`, icon: 'hide', sep: true, run: () => rowsOp('hideRows') },
-      { label: `Hide ${cols}`, icon: 'hide', run: () => rowsOp('hideCols') },
-      { label: 'Unhide rows', icon: 'view', run: () => rowsOp('unhideRows') },
-      { label: 'Unhide columns', icon: 'view', run: () => rowsOp('unhideCols') },
-      { label: merged ? 'Unmerge cells' : 'Merge cells', icon: 'merge', sep: true, run: toggleMerge, disabled: single && !merged },
-      { label: `Sort ${single ? 'sheet' : 'range'} by ${colName(sel.ac)}, A → Z`, icon: 'sortAZ', run: () => sortBy(false) },
-      { label: `Sort ${single ? 'sheet' : 'range'} by ${colName(sel.ac)}, Z → A`, icon: 'sortZA', run: () => sortBy(true) },
-      { label: 'Fill down', icon: 'down', hint: `${MOD}D`, run: () => void sheetOp({ op: 'fill', range: rect, dir: 'down' }), disabled: nr === 1 },
-      { label: 'Fill right', hint: `${MOD}R`, run: () => void sheetOp({ op: 'fill', range: rect, dir: 'right' }), disabled: nc === 1 },
-      { label: 'Clear contents', icon: 'trash', hint: 'Del', sep: true, run: clearRange },
-      { label: 'Clear formatting', icon: 'clear', hint: `${MOD}\\`, run: () => fmt({ clear: true }) },
-      { label: `Freeze up to ${colName(sel.ac)}${sel.ar + 1}`, icon: 'freeze', sep: true, run: () => freeze('sel') },
-      { label: 'Unfreeze', run: () => freeze('none'), disabled: !s.frozen.rows && !s.frozen.cols },
+      { label: str.xlsx.rowsAbove(nr), icon: 'rowAbove', sep: true, run: () => rowsOp('rowAbove') },
+      { label: str.xlsx.rowsBelow(nr), icon: 'rowBelow', run: () => rowsOp('rowBelow') },
+      { label: str.xlsx.colsLeft(nc), icon: 'colLeft', run: () => rowsOp('colLeft') },
+      { label: str.xlsx.colsRight(nc), icon: 'colRight', run: () => rowsOp('colRight') },
+      { label: str.xlsx.deleteWhat(rows), icon: 'delRow', sep: true, run: () => rowsOp('delRow') },
+      { label: str.xlsx.deleteWhat(cols), icon: 'delCol', run: () => rowsOp('delCol') },
+      { label: str.xlsx.hideWhat(rows), icon: 'hide', sep: true, run: () => rowsOp('hideRows') },
+      { label: str.xlsx.hideWhat(cols), icon: 'hide', run: () => rowsOp('hideCols') },
+      { label: str.xlsx.unhideRows, icon: 'view', run: () => rowsOp('unhideRows') },
+      { label: str.xlsx.unhideCols, icon: 'view', run: () => rowsOp('unhideCols') },
+      { label: merged ? str.table.unmerge : str.table.merge, icon: 'merge', sep: true, run: toggleMerge, disabled: single && !merged },
+      { label: (single ? str.xlsx.sortSheetAsc : str.xlsx.sortRangeAsc)(colName(sel.ac)), icon: 'sortAZ', run: () => sortBy(false) },
+      { label: (single ? str.xlsx.sortSheetDesc : str.xlsx.sortRangeDesc)(colName(sel.ac)), icon: 'sortZA', run: () => sortBy(true) },
+      { label: str.xlsx.fillDown, icon: 'down', hint: `${MOD}D`, run: () => void sheetOp({ op: 'fill', range: rect, dir: 'down' }), disabled: nr === 1 },
+      { label: str.xlsx.fillRight, hint: `${MOD}R`, run: () => void sheetOp({ op: 'fill', range: rect, dir: 'right' }), disabled: nc === 1 },
+      { label: str.xlsx.clearContents, icon: 'trash', hint: str.edit.delKey, sep: true, run: clearRange },
+      { label: str.edit.clearFormat, icon: 'clear', hint: `${MOD}\\`, run: () => fmt({ clear: true }) },
+      { label: str.xlsx.freezeAt(`${colName(sel.ac)}${sel.ar + 1}`), icon: 'freeze', sep: true, run: () => freeze('sel') },
+      { label: str.xlsx.unfreeze, run: () => freeze('none'), disabled: !s.frozen.rows && !s.frozen.cols },
     ]
   }
 
@@ -2306,7 +2310,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
             rows={1}
             wrap="off"
             spellCheck={false}
-            aria-label="Cell content"
+            aria-label={str.xlsx.cellContent}
             onFocus={() => !edit && void startEdit(undefined, true)}
             onChange={(e) => onInput(e.target)}
             onSelect={(e) => readCaret(e.currentTarget)}
@@ -2402,7 +2406,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
                 spellCheck={false}
                 autoComplete="off"
                 autoCapitalize="off"
-                aria-label="Cell"
+                aria-label={str.xlsx.cell}
                 // no on-screen keyboard until a cell is being edited (it would open as the sheet does)
                 inputMode={edit ? undefined : 'none'}
                 value={editing ? edit.value : ''}
@@ -2463,7 +2467,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
           count={matches.length}
           editable={editable}
           replace={find.replace}
-          placeholder="Find in sheet"
+          placeholder={str.xlsx.findPlaceholder}
           onQuery={(q) => setFind((f) => ({ ...f, q, idx: 0 }))}
           onNav={(d) => matches.length && gotoMatch((find.idx + d + matches.length) % matches.length)}
           onClose={() => {
@@ -2479,9 +2483,9 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet }:
             <>
               {(
                 [
-                  ['matchCase', 'Match case'],
-                  ['whole', 'Entire cell'],
-                  ['formulas', 'In formulas'],
+                  ['matchCase', str.xlsx.matchCase],
+                  ['whole', str.xlsx.entireCell],
+                  ['formulas', str.xlsx.inFormulas],
                 ] as const
               ).map(([k, label]) => (
                 <label key={k} className="de-find-opt">

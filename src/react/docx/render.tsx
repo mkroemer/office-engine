@@ -6,6 +6,7 @@ import { safeHref } from '../../core/url'
 import type { DocumentClient } from '../../core/worker/client'
 import { useMediaUrl } from '../common/hooks'
 import { dict } from '../../core/dict'
+import { en, type Strings } from '../strings/en'
 import { gridOf, type GridCell } from './tables'
 import { highlight, languageOf, type Token } from '../../core/syntax'
 
@@ -18,6 +19,15 @@ export interface RenderCtx {
   editable: boolean
   /** editing: a column edge of the top-level table `bi` was dragged */
   colResize?: (bi: number, cols: number[]) => void
+  /** UI texts (tooltips); English when absent */
+  t?: Strings
+}
+
+/** tooltip of a tracked change */
+const tcTitle = (ctx: RenderCtx, tc: TrackMark, date: boolean) => {
+  const t = ctx.t ?? en
+  const what = tc.k === 'ins' ? t.docx.inserted : t.docx.deleted
+  return `${tc.author ? t.docx.changeBy(what, tc.author) : what}${date && tc.date ? ` · ${new Date(tc.date).toLocaleString(t.locale)}` : ''}`
 }
 
 const pt = (v: number | undefined) => (v ? `${+v.toFixed(2)}pt` : undefined)
@@ -206,7 +216,7 @@ function InlineView({ x, ctx, o, pieces }: { x: Inline; ctx: RenderCtx; o: numbe
     'data-o': o,
     'data-obj': '',
     contentEditable: ctx.editable ? false : undefined,
-    ...(objTc ? { 'data-tc': objTc.k, title: `${objTc.k === 'ins' ? 'Inserted' : 'Deleted'}${objTc.author ? ` by ${objTc.author}` : ''}` } : {}),
+    ...(objTc ? { 'data-tc': objTc.k, title: tcTitle(ctx, objTc, false) } : {}),
   } as const
   switch (x.t) {
     case 'text': {
@@ -217,7 +227,7 @@ function InlineView({ x, ctx, o, pieces }: { x: Inline; ctx: RenderCtx; o: numbe
           style={tc ? { ...runCss(x.s), ...trackCss(tc) } : runCss(x.s)}
           data-cm={x.cm?.join(' ')}
           data-tc={tc?.k}
-          title={tc ? `${tc.k === 'ins' ? 'Inserted' : 'Deleted'}${tc.author ? ` by ${tc.author}` : ''}${tc.date ? ` · ${new Date(tc.date).toLocaleString()}` : ''}` : undefined}
+          title={tc ? tcTitle(ctx, tc, true) : undefined}
         >
           {pieces ?? x.text}
         </span>

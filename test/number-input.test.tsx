@@ -6,7 +6,7 @@ import { describe, expect, test } from 'bun:test'
 import type { ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { inputLocale, numberSyntax, numberText, parseNumber, readTyped } from '../src/core/number-input'
-import { LocaleContext } from '../src/react/common/locale'
+import { StringsProvider } from '../src/react/strings'
 import { SizeBox, sizeOf } from '../src/react/edit/Toolbar'
 import { PageSetupDialog } from '../src/react/docx/PageSetupDialog'
 import { partOf } from '../src/react/docx/HeaderFooterDialog'
@@ -260,7 +260,7 @@ describe('fields: the font size, page setup, header and footer', () => {
     expect(parseNumber('12,5')).toBeNull()
   })
 
-  const inLocale = (locale: string | undefined, node: ReactNode) => renderToStaticMarkup(<LocaleContext.Provider value={locale}>{node}</LocaleContext.Provider>)
+  const inLocale = (locale: string | undefined, node: ReactNode) => renderToStaticMarkup(<StringsProvider locale={locale}>{node}</StringsProvider>)
 
   test('the font size box shows the size in the locale', () => {
     expect(inLocale('de-DE', <SizeBox value={10.5} onChange={() => {}} />)).toContain('value="10,5"')
@@ -274,6 +274,7 @@ describe('fields: the font size, page setup, header and footer', () => {
     expect(de).toMatch(/<input type="text" inputMode="decimal"[^>]*aria-label="Top margin \(cm\)" value="2,54"/)
     const none = inLocale(undefined, <PageSetupDialog page={page as never} onOk={() => {}} onClose={() => {}} />)
     expect(none).toMatch(/<input type="number" inputMode="decimal"[^>]*aria-label="Top margin \(cm\)" value="2.54"/)
+    expect(inLocale('zz-ZZ', <PageSetupDialog page={page as never} onOk={() => {}} onClose={() => {}} />)).toBe(none)
   })
 
   test('header and footer: the size of the text in the locale', () => {

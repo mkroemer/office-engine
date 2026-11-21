@@ -5,6 +5,8 @@
 ```tsx
 import { DocViewer } from '@p10node/office-engine'
 
+const fileTexts = { file: { menu: 'Files' } }
+
 <DocViewer src={file} style={{ height: 600 }} />                 // File | Blob | ArrayBuffer | Uint8Array
 <DocViewer src="https://cdn.example.com/report.xlsx" />          // URL → Range requests
 <DocViewer src={url} headers={{ Authorization: `Bearer ${t}` }} credentials="include" />
@@ -14,6 +16,7 @@ import { DocViewer } from '@p10node/office-engine'
 <DocViewer src={file} theme="dark" />                             // dark chrome; "auto" follows the OS setting
 <DocViewer src={file} editable locale="de-DE" />                  // numbers typed as 1,5 and 1.234,5
 <DocViewer src={file} fonts={[{ family: 'Carlito', src: '/fonts/Carlito-Regular.ttf' }]} />  // font files, see Fonts
+<DocViewer src={file} strings={fileTexts} />                       // override individual UI texts
 ```
 
 ### File menu
@@ -65,7 +68,8 @@ CSS is auto-injected, no import needed (or import `@p10node/office-engine/styles
 | `styleTarget`      | `Document \| ShadowRoot`                       | document  | Where CSS is injected                                                                                                    |
 | `injectStyles`     | `boolean`                                      | `true`    | Inject the stylesheet; false when the page loads `@p10node/office-engine/styles.css` itself                              |
 | `theme`            | `'light' \| 'dark' \| 'auto' \| ThemeOptions`  | `'light'` | Color scheme of the chrome; `'auto'` follows `prefers-color-scheme`; an object adds token overrides ([Theming](theming.md)). Documents keep their own colors |
-| `locale`           | `string`                                       | –         | BCP 47 tag the numbers typed are read in (`de-DE`: `1,5`); none: a decimal point. [More](#numbers-typed-in-a-locale)     |
+| `locale`           | `string`                                       | inherited | BCP 47 tag for number/date display and numeric input. See [UI texts](#ui-texts) and [input](#numbers-typed-in-a-locale)  |
+| `strings`          | `StringsOverride`                              | –         | Texts merged over the enclosing provider or English, key by key; may include a formatting `locale`                       |
 | `editable`         | `boolean`                                      | `false`   | Open in edit mode (Pages, Keynote, Numbers and Visio files stay view only)                                               |
 | `allowEdit`        | `boolean`                                      | `true`    | Show Edit/View button                                                                                                    |
 | `allowSave`        | `boolean`                                      | `true`    | Show Save/Download button, enable Ctrl+S                                                                                 |
@@ -195,6 +199,93 @@ import { IconsProvider, XlsxView } from '@p10node/office-engine'
 </IconsProvider>
 ```
 
+### UI texts
+
+Viewer UI texts (titles, labels, menu entries, placeholders, dialogs, toasts, status lines such as "Page 1 of 5") come from one typed table, `Strings`, with the exceptions listed below. Only English UI texts with US spelling are included in the default viewer and standalone embed bundle. German is a separate optional import with standard German spelling and `de-DE` number/date formatting (for example `1.234.567,89`):
+
+```tsx
+import { DocViewer } from '@p10node/office-engine'
+import { de } from '@p10node/office-engine/locales/de'
+
+<DocViewer src={file} strings={de} />
+```
+
+The locale module is included only when your app imports it. The German table uses standard German spelling and `de-DE` formatting and numeric input. `locale="de-DE"` alone changes number/date formatting and numeric input while keeping English UI texts; it does not load German. With no table or formatting override, dates and grouped counts retain the browser's locale. Page/slide numbers, measurements, file sizes and zoom labels retain ASCII digits and a decimal point, as before. An explicit formatting tag applies to all of these displays. The English labels now use singular forms for counts of one. Sheet counts and paste limits use the active formatting locale or the browser default. Zoom percentages use Intl rounding, which can differ at exact halves.
+
+`strings` merges over the enclosing `StringsProvider` (or English) key by key, so a group can be given in part. Nested providers and `DocViewer` inherit the outer texts and formatting. Undefined values do not replace inherited values: `strings={en}` changes the texts while retaining an enclosing formatting tag; also pass `locale="en-US"` to select US formatting explicitly. A value is a string, or a function where the text takes numbers or names. Count callbacks receive raw numbers for pluralization; callbacks that format grouped counts also receive the active formatting tag as their final optional argument. Hoist override objects outside render, or memoize them when they depend on props, to keep the provider value stable. To customize an imported language, spread that table and any groups you change:
+
+```tsx
+import { DocViewer } from '@p10node/office-engine'
+import { de } from '@p10node/office-engine/locales/de'
+
+const germanTexts = {
+  ...de,
+  file: { ...de.file, menu: 'Ablage' },
+  docx: {
+    ...de.docx,
+    status: (page: number, pages: number, words: number, locale?: string) =>
+      `${page.toLocaleString(locale)}/${pages.toLocaleString(locale)} · ${words.toLocaleString(locale)} ${words === 1 ? 'Wort' : 'Wörter'}`,
+  },
+}
+
+<DocViewer src={file} strings={germanTexts} />
+```
+
+Views used on their own get their texts from a `StringsProvider` (English without one); `useStrings()` reads them in your own components:
+
+```tsx
+import { StringsProvider, useStrings, XlsxView } from '@p10node/office-engine'
+import { de } from '@p10node/office-engine/locales/de'
+
+const sheetTexts = { ...de, xlsx: { ...de.xlsx, addSheet: 'Neues Blatt' } }
+
+<StringsProvider strings={sheetTexts}>
+  <div className="de-root"><XlsxView client={client} /></div>
+</StringsProvider>
+```
+
+For a regional variant, override only the texts that differ. The `locale` prop is a BCP 47 formatting tag and takes precedence over `strings.locale`; otherwise the local table’s locale takes precedence over the enclosing provider. With neither, displays use the defaults above. Malformed tags (for example `de_DE`) are ignored: a valid table or inherited tag still applies, otherwise the default formatting above is used. For display, well-formed but unsupported tags follow `Intl` fallback. Numeric input instead uses the engine’s default syntax when the resolved tag is missing or unsupported. For example, a host can use US English as the base and supply British formatting and selected British spellings:
+
+```tsx
+import { DocViewer, StringsProvider, en, type StringsOverride } from '@p10node/office-engine'
+
+const usEnglish = { ...en, locale: 'en-US' }
+const britishOverrides: StringsOverride = {
+  edit: { textColor: 'Text colour' },
+  format: { borderColor: 'Border colour' },
+}
+
+<StringsProvider strings={usEnglish}>
+  <DocViewer src={file} locale="en-GB" strings={britishOverrides} />
+</StringsProvider>
+```
+
+The same overrides work with `StringsProvider`, `mount()` and the web component's `strings` property. The example changes only those two labels; other text keeps the US English defaults. Override any other regional differences you need.
+
+For a complete language of your own, pass a `Strings` table as `strings`. Starting from `en` (or `de`) keeps untranslated entries as fallbacks; the following example only translates Cancel. Replace the remaining entries to complete the translation:
+
+```ts
+import { en, type Strings } from '@p10node/office-engine'
+
+export const fr: Strings = { ...en, locale: 'fr-FR', common: { ...en.common, cancel: 'Annuler' } }
+// <DocViewer src={file} strings={fr} />
+```
+
+A host can keep its own language tables in its app and pass them through `strings`; no engine registration is needed. A new optional package locale follows the German entry: add its typed table, a `src/locales/<code>.ts` entry and the corresponding build/package export. Locale parity tests check complete keys and nonempty texts.
+
+For vanilla embeds, pass the same optional table to `mount(el, { src, strings: de })` or assign it to the web component:
+
+```html
+<script src="office-engine.embed.js"></script>
+<office-viewer id="viewer" src="/file.xlsx"></office-viewer>
+<script type="module">
+  import { de } from './locales/de.js' // optional module next to the distributed embed bundle
+  document.getElementById('viewer').strings = de
+</script>
+```
+
+Document content stays in its original language. Default new sheet names, the author "Me" and new text box content also stay unchanged; the “Page 1 of 5” header/footer preset inserts text in the UI language. Font names, formula names and help, number format previews, host-provided labels and engine/transport errors (including main-thread fetch errors such as `HTTP 404 while fetching …`, collaboration errors such as `Document is still syncing`, and parsing-worker messages) are not translated by the table. Print, PDF and HTML export inherit the active UI table for viewer-generated labels; document content remains unchanged.
+
 ### Numbers typed in a locale
 
 `locale` (a BCP 47 tag) says how the numbers a person types are read: into a cell of a sheet, the font size box, the margins and column spacing of Page setup, the size in Header & footer. Its decimal and grouping separators, minus and percent signs and digits come from `Intl.NumberFormat`:
@@ -205,14 +296,14 @@ import { IconsProvider, XlsxView } from '@p10node/office-engine'
 <DocViewer src={file} editable />                  // as before: 1.5 and 1,234.5; 1,5 stays text
 ```
 
-- Without `locale` (or with a tag that is not one, such as `de_DE`) a number has a decimal point and commas grouping by thousands, as before; the browser's language is not used.
+- With no supported tag from the prop, local table or enclosing provider, numeric input uses a decimal point and commas grouping by thousands. The browser’s language does not affect numeric input.
 - The whole text is read as one number or not at all: `12,5` without a locale is not 12, `1.5` with `de-DE` is not 15. A cell keeps what is not a number as text; a field keeps its previous value (the font size box shows it again, Page setup disables Apply). The rules, grouping included: [Features](features.md#numbers-typed-in-a-locale).
 - What is saved is the number (`<v>1.5</v>`), the same in every locale; changing `locale` changes no value of a workbook. A number edited again shows the locale's decimal separator (`1,5` in the formula bar and the cell), which reads back as the same number.
 - Formulas are not localized: `=1.5+A1`, `=SUM(1,5)` and the English function names, whatever the locale.
 - With `locale`, the Page setup and Header & footer fields are text fields read by the same rules; without it they stay the browser's number fields.
 - Collaboration: the tag goes with each cell edit (`locale` of the shared `set` operation), so every participant, and a server replaying the log with `compact`, reads `1,5` the same. Participants should run a version that knows it: an older one reads such an edit with a decimal point.
 
-Without `DocViewer`: `client.call('xlsx.set', sheet, cells, { locale: 'de-DE' })`; `mount(el, { src, locale: 'de-DE' })`; `<office-viewer locale="de-DE">`.
+For standalone views or controls, wrap them in `<StringsProvider locale="de-DE">` or supply a table with that locale. The worker also accepts the tag directly in `client.call('xlsx.set', sheet, cells, { locale: 'de-DE' })`; `mount(el, { src, locale: 'de-DE' })`; `<office-viewer locale="de-DE">`.
 
 ### Fonts
 
@@ -272,7 +363,7 @@ const fonts: FontSource[] = [
 </script>
 ```
 
-`<office-viewer>`: attributes `src`, `name`, `language` (a source file's, as the prop), `editable`, `toolbar="false"`, `thumbnails="false"`, `save="false"`, `download="false"`, `file-menu="false"`, `open="false"`, `capture-select-all="false"`, `theme="dark"` (or `"auto"`), `locale="de-DE"` (numbers typed, see [above](#numbers-typed-in-a-locale)), `collab` / `room` / `user` / `base` (real-time collaboration; `user` also writes the comments), `comments="false"`, `fonts` (a JSON list of `FontSource` with URLs: `fonts='[{"family":"Carlito","src":"/fonts/Carlito-Regular.ttf"}]'`); properties `.file = File`, `.icons` (map or resolver, as `icons` above) and `.fonts` (as `fonts` above, bytes too; it wins over the attribute); events `load`, `error`, `comment` (`detail`: a `CommentEvent`).
+`<office-viewer>`: attributes `src`, `name`, `language` (a source file's, as the prop), `editable`, `toolbar="false"`, `thumbnails="false"`, `save="false"`, `download="false"`, `file-menu="false"`, `open="false"`, `capture-select-all="false"`, `theme="dark"` (or `"auto"`), `locale="de-DE"` (number/date formatting and numeric input), `collab` / `room` / `user` / `base` (real-time collaboration; `user` also writes the comments), `comments="false"`, `fonts` (a JSON list of `FontSource` with URLs: `fonts='[{"family":"Carlito","src":"/fonts/Carlito-Regular.ttf"}]'`); properties `.file = File`, `.icons` (map or resolver, as `icons` above) `.strings = { … }` (see [UI texts](#ui-texts)) and `.fonts` (as `fonts` above, bytes too; it wins over the attribute); events `load`, `error`, `comment` (`detail`: a `CommentEvent`).
 
 ## Core API (no React)
 

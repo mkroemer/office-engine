@@ -82,6 +82,7 @@ Also online at [p10node.github.io/office-engine](https://p10node.github.io/offic
 - **Real-time collaboration**: live edits, avatars, collaborators' cursors, offline edits sync on reconnect
 - **Fonts**: hand the viewer font files (the OFL fallbacks Carlito, Caladea, Liberation, or the originals) and documents are laid out once they are loaded, so lines and pages break as with the fonts the document names ([API](docs/api.md#fonts))
 - **Dark mode and theming**: `theme="dark"` or `"auto"` (follows the OS), or a theme object with design tokens for colors, type and shape ([Theming](docs/theming.md)); documents keep their own colors
+- **Translatable UI**: every text of the bars, menus and dialogs from one typed table; only English bundled by default; German available through an optional import with `de-DE` formatting (see [UI texts](docs/api.md#ui-texts)); any text replaceable through `strings`
 - **Numbers typed in a locale**: `locale="de-DE"` reads `1,5` and `1.234,5` typed into cells and fields (font size, margins); the whole entry or nothing, saved as the number itself, formulas unchanged ([API](docs/api.md#numbers-typed-in-a-locale))
 - **Embed anywhere**: React component, hook, vanilla `mount()`, `<office-viewer>` web component, single `<script>` file
 

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { StringsProvider, type Strings } from '../strings'
 import { stylesText } from '../injectStyles'
 import { copyFonts } from '../common/fonts'
 
@@ -165,7 +166,7 @@ interface Mounted {
 }
 
 /** renders the printable into an off-screen same-origin iframe (keeps host page CSS out) */
-async function mount(p: Printable, title: string): Promise<Mounted> {
+async function mount(p: Printable, title: string, strings: Strings): Promise<Mounted> {
   const frame = document.createElement('iframe')
   frame.setAttribute('aria-hidden', 'true')
   frame.tabIndex = -1
@@ -183,7 +184,7 @@ async function mount(p: Printable, title: string): Promise<Mounted> {
   host.className = 'de-print'
   doc.body.appendChild(host)
   const root = createRoot(host)
-  root.render(p.node)
+  root.render(<StringsProvider strings={strings}>{p.node}</StringsProvider>)
   let disposed = false
   const dispose = () => {
     if (disposed) return
@@ -206,9 +207,9 @@ async function mount(p: Printable, title: string): Promise<Mounted> {
 let printing: Mounted | null = null
 
 /** Opens the browser print dialog for the content (choose "Save as PDF" there). */
-export async function printDocument(p: Printable, title: string): Promise<void> {
+export async function printDocument(p: Printable, title: string, strings: Strings): Promise<void> {
   printing?.dispose()
-  const m = await mount(p, title)
+  const m = await mount(p, title, strings)
   printing = m
   const w = m.frame.contentWindow!
   const cleanup = () => {
@@ -248,8 +249,8 @@ function toDataUrl(blob: Blob): Promise<string> {
 }
 
 /** Standalone web page of the content (pictures embedded). */
-export async function exportHtml(p: Printable, title: string): Promise<Blob> {
-  const m = await mount(p, title)
+export async function exportHtml(p: Printable, title: string, strings: Strings): Promise<Blob> {
+  const m = await mount(p, title, strings)
   try {
     let body = m.host.outerHTML.replace(/ contenteditable="(?:true|false)"| data-de-fit="#?"/g, '')
     const blobs = new Set(body.match(/blob:[^"'()\s&]+/g) ?? [])

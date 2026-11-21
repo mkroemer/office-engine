@@ -26,6 +26,7 @@ import { docxBodyHtml, docxToHtml, docxToMarkdown, docxToText, pictureData } fro
 import { BlockView, contextual, type RenderCtx } from './render'
 import { columnsOf, headOf, pageAt, pageHF, pagesOf, paginate, pieceOf, type Lines, type PageSlice } from './paginate'
 import { lineStarts, paraLines, tableLines } from './measure'
+import { formatCount, formatNumber, useStrings } from '../strings'
 import { docxFonts, docxPageFonts } from '../../core/fonts'
 import { useDocFonts } from '../common/fonts'
 
@@ -79,6 +80,7 @@ export interface DocxViewProps {
 
 export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProps) {
   const viewer = useViewer()
+  const str = useStrings()
   const st = useRef<DocState & { lines: WeakMap<Block, Lines> }>({ blocks: [], heights: new WeakMap(), lines: new WeakMap(), dirty: new Set(), frontier: 0 }).current
   const [version, bump] = useForceUpdate()
   const [meta, setMeta] = useState<DocxMeta | null>(null)
@@ -400,10 +402,10 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     return () => clearTimeout(id)
   }, [version, done, st])
   const status = done?.error
-    ? `Error: ${done.error}`
+    ? str.common.error(done.error)
     : complete
-      ? `Page ${cur} of ${pages.length} · ${words.toLocaleString()} words`
-      : `Page ${cur} of ${pages.length}+ · loading…`
+      ? str.docx.status(cur, pages.length, words, str.locale)
+      : str.docx.statusLoading(cur, pages.length, str.locale)
 
   // the pages holding the ends of a ranged DOM selection (viewing has no model selection to tell them)
   useEffect(() => {
@@ -590,7 +592,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   // ---- File → Download as / Print: the pages as laid out on screen ----
   useFileOps({
     printable: async () => {
-      if (!complete) throw new Error('The document is still loading — try again in a moment')
+      if (!complete) throw new Error(str.common.stillLoading)
       await new Promise<void>((resolve) => {
         printWait.current = resolve
         bump()
@@ -612,7 +614,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
       }
     },
     text: async (format, base) => {
-      if (!done) throw new Error('The document is still loading — try again in a moment')
+      if (!done) throw new Error(str.common.stillLoading)
       if (format === 'txt') return docxToText(st.blocks)
       const images = await pictureData(st.blocks, (t) => client.call('part', t) as Promise<Blob>)
       // a Markdown / HTML file edited here: what was not edited stays as the file has it
@@ -633,11 +635,11 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
       st.blocks.forEach(count)
       const more = complete ? '' : '+'
       return [
-        ['Pages', pages.length.toLocaleString() + more],
-        ['Words', words.toLocaleString() + more],
-        ['Characters', chars.toLocaleString() + more],
-        ['Paragraphs', paras.toLocaleString() + more],
-        ['Page size', `${+(page.w / 72).toFixed(2)} × ${+(page.h / 72).toFixed(2)} in`],
+        [str.docx.pages, formatCount(str, pages.length) + more],
+        [str.docx.words, formatCount(str, words) + more],
+        [str.docx.characters, formatCount(str, chars) + more],
+        [str.docx.paragraphs, formatCount(str, paras) + more],
+        [str.docx.pageSize, str.format.inches(formatNumber(str, +(page.w / 72).toFixed(2)), formatNumber(str, +(page.h / 72).toFixed(2)))],
       ]
     },
   })
@@ -648,23 +650,23 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     const at = editor.input.sel()
     const cur = editor.state(at)?.link
     setPrompt({
-      title: cur ? 'Edit link' : 'Insert link',
-      placeholder: 'https://…',
+      title: cur ? str.edit.editLink : str.edit.link,
+      placeholder: str.edit.linkPlaceholder,
       initial: cur,
-      ok: 'Apply',
+      ok: str.common.apply,
       onOk: (v) => void editor.setLink(v.trim() || null, at).catch((e: Error) => setToast(e.message)),
-      extra: cur ? { label: 'Remove', run: () => void editor.setLink(null, at) } : undefined,
+      extra: cur ? { label: str.common.remove, run: () => void editor.setLink(null, at) } : undefined,
     })
   }
   const askAlt = () => {
     const cur = editor.state()?.img
     if (!cur) return
     setPrompt({
-      title: 'Alt text',
-      label: 'Describe the picture for screen readers',
+      title: str.edit.altText,
+      label: str.edit.altLabel,
       initial: cur.alt ?? '',
       area: true,
-      ok: 'Save',
+      ok: str.common.save,
       onOk: (v) => editor.setAltText(v.trim()),
     })
   }
@@ -686,11 +688,11 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
       const text = await navigator.clipboard.readText()
       if (text) opInsert(editor, sel, text)
     } catch {
-      setToast(`The browser blocked clipboard access — use ${MOD}V to paste`)
+      setToast(str.edit.clipboardBlocked(`${MOD}V`))
     }
   }
   const copyCut = (cmd: 'copy' | 'cut') => {
-    if (!document.execCommand(cmd)) setToast(`Use ${MOD}${cmd === 'copy' ? 'C' : 'X'}`)
+    if (!document.execCommand(cmd)) setToast(str.edit.useKeys(`${MOD}${cmd === 'copy' ? 'C' : 'X'}`))
   }
   const pickImage = () => void pickFiles().then((f) => void (f.length && editor.insertImages(f)))
   const imgEl = () => (img && pagesRef.current ? (findObj(pagesRef.current, img.pa, img.o) as HTMLImageElement | null) : null)
@@ -775,70 +777,70 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     const sel = editor.input.sel()
     const ranged = !!sel && (sel.a.pa !== sel.f.pa || sel.a.o !== sel.f.o)
     const items: MenuItem[] = []
-    if (cm?.canComment) items.push({ label: 'Comment', icon: 'commentAdd', hint: COMMENT_KEYS, run: () => cm.start(), disabled: !s })
+    if (cm?.canComment) items.push({ label: str.edit.comment, icon: 'commentAdd', hint: COMMENT_KEYS, run: () => cm.start(), disabled: !s })
     if (s?.img) {
       items.push(
-        { head: 'Image', label: 'Original size', icon: 'imgOrig', run: imageActions.original },
-        { label: 'Fit to page width', icon: 'fit', run: () => editor.resizeImage('fit') },
-        { label: 'Replace image…', icon: 'imgReplace', run: imageActions.replace },
-        { label: 'Alt text…', icon: 'alt', run: askAlt },
-        ...(imageActions.download ? [{ label: 'Download image', icon: 'save', run: imageActions.download } as MenuItem] : []),
-        { label: 'Delete image', icon: 'trash', run: () => editor.deleteSelection() },
+        { head: str.docx.imageHead, label: str.docx.originalSize, icon: 'imgOrig', run: imageActions.original },
+        { label: str.docx.fitWidthMenu, icon: 'fit', run: () => editor.resizeImage('fit') },
+        { label: str.docx.replaceImageMenu, icon: 'imgReplace', run: imageActions.replace },
+        { label: str.edit.altTextMenu, icon: 'alt', run: askAlt },
+        ...(imageActions.download ? [{ label: str.docx.downloadImage, icon: 'save', run: imageActions.download } as MenuItem] : []),
+        { label: str.docx.deleteImage, icon: 'trash', run: () => editor.deleteSelection() },
       )
     }
     items.push(
-      { label: 'Cut', icon: 'cut', hint: `${MOD}X`, disabled: !ranged, run: () => copyCut('cut'), sep: items.length > 0 },
-      { label: 'Copy', icon: 'copy', hint: `${MOD}C`, disabled: !ranged, run: () => copyCut('copy') },
-      { label: 'Paste', icon: 'paste', hint: `${MOD}V`, run: () => void paste(false) },
-      { label: 'Paste without formatting', icon: 'pastePlain', hint: `${MOD}⇧V`, run: () => void paste(true) },
-      { label: 'Delete', icon: 'trash', disabled: !ranged || !!s?.img, run: () => editor.deleteSelection() },
+      { label: str.edit.cut, icon: 'cut', hint: `${MOD}X`, disabled: !ranged, run: () => copyCut('cut'), sep: items.length > 0 },
+      { label: str.edit.copy, icon: 'copy', hint: `${MOD}C`, disabled: !ranged, run: () => copyCut('copy') },
+      { label: str.edit.paste, icon: 'paste', hint: `${MOD}V`, run: () => void paste(false) },
+      { label: str.edit.pastePlain, icon: 'pastePlain', hint: `${MOD}⇧V`, run: () => void paste(true) },
+      { label: str.common.delete, icon: 'trash', disabled: !ranged || !!s?.img, run: () => editor.deleteSelection() },
     )
     if (s?.link) {
       // the target comes from the file (or a peer): opened only when it is a web, mail or phone link, like a click on it
       const href = safeHref(s.link)
       items.push(
-        { label: 'Open link', icon: 'external', sep: true, disabled: !href, run: () => href && window.open(href, '_blank', 'noopener,noreferrer') },
-        { label: 'Edit link…', icon: 'link', hint: `${MOD}K`, run: askLink },
-        { label: 'Remove link', icon: 'unlink', run: () => void editor.setLink(null) },
+        { label: str.edit.openLink, icon: 'external', sep: true, disabled: !href, run: () => href && window.open(href, '_blank', 'noopener,noreferrer') },
+        { label: str.edit.editLinkMenu, icon: 'link', hint: `${MOD}K`, run: askLink },
+        { label: str.edit.removeLink, icon: 'unlink', run: () => void editor.setLink(null) },
       )
-    } else items.push({ label: 'Insert link…', icon: 'link', hint: `${MOD}K`, sep: true, run: askLink, disabled: !s })
+    } else items.push({ label: str.edit.insertLinkMenu, icon: 'link', hint: `${MOD}K`, sep: true, run: askLink, disabled: !s })
     if (s?.inTable) {
       const op = (k: Parameters<DocxEditor['tableOp']>[0]) => () => editor.tableOp(k)
       items.push(
-        { head: 'Table', label: 'Insert row above', icon: 'rowAbove', sep: true, run: op('rowAbove') },
-        { label: 'Insert row below', icon: 'rowBelow', run: op('rowBelow') },
-        { label: 'Insert column left', icon: 'colLeft', run: op('colLeft') },
-        { label: 'Insert column right', icon: 'colRight', run: op('colRight') },
-        { label: 'Delete row', icon: 'delRow', run: op('delRow') },
-        { label: 'Delete column', icon: 'delCol', run: op('delCol') },
-        { label: 'Delete table', icon: 'trash', run: op('delTable') },
-        ...(s.cells && s.cells.n > 1 ? [{ label: 'Merge cells', icon: 'merge', run: () => editor.mergeCells() } as MenuItem] : []),
-        ...(s.cells?.merged && s.cells.n < 2 ? [{ label: 'Unmerge cells', icon: 'merge', run: () => editor.unmergeCell() } as MenuItem] : []),
-        { label: 'Distribute columns evenly', icon: 'colAdd', run: () => editor.distributeColumns() },
+        { head: str.table.menu, label: str.table.rowAbove, icon: 'rowAbove', sep: true, run: op('rowAbove') },
+        { label: str.table.rowBelow, icon: 'rowBelow', run: op('rowBelow') },
+        { label: str.table.colLeft, icon: 'colLeft', run: op('colLeft') },
+        { label: str.table.colRight, icon: 'colRight', run: op('colRight') },
+        { label: str.table.delRow, icon: 'delRow', run: op('delRow') },
+        { label: str.table.delCol, icon: 'delCol', run: op('delCol') },
+        { label: str.table.delTable, icon: 'trash', run: op('delTable') },
+        ...(s.cells && s.cells.n > 1 ? [{ label: str.table.merge, icon: 'merge', run: () => editor.mergeCells() } as MenuItem] : []),
+        ...(s.cells?.merged && s.cells.n < 2 ? [{ label: str.table.unmerge, icon: 'merge', run: () => editor.unmergeCell() } as MenuItem] : []),
+        { label: str.table.distribute, icon: 'colAdd', run: () => editor.distributeColumns() },
       )
     } else {
       items.push(
-        { label: 'Insert image…', icon: 'image', sep: true, run: pickImage, disabled: !s },
-        { label: 'Insert table', icon: 'table', run: () => editor.insertTable(3, 3), disabled: !s },
-        { label: 'Page break', icon: 'pagebreak', hint: `${MOD}↵`, run: () => editor.insertPageBreak(), disabled: !s },
+        { label: str.edit.imageMenu, icon: 'image', sep: true, run: pickImage, disabled: !s },
+        { label: str.table.insert, icon: 'table', run: () => editor.insertTable(3, 3), disabled: !s },
+        { label: str.docx.pageBreak, icon: 'pagebreak', hint: `${MOD}↵`, run: () => editor.insertPageBreak(), disabled: !s },
       )
     }
     // the style takes the look of the selection; every paragraph of that style follows
     const match = (label: string, value: string) => () =>
       void editor
         .updateStyle(value)
-        .then((changed) => changed !== undefined && setToast(changed ? `“${label}” updated to match the selection` : `“${label}” already matches the selection`))
+        .then((changed) => changed !== undefined && setToast(changed ? str.docx.styleUpdated(label) : str.docx.styleSame(label)))
         .catch((e) => console.error('[office-engine] style update failed', e))
     items.push(
       {
-        label: 'Update style to match',
+        label: str.docx.updateStyle,
         icon: 'styleMatch',
         sep: true,
         disabled: !s || !!s.img,
-        items: styleChoices(meta?.styles ?? []).map((o) => ({ label: o.label, hint: o.value === s?.style ? 'current' : undefined, sep: o.sep, run: match(o.label, o.value) })),
+        items: styleChoices(meta?.styles ?? [], str).map((o) => ({ label: o.label, hint: o.value === s?.style ? str.docx.currentStyle : undefined, sep: o.sep, run: match(o.label, o.value) })),
       },
-      { label: 'Clear formatting', icon: 'clear', hint: `${MOD}\\`, run: () => editor.clearFormat(), disabled: !s },
-      { label: 'Select all', icon: 'selectAll', hint: `${MOD}A`, run: () => editor.selectAll() },
+      { label: str.edit.clearFormat, icon: 'clear', hint: `${MOD}\\`, run: () => editor.clearFormat(), disabled: !s },
+      { label: str.edit.selectAll, icon: 'selectAll', hint: `${MOD}A`, run: () => editor.selectAll() },
     )
     return items
   }
@@ -871,7 +873,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     if (!cm) return
     const host: CommentHost = {
       kind: 'docx',
-      hint: 'Select the text to comment on.',
+      hint: () => cm.t.docx.commentHint,
       pending: () => {
         const r = editor.commentRange()
         return r ? { quote: r.quote, range: r } : null
@@ -1033,10 +1035,10 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
         )}
       </div>
       {outline && (
-        <nav className="de-outline" aria-label="Document outline">
+        <nav className="de-outline" aria-label={str.docx.outline}>
           <div className="de-outline-head">
-            <span>Outline</span>
-            <button type="button" className="de-tb" title="Close outline" aria-label="Close outline" onClick={() => setOutline(false)}>
+            <span>{str.docx.outlineHead}</span>
+            <button type="button" className="de-tb" title={str.docx.closeOutline} aria-label={str.docx.closeOutline} onClick={() => setOutline(false)}>
               <Icon name="close" size={16} />
             </button>
           </div>
@@ -1047,7 +1049,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
               </button>
             ))
           ) : (
-            <div className="de-outline-empty">Headings you add to the document will appear here.</div>
+            <div className="de-outline-empty">{str.docx.outlineEmpty}</div>
           )}
         </nav>
       )}
@@ -1083,7 +1085,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
         />
       )}
       {!isEditing && done && (
-        <button type="button" className={outline ? 'de-outline-toggle on' : 'de-outline-toggle'} title="Document outline" onClick={() => setOutline((o) => !o)}>
+        <button type="button" className={outline ? 'de-outline-toggle on' : 'de-outline-toggle'} title={str.docx.outline} onClick={() => setOutline((o) => !o)}>
           <Icon name="outline" />
         </button>
       )}
@@ -1124,9 +1126,10 @@ interface PageViewProps {
 }
 
 function PageView({ index, count, slice, blocks, meta, page, top, left, height, zoom, client, docStyle, editing, colResize, onHF, lines, avail }: PageViewProps) {
+  const str = useStrings()
   const ctx = useMemo<RenderCtx>(
-    () => ({ client, page: index, pages: count, measuring: false, editable: editing, colResize: editing ? colResize : undefined }),
-    [client, index, count, editing, colResize],
+    () => ({ client, page: index, pages: count, measuring: false, editable: editing, colResize: editing ? colResize : undefined, t: str }),
+    [client, index, count, editing, colResize, str],
   )
   const hfCtx = useMemo<RenderCtx>(() => ({ ...ctx, editable: false }), [ctx])
   // the first page's, the even pages' (when the file has different odd and even ones) or the default
@@ -1179,8 +1182,8 @@ function PageView({ index, count, slice, blocks, meta, page, top, left, height, 
       <div className="de-page-inner de-doc" style={{ ...docStyle, width: `${page.w}pt`, height: height / zoom, zoom }}>
         {onHF && (
           <>
-            <div className="de-hf-zone" contentEditable={false} title="Double-click to edit the header" style={{ top: 0, height: `${page.mt}pt` }} onDoubleClick={() => onHF(hk)} />
-            <div className="de-hf-zone" contentEditable={false} title="Double-click to edit the footer" style={{ bottom: 0, height: `${page.mb}pt` }} onDoubleClick={() => onHF(fk)} />
+            <div className="de-hf-zone" contentEditable={false} title={str.docx.editHeader} style={{ top: 0, height: `${page.mt}pt` }} onDoubleClick={() => onHF(hk)} />
+            <div className="de-hf-zone" contentEditable={false} title={str.docx.editFooter} style={{ bottom: 0, height: `${page.mb}pt` }} onDoubleClick={() => onHF(fk)} />
           </>
         )}
         {header && (

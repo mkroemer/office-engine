@@ -1,6 +1,7 @@
 import { memo, useMemo, useRef, type KeyboardEvent } from 'react'
 import { HIGHLIGHT_MAX, highlightLines, LANGUAGE_NAME, languageOf, type Token } from '../../core/syntax'
 import { Icon } from '../edit/Toolbar'
+import { useStrings } from '../strings'
 
 export interface SourceEditorProps {
   text: string
@@ -34,8 +35,9 @@ const Line = memo(function Line({ toks }: { toks: Token[] }) {
  * The colors are only drawn: the text is the textarea's, as typed.
  */
 export function SourceEditor({ text, language, label, onChange, readOnly, notice, onCopy, onDownload, full }: SourceEditorProps) {
+  const t = useStrings()
   const id = languageOf(language)
-  const name = label ?? (id && id !== 'text' ? LANGUAGE_NAME[id] : undefined) ?? 'Source'
+  const name = label ?? (id && id !== 'text' ? LANGUAGE_NAME[id] : undefined) ?? t.source.source
   // past the limit, or in no known language: the text as it is, in one piece
   const colored = !!id && id !== 'text' && text.length <= HIGHLIGHT_MAX
   const lines = useMemo(() => (colored ? highlightLines(id, text) : null), [colored, id, text])
@@ -83,16 +85,16 @@ export function SourceEditor({ text, language, label, onChange, readOnly, notice
           {name}
         </span>
         <span className="de-src-lines">
-          {count.toLocaleString()} {count === 1 ? 'line' : 'lines'}
+          {t.source.lines(count, t.locale)}
         </span>
         <span style={{ flex: 1 }} />
         {onCopy && (
-          <button type="button" className="de-src-btn" onClick={onCopy} title="Copy the source">
+          <button type="button" className="de-src-btn" onClick={onCopy} title={t.source.copy}>
             <Icon name="copy" size={15} />
           </button>
         )}
         {onDownload && (
-          <button type="button" className="de-src-btn" onClick={onDownload} title="Download the source">
+          <button type="button" className="de-src-btn" onClick={onDownload} title={t.source.download}>
             <Icon name="save" size={15} />
           </button>
         )}
@@ -119,7 +121,7 @@ export function SourceEditor({ text, language, label, onChange, readOnly, notice
             wrap="off"
             rows={1}
             cols={1}
-            aria-label={`${name} source`}
+            aria-label={t.source.input(name)}
             data-testid="de-source-input"
           />
         </div>

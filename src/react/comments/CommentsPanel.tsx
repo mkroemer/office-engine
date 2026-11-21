@@ -5,6 +5,7 @@ import { ContextMenu, MOD, type MenuItem } from '../common/ContextMenu'
 import { ConfirmDialog } from '../common/Dialog'
 import { Icon } from '../edit/Toolbar'
 import { useCommentsState, type CommentsCtl, type PlacedThread } from './Comments'
+import { useStrings, type Strings } from '../strings'
 
 const ALT = MOD === '⌘' ? '⌥' : 'Alt+'
 /** shortcut that starts a comment on the selection */
@@ -17,16 +18,16 @@ function colorOf(u: CommentUser): string {
   return PEER_COLORS[h % PEER_COLORS.length]
 }
 
-function ago(iso: string, now: number): string {
+function ago(iso: string, now: number, str: Strings): string {
   const t = Date.parse(iso)
   if (!Number.isFinite(t)) return ''
   const s = Math.max(0, (now - t) / 1000)
-  if (s < 45) return 'just now'
-  if (s < 3600) return `${Math.round(s / 60)} min ago`
-  if (s < 86400) return `${Math.round(s / 3600)} h ago`
-  if (s < 7 * 86400) return `${Math.round(s / 86400)} d ago`
+  if (s < 45) return str.comments.justNow
+  if (s < 3600) return str.comments.minutesAgo(Math.round(s / 60))
+  if (s < 86400) return str.comments.hoursAgo(Math.round(s / 3600))
+  if (s < 7 * 86400) return str.comments.daysAgo(Math.round(s / 86400))
   const d = new Date(t)
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', ...(d.getFullYear() !== new Date(now).getFullYear() ? { year: 'numeric' } : {}) })
+  return d.toLocaleDateString(str.locale, { month: 'short', day: 'numeric', ...(d.getFullYear() !== new Date(now).getFullYear() ? { year: 'numeric' } : {}) })
 }
 
 /** comment text with its mentions set apart */
@@ -80,6 +81,7 @@ export function Composer(props: {
   onCancel?: () => void
 }) {
   const { ctl } = props
+  const str = useStrings()
   const [text, setText] = useState(props.initial ?? '')
   const [mentions, setMentions] = useState<CommentUser[]>(props.mentions ?? [])
   const [pop, setPop] = useState<{ at: number; end: number; list: CommentUser[]; hi: number } | null>(null)
@@ -204,10 +206,10 @@ export function Composer(props: {
         </div>
       )}
       <div className="de-cm-actions">
-        {canMention && <span className="de-cm-tip">@ to mention</span>}
+        {canMention && <span className="de-cm-tip">{str.comments.mentionTip}</span>}
         {props.onCancel && (
           <button type="button" className="de-btn" onClick={props.onCancel}>
-            Cancel
+            {str.common.cancel}
           </button>
         )}
         <button type="button" className="de-btn de-btn-primary" disabled={busy || !text.trim()} onClick={() => void send()}>
@@ -220,6 +222,7 @@ export function Composer(props: {
 
 function Item({ ctl, c, root, now, onMenu }: { ctl: CommentsCtl; c: DocComment; root?: boolean; now: number; onMenu: (c: DocComment, el: HTMLElement) => void }) {
   const [editing, setEditing] = useState(false)
+  const str = useStrings()
   const mine = ctl.isMine(c)
   const can = ctl.canComment
   return (
@@ -228,16 +231,16 @@ function Item({ ctl, c, root, now, onMenu }: { ctl: CommentsCtl; c: DocComment; 
         <Avatar u={c.author} />
         <div className="de-cm-who">
           <span className="de-cm-name">{c.author.name}</span>
-          <time className="de-cm-time" dateTime={c.time} title={c.time ? new Date(c.time).toLocaleString() : undefined}>
-            {ago(c.time, now)}
+          <time className="de-cm-time" dateTime={c.time} title={c.time ? new Date(c.time).toLocaleString(str.locale) : undefined}>
+            {ago(c.time, now, str)}
           </time>
         </div>
         {root && can && (
           <button
             type="button"
             className="de-tb de-cm-icon"
-            title={c.done ? 'Reopen' : 'Resolve'}
-            aria-label={c.done ? 'Reopen thread' : 'Resolve thread'}
+            title={c.done ? str.comments.reopen : str.comments.resolve}
+            aria-label={c.done ? str.comments.reopenThread : str.comments.resolveThread}
             onClick={(e) => {
               e.stopPropagation()
               void ctl.resolve(c.id, !c.done)
@@ -250,8 +253,8 @@ function Item({ ctl, c, root, now, onMenu }: { ctl: CommentsCtl; c: DocComment; 
           <button
             type="button"
             className="de-tb de-cm-icon"
-            title="More"
-            aria-label="More actions"
+            title={str.comments.more}
+            aria-label={str.comments.moreActions}
             aria-haspopup="menu"
             onClick={(e) => {
               e.stopPropagation()
@@ -265,8 +268,8 @@ function Item({ ctl, c, root, now, onMenu }: { ctl: CommentsCtl; c: DocComment; 
       {editing ? (
         <Composer
           ctl={ctl}
-          placeholder="Edit comment"
-          submit="Save"
+          placeholder={str.comments.editPlaceholder}
+          submit={str.common.save}
           initial={c.text}
           mentions={c.mentions}
           autoFocus
@@ -300,6 +303,7 @@ function EditHook({ id, start }: { id: string; start: () => void }) {
 function Thread({ ctl, t, active, now, onMenu }: { ctl: CommentsCtl; t: PlacedThread; active: boolean; now: number; onMenu: (c: DocComment, el: HTMLElement) => void }) {
   const { root, replies } = t
   const hidden = replies.length > 2 ? replies.length - 1 : 0
+  const str = useStrings()
   return (
     <div
       className={'de-cm-card' + (active ? ' on' : '') + (root.done ? ' done' : '')}
@@ -316,20 +320,21 @@ function Thread({ ctl, t, active, now, onMenu }: { ctl: CommentsCtl; t: PlacedTh
       }}
     >
       {t.quote && <div className="de-cm-quote">{t.quote}</div>}
-      {root.done && <div className="de-cm-resolved">Resolved</div>}
+      {root.done && <div className="de-cm-resolved">{str.comments.resolved}</div>}
       <Item ctl={ctl} c={root} root now={now} onMenu={onMenu} />
       {/* a long thread not being read shows its last reply */}
-      {!active && hidden > 0 && <div className="de-cm-count">{hidden === 1 ? '1 more reply' : `${hidden} more replies`}</div>}
+      {!active && hidden > 0 && <div className="de-cm-count">{str.comments.moreReplies(hidden)}</div>}
       {replies.slice(active ? 0 : hidden).map((r) => (
         <Item key={r.id} ctl={ctl} c={r} now={now} onMenu={onMenu} />
       ))}
-      {active && ctl.canComment && <Composer ctl={ctl} placeholder={root.done ? 'Reply and reopen…' : 'Reply…'} submit="Reply" onSubmit={(text, m) => ctl.reply(root.id, text, m)} />}
+      {active && ctl.canComment && <Composer ctl={ctl} placeholder={root.done ? str.comments.replyReopen : str.comments.replyPlaceholder} submit={str.comments.reply} onSubmit={(text, m) => ctl.reply(root.id, text, m)} />}
     </div>
   )
 }
 
 export function CommentsPanel({ ctl }: { ctl: CommentsCtl }) {
   const st = useCommentsState(ctl)
+  const str = useStrings()
   const [menu, setMenu] = useState<{ c: DocComment; x: number; y: number } | null>(null)
   const [confirm, setConfirm] = useState<DocComment | null>(null)
   const [now, setNow] = useState(() => Date.now())
@@ -352,36 +357,37 @@ export function CommentsPanel({ ctl }: { ctl: CommentsCtl }) {
     setMenu({ c, x: r.left, y: r.bottom + 4 })
   }
   const menuItems = (c: DocComment): MenuItem[] => [
-    { label: 'Edit', icon: 'edit', run: () => editors.get(c.id)?.() },
-    { label: c.parent ? 'Delete' : 'Delete thread', icon: 'trash', run: () => setConfirm(c) },
+    { label: str.common.edit, icon: 'edit', run: () => editors.get(c.id)?.() },
+    { label: c.parent ? str.common.delete : str.comments.deleteThread, icon: 'trash', run: () => setConfirm(c) },
   ]
   return (
-    <aside className="de-cm-panel" aria-label="Comments" onKeyDown={(e) => e.key === 'Escape' && st.draft && ctl.cancelDraft()}>
+    <aside className="de-cm-panel" aria-label={str.comments.panel} onKeyDown={(e) => e.key === 'Escape' && st.draft && ctl.cancelDraft()}>
       <div className="de-cm-bar">
         <span className="de-cm-title">
-          Comments{open > 0 && <span className="de-cm-badge">{open}</span>}
+          {str.comments.panel}
+          {open > 0 && <span className="de-cm-badge">{open}</span>}
         </span>
         {resolved > 0 && (
           <button type="button" className={'de-btn de-cm-filter' + (st.showResolved ? ' on' : '')} aria-pressed={st.showResolved} onClick={() => ctl.setShowResolved(!st.showResolved)}>
-            {st.showResolved ? 'Hide resolved' : `Resolved (${resolved})`}
+            {st.showResolved ? str.comments.hideResolved : str.comments.showResolved(resolved)}
           </button>
         )}
-        <button type="button" className="de-tb" title="Close comments" aria-label="Close comments" onClick={() => ctl.toggle(false)}>
+        <button type="button" className="de-tb" title={str.comments.close} aria-label={str.comments.close} onClick={() => ctl.toggle(false)}>
           <Icon name="close" size={16} />
         </button>
       </div>
       <div className="de-cm-list" ref={listRef}>
         {ctl.canComment && !st.draft && (
-          <button type="button" className="de-cm-new" onClick={() => ctl.start()} title={`Comment on the selection (${COMMENT_KEYS})`}>
+          <button type="button" className="de-cm-new" onClick={() => ctl.start()} title={str.comments.newTitle(COMMENT_KEYS)}>
             <Icon name="commentAdd" size={16} />
-            New comment
+            {str.comments.new}
             <span className="de-cm-keys">{COMMENT_KEYS}</span>
           </button>
         )}
         {st.notice && (
           <div className="de-cm-notice" role="status">
             <span>{st.notice}</span>
-            <button type="button" className="de-tb" aria-label="Dismiss" onClick={() => ctl.dismiss()}>
+            <button type="button" className="de-tb" aria-label={str.comments.dismiss} onClick={() => ctl.dismiss()}>
               <Icon name="close" size={14} />
             </button>
           </div>
@@ -395,7 +401,7 @@ export function CommentsPanel({ ctl }: { ctl: CommentsCtl }) {
                 <span className="de-cm-name">{ctl.me.name}</span>
               </div>
             </div>
-            <Composer ctl={ctl} placeholder="Comment or add others with @" submit="Comment" autoFocus onSubmit={(t, m) => ctl.post(t, m)} onCancel={() => ctl.cancelDraft()} />
+            <Composer ctl={ctl} placeholder={str.comments.newPlaceholder} submit={str.comments.post} autoFocus onSubmit={(t, m) => ctl.post(t, m)} onCancel={() => ctl.cancelDraft()} />
           </div>
         )}
         {shown.map((t) => (
@@ -403,16 +409,16 @@ export function CommentsPanel({ ctl }: { ctl: CommentsCtl }) {
         ))}
         {!shown.length && !st.draft && (
           <div className="de-cm-empty">
-            {all.length ? 'Every comment is resolved.' : ctl.canComment ? `No comments yet. ${ctl.host?.hint ?? ''}` : 'No comments.'}
+            {all.length ? str.comments.allResolved : ctl.canComment ? str.comments.noneYet(ctl.host?.hint() ?? '') : str.comments.none}
           </div>
         )}
       </div>
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.c)} onClose={() => setMenu(null)} />}
       {confirm && (
         <ConfirmDialog
-          title={confirm.parent ? 'Delete this comment?' : 'Delete this thread?'}
-          message={confirm.parent ? 'The reply is removed for everyone.' : 'The comment and its replies are removed for everyone.'}
-          ok="Delete"
+          title={confirm.parent ? str.comments.deleteCommentTitle : str.comments.deleteThreadTitle}
+          message={confirm.parent ? str.comments.deleteCommentText : str.comments.deleteThreadText}
+          ok={str.common.delete}
           onOk={() => void ctl.remove(confirm.id)}
           onClose={() => setConfirm(null)}
         />

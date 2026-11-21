@@ -5,16 +5,20 @@
  *   &icons=1: every icon from a host resolver, as `<svg data-host-icon={name}>`
  *   &locale=de-DE: the tag numbers typed are read in
  *   &fonts=[{"family":"Carlito","src":"/fonts/carlito.ttf"}]: the host's fonts (JSON)
+ *   &texts=de: the optional German table; &fileLabel=… overrides the File label
  */
 import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { DocViewer, type DocViewerProps, type FileMenuItem } from '../../src'
+import { de } from '../../src/locales/de'
 
 type Ev = { type: string; [k: string]: unknown }
 declare global {
   interface Window {
     __events: Ev[]
     __setProps: (p: Partial<DocViewerProps>) => void
+    __setLanguage: (language: 'en' | 'de-DE') => void
+    __german: typeof de
   }
 }
 window.__events = []
@@ -22,6 +26,7 @@ const log = (e: Ev) => window.__events.push(e)
 
 const q = new URLSearchParams(location.search)
 const flag = (k: string) => (q.has(k) ? q.get(k) !== '0' : undefined)
+const texts = q.get('texts') === 'de' ? de : undefined
 
 async function b64(blob: Blob) {
   const bytes = new Uint8Array(await blob.arrayBuffer())
@@ -52,6 +57,7 @@ const initial: DocViewerProps = {
   theme: (q.get('theme') as DocViewerProps['theme']) ?? undefined,
   injectStyles: flag('injectStyles'),
   locale: q.get('locale') ?? undefined,
+  strings: q.has('fileLabel') ? { ...texts, file: { ...(texts?.file ?? {}), menu: q.get('fileLabel')! } } : texts,
   onSave: q.has('onSave') ? async (blob, name) => void log({ type: 'save', name, b64: await b64(blob) }) : undefined,
   onDirtyChange: (dirty) => log({ type: 'dirty', dirty }),
   onRename: (name) => log({ type: 'rename', name }),
@@ -82,6 +88,7 @@ const initial: DocViewerProps = {
 function App() {
   const [props, setProps] = useState(initial)
   window.__setProps = (p) => setProps((cur) => ({ ...cur, ...p }))
+  window.__setLanguage = (language) => setProps((cur) => ({ ...cur, strings: language === 'de-DE' ? de : undefined }))
   return <DocViewer {...props} />
 }
 

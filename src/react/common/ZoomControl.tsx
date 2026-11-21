@@ -1,4 +1,5 @@
 import { Icon } from '../edit/Toolbar'
+import { formatNumber, useStrings } from '../strings'
 
 export type Zoom = number | 'fit'
 
@@ -10,15 +11,16 @@ export function ZoomControl({ zoom, effective, onChange }: { zoom: Zoom; effecti
     const next = dir > 0 ? STEPS.find((s) => s > cur + 0.001) : [...STEPS].reverse().find((s) => s < cur - 0.001)
     if (next) onChange(next)
   }
+  const t = useStrings()
   return (
-    <div className="de-zoom" role="group" aria-label="Zoom">
-      <button type="button" aria-label="Zoom out" onClick={() => step(-1)}>
+    <div className="de-zoom" role="group" aria-label={t.zoom.group}>
+      <button type="button" aria-label={t.zoom.out} onClick={() => step(-1)}>
         <Icon name="zoomOut" size={16} />
       </button>
-      <span title={zoom === 'fit' ? 'Fit width (click for 100%)' : 'Click to fit width'} onClick={() => onChange(zoom === 'fit' ? 1 : 'fit')}>
-        {zoom === 'fit' ? 'Fit' : `${Math.round(effective * 100)}%`}
+      <span title={zoom === 'fit' ? t.zoom.fitTitle : t.zoom.toFit} onClick={() => onChange(zoom === 'fit' ? 1 : 'fit')}>
+        {zoom === 'fit' ? t.zoom.fit : formatNumber(t, effective, { style: 'percent' })}
       </span>
-      <button type="button" aria-label="Zoom in" onClick={() => step(1)}>
+      <button type="button" aria-label={t.zoom.in} onClick={() => step(1)}>
         <Icon name="zoomIn" size={16} />
       </button>
     </div>
