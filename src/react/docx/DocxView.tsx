@@ -10,7 +10,7 @@ import { Status } from '../common/Status'
 import { ZoomControl, type Zoom } from '../common/ZoomControl'
 import { ContextMenu, MOD, type MenuItem } from '../common/ContextMenu'
 import { PromptDialog, Toast, type PromptSpec } from '../common/Dialog'
-import { domFromPos, getSel, opInsert, posFromDom, selPoints } from '../edit/input'
+import { domFromPos, getSel, opInsert, paraRanges, posFromDom, selPoints } from '../edit/input'
 import { download, Icon, pickFiles } from '../edit/Toolbar'
 import { runsText, type RRun } from '../edit/rich'
 import { DocxEditor, type CommentRange, type DocState, type FormatState } from './DocxEditor'
@@ -24,7 +24,8 @@ import { PageSetupDialog } from './PageSetupDialog'
 import { mergeSource } from '../../core/plainmerge'
 import { docxBodyHtml, docxToHtml, docxToMarkdown, docxToText, pictureData } from '../file/text'
 import { BlockView, contextual, type RenderCtx } from './render'
-import { pageHF, paginate, type PageSlice } from './paginate'
+import { columnsOf, headOf, pageAt, pageHF, pagesOf, paginate, pieceOf, type Lines, type PageSlice } from './paginate'
+import { lineStarts, paraLines, tableLines } from './measure'
 import { formatCount, formatNumber, useStrings } from '../strings'
 import { docxFonts, docxPageFonts } from '../../core/fonts'
 import { useDocFonts } from '../common/fonts'
@@ -80,7 +81,7 @@ export interface DocxViewProps {
 export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProps) {
   const viewer = useViewer()
   const str = useStrings()
-  const st = useRef<DocState>({ blocks: [], heights: new WeakMap(), dirty: new Set(), frontier: 0 }).current
+  const st = useRef<DocState & { lines: WeakMap<Block, Lines> }>({ blocks: [], heights: new WeakMap(), lines: new WeakMap(), dirty: new Set(), frontier: 0 }).current
   const [version, bump] = useForceUpdate()
   const [meta, setMeta] = useState<DocxMeta | null>(null)
   const [pageDlg, setPageDlg] = useState(false)
@@ -152,64 +153,55 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   const contentW = (page.w - page.ml - page.mr - colGap * (cols - 1)) / cols
   const availPx = (page.h - page.mt - page.mb) * PX
 
-  // ---- measurement: edited blocks first, then the not-yet-measured tail (time-sliced) ----
+  // ---- measurement (see below, once the pages shown are known) ----
   const [batch, setBatch] = useState(40)
+  /** printing waits until the line starts of every paragraph a page cuts are read */
+  const printWait = useRef<(() => void) | null>(null)
+  /** the pages are laid out again before this render is painted: what depends on where things are waits for that */
+  const relayout = useRef(false)
   const measureRef = useRef<HTMLDivElement>(null)
   const widthKey = `${contentW}|${meta?.font}|${meta?.sz}`
   const lastKey = useRef(widthKey)
   if (lastKey.current !== widthKey) {
     lastKey.current = widthKey
     st.heights = new WeakMap()
+    st.lines = new WeakMap()
     st.dirty.clear()
     st.frontier = 0
   }
   const total = st.blocks.length
-  const queue: { b: Block; i: number }[] = []
+  // measured first: edited blocks
+  const queue: { b: Block; i: number; starts?: boolean }[] = []
+  const queued = new Set<Block>()
+  const enqueue = (b: Block, i: number, starts?: boolean) => {
+    if (queued.has(b)) return
+    queued.add(b)
+    queue.push({ b, i, starts })
+  }
   for (const b of st.dirty) {
     if (queue.length >= 50) break
     const i = st.blocks.indexOf(b)
     if (i < 0) st.dirty.delete(b)
-    else queue.push({ b, i })
+    else enqueue(b, i, true)
   }
-  const tailEnd = Math.min(total, st.frontier + batch)
-  for (let i = st.frontier; i < tailEnd; i++) queue.push({ b: st.blocks[i], i })
-  // ---- fonts: blocks are measured once the host's fonts they are set in are ready (loaded, failed or timed out). A
-  // font that arrives later (one that timed out, the page's own web font) has the measured blocks measured again in
-  // slices, their old heights kept meanwhile: the pages stay, and so do the caret and the page in view ----
-  const fonts = useDocFonts()
-  const again = useRef({ gen: fonts.gen, next: -1 })
-  if (again.current.gen !== fonts.gen) again.current = { gen: fonts.gen, next: st.frontier > 0 ? 0 : -1 }
-  const againFrom = again.current.next
-  const againTo = st.frontier
-  const againEnd = againFrom < 0 ? -1 : Math.min(againTo, againFrom + batch)
-  for (let i = Math.max(0, againFrom); i < againEnd; i++) if (!st.dirty.has(st.blocks[i])) queue.push({ b: st.blocks[i], i })
-  const fontsReady = !queue.length || !meta || fonts.ready(docxFonts(queue.map((q) => q.b), docxPageFonts(meta)))
-  const renderStart = performance.now()
-  const measureCtx = useMemo<RenderCtx>(() => ({ client, page: -1, pages: 0, measuring: true, editable: false }), [client])
-
-  useIsoLayoutEffect(() => {
-    const el = measureRef.current
-    if (!el || !queue.length || !meta || !fontsReady) return
-    const hs = Array.from(el.children).map((c) => (c as HTMLElement).getBoundingClientRect().height)
-    const dt = performance.now() - renderStart
-    const id = setTimeout(() => {
-      queue.forEach((q, k) => {
-        st.heights.set(q.b, hs[k] ?? 0)
-        st.dirty.delete(q.b)
-      })
-      if (tailEnd > st.frontier) st.frontier = tailEnd
-      if (againEnd >= 0) again.current.next = againEnd >= againTo ? -1 : againEnd
-      setBatch((b) => (dt < 10 ? Math.min(b * 2, 1500) : dt > 30 ? Math.max(10, b >> 1) : b))
-      bump()
-    }, 0)
-    return () => clearTimeout(id)
-  })
-
-  const pages = useMemo(
-    () => paginate(st.blocks, st.heights, Math.min(st.frontier, total), availPx, cols, (meta?.final && meta.sectKind) || 'nextPage'),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [version, availPx, total, cols, meta?.final, meta?.sectKind],
-  )
+  const edited = queue.length
+  // A few edited blocks (typing) are measured again before this render is painted, and the pages cut again then (see
+  // the measure effect): until that, the pages stay as they were cut. Else they are cut again on every update.
+  const soon = edited > 0 && edited <= 10
+  const cut = useRef<{ version: number; key: string; total: number; pages: PageSlice[] } | null>(null)
+  const cutKey = `${availPx}|${cols}|${meta?.final}|${meta?.sectKind}`
+  const c0 = cut.current
+  let laid: PageSlice[]
+  if (c0 && c0.key === cutKey && c0.total === total && (c0.version === version || soon)) laid = c0.pages
+  else {
+    laid = paginate(st.blocks, st.heights, Math.min(st.frontier, total), availPx, cols, (meta?.final && meta.sectKind) || 'nextPage', st.lines)
+    cut.current = { version, key: cutKey, total, pages: laid }
+  }
+  // while an input method composes, the pages stay as they are: a paragraph cut elsewhere would be rebuilt under it
+  const frozen = useRef<{ pages: PageSlice[]; total: number } | null>(null)
+  const composing = isEditing && editor.input.isComposing
+  const pages = composing && frozen.current?.total === total ? frozen.current.pages : laid
+  if (!composing) frozen.current = { pages, total }
 
   // ---- layout ----
   const pageW = page.w * PX
@@ -232,16 +224,27 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   const first = tops.length ? lowerIndex(tops, scroll.y - pageH * z) : 0
   const last = tops.length ? lowerIndex(tops, scroll.y + size.h + 200) : -1
   // measured again for a font: the first block in view stays where it is on screen, until the measuring is done or the
-  // reader scrolls. Placed by the model (blocks stacked from the top margin): the text on screen may already be in the
-  // new font while the pages are not
+  // reader scrolls. Found by the model (blocks stacked from the top margin, a block begun on the page before by the part
+  // of it on this page): the text on screen is already in the new font while the pages are not. Put back by what is
+  // drawn once it is: the model's heights are measured at zoom 1, and a page at another zoom rounds its lines a little
+  // differently, which adds up over the blocks above
   const anchor = useRef<{ gen: number; bi: number; dy: number; y: number } | null>(null)
   useIsoLayoutEffect(() => {
     const sc = scrollRef.current
+    const root = pagesRef.current
     const a = anchor.current
-    if (!sc || !tops.length) return
+    if (!sc || !root || !tops.length) return
+    /** the height block `bi` takes on page `pi`: one begun on the page before, from the cut (its space after kept) */
+    const partH = (pi: number, bi: number) => {
+      const b = st.blocks[bi]
+      const h = st.heights.get(b) ?? 0
+      const from = bi === pages[pi].start ? pages[pi].from : 0
+      const l = from ? st.lines.get(b) : undefined
+      return l ? h - l.ys[from] : h
+    }
     const blockTop = (pi: number, bi: number) => {
       let y = tops[pi] + page.mt * PX * z
-      for (let i = pages[pi].start; i < bi; i++) y += (st.heights.get(st.blocks[i]) ?? 0) * z
+      for (let i = pages[pi].start; i < bi; i++) y += partH(pi, i) * z
       return y
     }
     if (again.current.next === 0 && a?.gen !== fonts.gen) {
@@ -253,9 +256,13 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
       anchor.current = { gen: fonts.gen, bi, dy: blockTop(pi, bi) - y, y }
     } else if (a && Math.abs(sc.scrollTop - a.y) <= 1) {
       const pi = pages.findIndex((p) => a.bi >= p.start && a.bi < p.end)
-      if (pi >= 0) sc.scrollTop = Math.max(0, blockTop(pi, a.bi) - a.dy)
+      // the first part of the block as drawn; not there while where its lines start is read, or when its page is out of view
+      const el = root.querySelector<HTMLElement>(`[data-pa="${a.bi}"]:not([data-from])`)
+      if (el) sc.scrollTop = Math.max(0, sc.scrollTop + el.getBoundingClientRect().top - sc.getBoundingClientRect().top - a.dy)
+      else if (pi >= 0) sc.scrollTop = Math.max(0, blockTop(pi, a.bi) - a.dy)
       a.y = sc.scrollTop
-      if (again.current.next < 0) anchor.current = null
+      // (released once the block is placed by what is drawn)
+      if (again.current.next < 0 && el) anchor.current = null
     } else anchor.current = null
   })
   const pageCount = complete ? pages.length : 0
@@ -264,7 +271,116 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   const pinned = new Set<number>(domSel)
   const lastSel = isEditing ? editor.input.lastSel : null
   const caretBi = lastSel ? Number(lastSel.f.pa.split('.')[0]) : -1
-  for (const bi of lastSel ? [Number(lastSel.a.pa.split('.')[0]), caretBi] : []) pinned.add(pages.findIndex((p) => bi >= p.start && bi < p.end))
+  /** the page showing a place: of a block split across pages, the one holding that line / row */
+  const pageOfPos = (pa: string, o = 0) => {
+    const [bi, ri] = pa.split('.').map(Number)
+    const [a, b] = pagesOf(pages, bi)
+    if (a === b) return a
+    if (ri === undefined) return pageAt(pages, bi, o, st.lines.get(st.blocks[bi]))
+    for (let pi = b; pi > a; pi--) if (ri >= pieceOf(pages[pi], bi).from) return pi
+    return a
+  }
+  // (an offset where a page cuts a paragraph is shown at the end of one page and the start of the next)
+  for (const p of lastSel ? [lastSel.a, lastSel.f] : []) pinned.add(pageOfPos(p.pa, p.o)).add(pageOfPos(p.pa, Math.max(0, p.o - 1)))
+  /** where the pages cut the paragraphs holding the selection: the caret is put back when that changes */
+  const selCuts = lastSel
+    ? [lastSel.a.pa, lastSel.f.pa]
+        .map((pa) => {
+          const bi = Number(pa.split('.')[0])
+          const [a, b] = pagesOf(pages, bi)
+          const at = st.lines.get(st.blocks[bi])?.at
+          let sig = `${bi}`
+          for (let pi = a; pi >= 0 && pi < b; pi++) sig += `:${pages[pi].to === undefined ? '' : at?.[pages[pi].to!]}`
+          return sig
+        })
+        .join('|')
+    : ''
+  const lastCuts = useRef(selCuts)
+
+  // then the paragraphs a page shown ends in (where their lines start is read), then the not-yet-measured tail
+  // (time-sliced)
+  /** the paragraphs page `pi` cuts whose line starts are not read yet */
+  const unread = (pi: number, out: Map<Block, number>) => {
+    for (const c of pages[pi] ? columnsOf(pages[pi]) : []) {
+      for (const bi of c.end - 1 > c.start ? [c.start, c.end - 1] : [c.start]) {
+        const b = st.blocks[bi]
+        if (b?.t !== 'p') continue
+        const { from, to } = pieceOf(c, bi)
+        const at = st.lines.get(b)?.at
+        if ((from && at?.[from] === undefined) || (to !== undefined && at?.[to] === undefined)) out.set(b, bi)
+      }
+    }
+  }
+  const shownUnread = new Map<Block, number>()
+  for (let pi = first; pi <= last; pi++) unread(pi, shownUnread)
+  for (const pi of pinned) unread(pi, shownUnread)
+  for (const [b, i] of shownUnread) enqueue(b, i, true)
+  // printing: every page
+  const allUnread = new Map<Block, number>()
+  if (printWait.current) for (let pi = 0; pi < pages.length && allUnread.size < 200; pi++) unread(pi, allUnread)
+  for (const [b, i] of allUnread) enqueue(b, i, true)
+  const tailEnd = Math.min(total, st.frontier + batch)
+  for (let i = st.frontier; i < tailEnd; i++) enqueue(st.blocks[i], i)
+  // ---- fonts: blocks are measured once the host's fonts they are set in are ready (loaded, failed or timed out). A
+  // font that arrives later (one that timed out, the page's own web font) has the measured blocks measured again in
+  // slices, their old heights and lines kept meanwhile: the pages stay, and so do the caret and the page in view ----
+  const fonts = useDocFonts()
+  const again = useRef({ gen: fonts.gen, next: -1 })
+  if (again.current.gen !== fonts.gen) again.current = { gen: fonts.gen, next: st.frontier > 0 ? 0 : -1 }
+  const againFrom = again.current.next
+  const againTo = st.frontier
+  const againEnd = againFrom < 0 ? -1 : Math.min(againTo, againFrom + batch)
+  // (a paragraph a page cuts has where its lines start read again with it, so the cut does not wait for a second pass)
+  for (let i = Math.max(0, againFrom); i < againEnd; i++) if (!st.dirty.has(st.blocks[i])) enqueue(st.blocks[i], i, st.lines.get(st.blocks[i])?.at !== undefined)
+  const fontsReady = !queue.length || !meta || fonts.ready(docxFonts(queue.map((q) => q.b), docxPageFonts(meta)))
+  const renderStart = performance.now()
+  const measureCtx = useMemo<RenderCtx>(() => ({ client, page: -1, pages: 0, measuring: true, editable: false }), [client])
+
+  useIsoLayoutEffect(() => {
+    const el = measureRef.current
+    if (!el || !queue.length || !meta || !fontsReady) return
+    const res = queue.map((q, k) => {
+      const c = el.children[k] as HTMLElement | undefined
+      let l: Lines | undefined
+      if (c && q.b.t === 'tbl') l = tableLines(c, q.b)
+      else if (c && q.b.t === 'p') {
+        l = paraLines(c)
+        if (q.starts && l.ys.length > 2) {
+          const at = lineStarts(c, l.ys)
+          // lines that cannot be told apart: the paragraph is not cut
+          l = at ? { ys: l.ys, at } : { ys: [l.ys[0], l.ys[l.ys.length - 1]] }
+        }
+      }
+      return { h: c?.getBoundingClientRect().height ?? 0, l }
+    })
+    const dt = performance.now() - renderStart
+    const save = () => {
+      queue.forEach((q, k) => {
+        st.heights.set(q.b, res[k].h)
+        if (res[k].l) st.lines.set(q.b, res[k].l!)
+        else st.lines.delete(q.b)
+        st.dirty.delete(q.b)
+      })
+      if (tailEnd > st.frontier) st.frontier = tailEnd
+      if (againEnd >= 0) again.current.next = againEnd >= againTo ? -1 : againEnd
+      setBatch((b) => (dt < 10 ? Math.min(b * 2, 1500) : dt > 30 ? Math.max(10, b >> 1) : b))
+      bump()
+    }
+    // a page shown waits for these, and a few edited blocks (typing) are laid out again before anything is painted: no
+    // page shows them where they were (the caret is put back once, after that)
+    if (shownUnread.size || soon) {
+      relayout.current = true
+      return void save()
+    }
+    const id = setTimeout(save, 0)
+    return () => clearTimeout(id)
+  })
+  useEffect(() => {
+    if (!printWait.current || allUnread.size) return
+    const done = printWait.current
+    printWait.current = null
+    done()
+  })
 
   editor.contentW = contentW
   editor.defaultFont = meta?.font
@@ -374,16 +490,22 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   }, [editor, viewer]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useIsoLayoutEffect(() => {
+    if (relayout.current) {
+      relayout.current = false
+      return
+    }
+    const cutsMoved = lastCuts.current !== selCuts
+    lastCuts.current = selCuts
     const sel = editor.pendingSel
     if (!sel || !pagesRef.current) {
-      // a paragraph that moved to another page took the caret with it: it goes back to where it was
-      if (isEditing) editor.input.repair()
+      // a paragraph that moved to another page took the caret with it: it goes back to where it was; so does a caret
+      // in a paragraph now cut elsewhere by the end of a page (its text moved from one part to the other)
+      if (isEditing && !editor.input.repair() && cutsMoved) editor.input.reflow()
       return
     }
     if (!editor.input.restore(sel)) {
       // caret paragraph not rendered (scrolled away): bring its page into view, retry next render
-      const bi = Number(sel.f.pa.split('.')[0])
-      const pi = pages.findIndex((p) => bi >= p.start && bi < p.end)
+      const pi = pageOfPos(sel.f.pa, sel.f.o)
       if (pi >= 0 && scrollRef.current) scrollRef.current.scrollTop = Math.max(0, tops[pi] - 16)
       if (pi < 0 || (pi >= first && pi <= last)) editor.pendingSel = null
       return
@@ -422,19 +544,14 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     const m = matches[idx]
     const sc = scrollRef.current
     if (!m || !sc) return
-    const pi = pages.findIndex((p) => m.bi >= p.start && m.bi < p.end)
+    const pi = pageOfPos(m.pa, m.a)
     if (pi >= 0) sc.scrollTop = Math.max(0, tops[pi] - 16)
     setFind((f) => ({ ...f, idx }))
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
         const root = pagesRef.current
-        if (!root) return
-        const a = domFromPos(root, { pa: m.pa, o: m.a })
-        const b = domFromPos(root, { pa: m.pa, o: m.b })
-        if (!a || !b) return
-        const r = document.createRange()
-        r.setStart(a[0], a[1])
-        r.setEnd(b[0], b[1])
+        const r = root && paraRanges(root, m.pa, m.a, m.b)[0]
+        if (!r) return
         const rect = r.getBoundingClientRect()
         const box = sc.getBoundingClientRect()
         sc.scrollTop += rect.top - box.top - box.height / 3
@@ -455,20 +572,16 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
       return
     }
     const all: Range[] = []
-    let curR: Range | undefined
+    let curR: Range[] | undefined
     matches.forEach((m, i) => {
       if (m.bi < (pages[first]?.start ?? 0) || m.bi >= (pages[last]?.end ?? 0)) return
-      const a = domFromPos(root, { pa: m.pa, o: m.a })
-      const b = domFromPos(root, { pa: m.pa, o: m.b })
-      if (!a || !b) return
-      const r = document.createRange()
-      r.setStart(a[0], a[1])
-      r.setEnd(b[0], b[1])
-      if (i === find.idx) curR = r
-      else all.push(r)
+      // a match over the end of a page: one range on each page
+      const rs = paraRanges(root, m.pa, m.a, m.b)
+      if (i === find.idx) curR = rs
+      else all.push(...rs)
     })
     reg.set('de-find', new H(...all))
-    if (curR) reg.set('de-find-cur', new H(curR))
+    if (curR?.length) reg.set('de-find-cur', new H(...curR))
     else reg.delete('de-find-cur')
   })
 
@@ -480,6 +593,10 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   useFileOps({
     printable: async () => {
       if (!complete) throw new Error(str.common.stillLoading)
+      await new Promise<void>((resolve) => {
+        printWait.current = resolve
+        bump()
+      })
       return {
         size: `${page.w}pt ${page.h}pt`,
         margin: '0',
@@ -490,7 +607,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
           const tall = h > pageH
           return (
             <div key={i} className={tall ? 'de-print-page de-print-tall' : 'de-print-page'} style={{ width: `${page.w}pt`, height: tall ? `${h}px` : `${page.h}pt` }}>
-              <PageView index={i} count={pages.length} slice={p} blocks={st.blocks} meta={meta} page={page} top={0} left={0} height={h} zoom={1} client={client} docStyle={docStyle} editing={false} />
+              <PageView index={i} count={pages.length} slice={p} blocks={st.blocks} meta={meta} page={page} top={0} left={0} height={h} zoom={1} client={client} docStyle={docStyle} editing={false} lines={st.lines} avail={availPx} />
             </div>
           )
         }),
@@ -738,8 +855,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     const place = editor.commentPlaces().get(id)
     const sc = scrollRef.current
     if (!place || !sc) return
-    const bi = Number(place.pa.split('.')[0])
-    const pi = pages.findIndex((p) => bi >= p.start && bi < p.end)
+    const pi = pageOfPos(place.pa, place.o)
     if (pi < 0) return
     const show = () => {
       const el = pagesRef.current?.querySelector(`[data-cm~="${CSS.escape(id)}"]`)
@@ -790,6 +906,8 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     const da = root && a && domFromPos(root, a)
     const df = root && f && domFromPos(root, f)
     if (!da || !df) return void reg.delete('de-cm-draft')
+    // within one paragraph, a range on each page it is on
+    if (a!.pa === f!.pa) return void reg.set('de-cm-draft', new H(...paraRanges(root!, a!.pa, Math.min(a!.o, f!.o), Math.max(a!.o, f!.o))))
     const r = document.createRange()
     r.setStart(da[0], da[1])
     r.setEnd(df[0], df[1])
@@ -808,7 +926,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   const activeHeading = headings.reduce((acc, h, i) => (h.bi <= Math.max(topBlock, caretBi) ? i : acc), -1)
   const gotoBlock = (bi: number) => {
     const sc = scrollRef.current
-    const pi = pages.findIndex((p) => bi >= p.start && bi < p.end)
+    const pi = pagesOf(pages, bi)[0]
     if (!sc || pi < 0) return
     sc.scrollTop = Math.max(0, tops[pi] - 16)
     requestAnimationFrame(() =>
@@ -849,8 +967,10 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
           spellCheck={false}
           onMouseDown={(e) => {
             if (!isEditing) return
-            // clicking a picture selects it (resize handles, image tools)
             const t = e.target as HTMLElement
+            // a copy of a table's header rows on a following page shows them, the rows themselves are edited on the first
+            if (t.closest('.de-head-copy')) return void e.preventDefault()
+            // clicking a picture selects it (resize handles, image tools)
             const obj = t.tagName === 'IMG' ? t.closest<HTMLElement>('[data-obj]') : null
             const pos = obj && pagesRef.current ? posFromDom(pagesRef.current, obj, 0) : null
             if (pos) {
@@ -894,6 +1014,8 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
                 editing={isEditing}
                 colResize={colResize}
                 onHF={isEditing && done ? openHF : undefined}
+                lines={st.lines}
+                avail={availPx}
               />
             ),
           )}
@@ -998,9 +1120,12 @@ interface PageViewProps {
   colResize?: RenderCtx['colResize']
   /** editing: a double click on the header / footer area edits it */
   onHF?: (k: HFKind) => void
+  /** where the blocks' lines / rows are, and the height of a page's text (px) */
+  lines: WeakMap<Block, Lines>
+  avail: number
 }
 
-function PageView({ index, count, slice, blocks, meta, page, top, left, height, zoom, client, docStyle, editing, colResize, onHF }: PageViewProps) {
+function PageView({ index, count, slice, blocks, meta, page, top, left, height, zoom, client, docStyle, editing, colResize, onHF, lines, avail }: PageViewProps) {
   const str = useStrings()
   const ctx = useMemo<RenderCtx>(
     () => ({ client, page: index, pages: count, measuring: false, editable: editing, colResize: editing ? colResize : undefined, t: str }),
@@ -1009,19 +1134,49 @@ function PageView({ index, count, slice, blocks, meta, page, top, left, height, 
   const hfCtx = useMemo<RenderCtx>(() => ({ ...ctx, editable: false }), [ctx])
   // the first page's, the even pages' (when the file has different odd and even ones) or the default
   const { header, footer, hk, fk } = pageHF(meta ?? undefined, index)
-  const items = []
-  for (let i = slice.start; i < slice.end; i++) {
-    const b = blocks[i]
-    items.push(
-      <BlockView
-        key={`${i}:${b.t === 'p' ? b.ver ?? 0 : 0}`}
-        block={b}
-        ctx={ctx}
-        pa={editable(b) || b.t === 'tbl' ? String(i) : undefined}
-        sp={contextual(b, blocks[i - 1], blocks[i + 1])}
-      />,
-    )
-  }
+  // each column's blocks; a block split across pages (or columns) shows the lines / rows it has here
+  const columns = columnsOf(slice).map((c) => {
+    const items = []
+    for (let i = c.start; i < c.end; i++) {
+      const b = blocks[i]
+      let { from, to }: { from?: number; to?: number } = pieceOf(c, i)
+      let head: number | undefined
+      let height: number | undefined
+      if (b.t === 'tbl' && (from || to !== undefined)) head = from ? headOf(lines.get(b), avail) : undefined
+      else if (b.t === 'p' && (from || to !== undefined)) {
+        // lines [from, to): the characters they hold, the height they take
+        const l = lines.get(b)
+        const a = from ? l?.at?.[from] : 0
+        const z = to !== undefined ? l?.at?.[to] : undefined
+        if (!l || a === undefined || (to !== undefined && z === undefined)) {
+          // where its lines start is being read (before this is painted): the place is kept
+          items.push(<div key={`${i}:wait:${from}:${to}`} style={{ height: l ? l.ys[to ?? l.ys.length - 1] - (from ? l.ys[from] : 0) : 0 }} />)
+          continue
+        }
+        if (to !== undefined) height = l.ys[to] - (from ? l.ys[from] : 0)
+        from = a
+        to = z
+      } else from = to = undefined
+      items.push(
+        <BlockView
+          // a part that starts or ends elsewhere is a new element (the caret is put back in it)
+          key={`${i}:${b.t === 'p' ? (b.ver ?? 0) : 0}:${from ?? ''}:${to ?? ''}`}
+          block={b}
+          ctx={ctx}
+          pa={editable(b) || b.t === 'tbl' ? String(i) : undefined}
+          sp={contextual(b, blocks[i - 1], blocks[i + 1])}
+          from={from || undefined}
+          to={to}
+          head={head}
+          height={height}
+        />,
+      )
+    }
+    return items
+  })
+  const nCols = page.cols && page.cols > 1 ? page.cols : 1
+  const gap = nCols > 1 ? (page.colGap ?? 36) : 0
+  const colW = (page.w - page.ml - page.mr - gap * (nCols - 1)) / nCols
   return (
     <div className="de-page" style={{ top, left, width: page.w * PX * zoom, height }} data-page={index + 1}>
       <div className="de-page-inner de-doc" style={{ ...docStyle, width: `${page.w}pt`, height: height / zoom, zoom }}>
@@ -1039,16 +1194,16 @@ function PageView({ index, count, slice, blocks, meta, page, top, left, height, 
           </div>
         )}
         <div
-          className={page.cols && page.cols > 1 ? 'de-page-cols' : undefined}
-          style={{
-            position: 'absolute',
-            top: `${page.mt}pt`,
-            left: `${page.ml}pt`,
-            width: `${page.w - page.ml - page.mr}pt`,
-            ...(page.cols && page.cols > 1 ? { columnCount: page.cols, columnGap: `${page.colGap ?? 36}pt`, columnFill: 'auto', height: `${page.h - page.mt - page.mb}pt` } : {}),
-          }}
+          className={nCols > 1 ? 'de-page-cols' : undefined}
+          style={{ position: 'absolute', top: `${page.mt}pt`, left: `${page.ml}pt`, width: `${page.w - page.ml - page.mr}pt`, ...(nCols > 1 ? { display: 'flex', columnGap: `${gap}pt` } : {}) }}
         >
-          {items}
+          {nCols > 1
+            ? columns.map((items, c) => (
+                <div key={c} className="de-page-col" style={{ width: `${colW}pt`, flex: 'none' }}>
+                  {items}
+                </div>
+              ))
+            : columns[0]}
         </div>
         {footer && (
           <div className="de-hf" contentEditable={editing ? false : undefined} style={{ bottom: `${page.footer}pt`, padding: `0 ${page.mr}pt 0 ${page.ml}pt` }} onDoubleClick={onHF && (() => onHF(fk))}>

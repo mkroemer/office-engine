@@ -257,17 +257,62 @@ function spanEnd(s: HTMLElement): number {
   return o + (s.textContent?.length ?? 0)
 }
 
+/** the offsets [from, to] a paragraph element shows: all of them, or those of its part when the paragraph is split */
+const partOf = (el: HTMLElement): [number, number] => [Number(el.dataset.from ?? 0), el.dataset.to === undefined ? Infinity : Number(el.dataset.to)]
+
+/**
+ * The element of paragraph `pa` that shows offset `o`. A paragraph split across pages has one element per part, each
+ * with the offsets it holds (`data-from`, `data-to`: absent for the first and the last). Where two parts meet the
+ * offset is in both: the later one (the start of its first line), or with `upstream` the earlier one (the end of its
+ * last line). Null when no element of the paragraph shows `o` (its page is not rendered).
+ */
+export function paraEl(root: ParentNode, pa: string, o: number, upstream = false): HTMLElement | null {
+  let pick: HTMLElement | null = null
+  for (const el of root.querySelectorAll<HTMLElement>(`[data-pa="${pa}"]`)) {
+    const [from, to] = partOf(el)
+    if (o >= from && o <= to && !(upstream && pick)) pick = el
+  }
+  return pick
+}
+
+/** the caret at a place is at the end of a part of its paragraph (the next part starts there) */
+function atPartEnd(root: HTMLElement, node: Node | null, pos: Pos | null): boolean {
+  const el = node && (node.nodeType === 1 ? (node as Element) : node.parentElement)?.closest<HTMLElement>('[data-pa]')
+  return !!el && !!pos && root.contains(el) && el.dataset.to !== undefined && pos.o === Number(el.dataset.to)
+}
+
+/**
+ * DOM ranges over the offsets [a, b) of paragraph `pa`: one for each part of it shown, so that a range over the end of
+ * a page does not take in what is between the parts (footer, header).
+ */
+export function paraRanges(root: HTMLElement, pa: string, a: number, b: number): Range[] {
+  const out: Range[] = []
+  for (const el of root.querySelectorAll<HTMLElement>(`[data-pa="${pa}"]`)) {
+    const [from, to] = partOf(el)
+    const x = Math.max(a, from)
+    const y = Math.min(b, to)
+    if (y < x || (y === x && b > a)) continue
+    const s = domIn(el, x)
+    const e = domIn(el, y)
+    const r = document.createRange()
+    r.setStart(s[0], s[1])
+    r.setEnd(e[0], e[1])
+    out.push(r)
+  }
+  return out
+}
+
 export function posFromDom(root: HTMLElement, node: Node, offset: number): Pos | null {
   const start = node.nodeType === 1 ? (node as Element) : node.parentElement
   const pel = start?.closest('[data-pa]') as HTMLElement | null
   if (!pel || !root.contains(pel)) return null
   const pa = pel.dataset.pa!
   if (!runSpan(node, pel)) {
-    // boundary between runs: end of the last run span before the point
+    // boundary between runs: end of the last run span before the point (the start of the part when none is)
     const r = document.createRange()
     r.setStart(node, offset)
     r.collapse(true)
-    let o = 0
+    let o = Number(pel.dataset.from ?? 0)
     for (const sp of Array.from(pel.querySelectorAll<HTMLElement>('[data-o]'))) {
       if (r.comparePoint(sp, sp.childNodes.length) < 0) o = spanEnd(sp)
       else break
@@ -300,9 +345,14 @@ export function posFromDom(root: HTMLElement, node: Node, offset: number): Pos |
   return { pa, o: base + o }
 }
 
-export function domFromPos(root: HTMLElement, pos: Pos): [Node, number] | null {
-  const pel = root.querySelector<HTMLElement>(`[data-pa="${pos.pa}"]`)
-  if (!pel) return null
+export function domFromPos(root: HTMLElement, pos: Pos, upstream = false): [Node, number] | null {
+  const pel = paraEl(root, pos.pa, pos.o, upstream)
+  return pel && domIn(pel, pos.o)
+}
+
+/** the DOM place of offset `o` in a paragraph element (or the part of one that holds it) */
+function domIn(pel: HTMLElement, at: number): [Node, number] {
+  const pos = { o: at }
   const spans = Array.from(pel.querySelectorAll<HTMLElement>('[data-o]'))
   if (!spans.length) return [pel, pel.childNodes.length]
   let pick: HTMLElement | undefined
@@ -391,6 +441,11 @@ export class RichInput {
   private expected: Sel | null = null
   /** where the DOM selection last was in a paragraph: a view update that removes this node leaves the caret on the page element */
   private seen: Node | null = null
+  /**
+   * The caret was last seen at the end of a part of a paragraph split across pages (the end of a page), not at the
+   * start of the next part, which is the same offset: a caret put back there (after typing) stays on that side.
+   */
+  private upstream = false
 
   constructor(private host: RichHost) {}
 
@@ -438,7 +493,10 @@ export class RichInput {
     if (!root.contains(s.anchorNode) || !root.contains(s.focusNode)) return null
     const a = posFromDom(root, s.anchorNode, s.anchorOffset)
     const f = posFromDom(root, s.focusNode, s.focusOffset)
-    if (a && f) this.seen = s.anchorNode
+    if (a && f) {
+      this.seen = s.anchorNode
+      this.upstream = atPartEnd(root, s.focusNode, f)
+    }
     return a && f ? { a, f } : null
   }
 
@@ -491,11 +549,26 @@ export class RichInput {
     })
     const first = paras[0]
     const last = paras[paras.length - 1]
-    const dom: Sel = first && last ? { a: { pa: first.dataset.pa!, o: 0 }, f: { pa: last.dataset.pa!, o: plen(this.host.para(last.dataset.pa!)!.runs) } } : all
+    // (the first and last elements may be parts of paragraphs split across pages: what they show)
+    const dom: Sel = first && last ? { a: { pa: first.dataset.pa!, o: partOf(first)[0] }, f: { pa: last.dataset.pa!, o: Math.min(partOf(last)[1], plen(this.host.para(last.dataset.pa!)!.runs)) } } : all
     this.restore(dom)
     this.override = { model: all, dom: this.readSel() ?? dom }
     this.host.onSelection?.(all)
     return true
+  }
+
+  /**
+   * The paragraphs holding the selection were laid out again (a page now ends elsewhere in them): when the DOM
+   * selection no longer shows the model's, it is put back.
+   */
+  reflow(): boolean {
+    const want = this.expected ?? this.last
+    if (!this.root || this.composing || this.override || !want) return false
+    const now = this.readSel()
+    if (now && sameSel(now, want)) return false
+    // a selection in other paragraphs is a new one (its change is not read yet), not the model's moved by the cut
+    if (now && (now.a.pa !== want.a.pa || now.f.pa !== want.f.pa)) return false
+    return this.restore(want, false)
   }
 
   /** Applies a model selection to the DOM; false when its paragraph isn't rendered. */
@@ -503,8 +576,9 @@ export class RichInput {
     const root = this.root
     if (!root || !sel) return false
     this.override = null
-    const a = domFromPos(root, sel.a)
-    const f = domFromPos(root, sel.f)
+    const up = this.upstream && collapsed(sel)
+    const a = domFromPos(root, sel.a, up)
+    const f = domFromPos(root, sel.f, up)
     if (!a || !f) {
       // not in the DOM (its page is not shown): the DOM caret is somewhere else, and key presses go by this one
       this.last = sel
@@ -657,6 +731,10 @@ export class RichInput {
       }
     }
     if (NAV.has(e.key)) this.expected = null
+    if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft') && !mod && !e.altKey && this.crossPart(e.key === 'ArrowRight' ? 1 : -1, e.shiftKey)) {
+      e.preventDefault()
+      return
+    }
     if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft') && !mod && !e.shiftKey && !e.altKey) {
       const sel = this.live()
       if (sel && collapsed(sel) && this.host.arrow?.(sel, e.key === 'ArrowRight' ? 1 : -1)) e.preventDefault()
@@ -668,6 +746,44 @@ export class RichInput {
       if (!sel) return
       if (!this.host.tab?.(sel, e.shiftKey) && !e.shiftKey) opInsert(this.host, sel, '\t')
     }
+  }
+
+  /**
+   * ArrowRight at the end of a part of a paragraph split across pages, ArrowLeft at the start of one: the browser would
+   * move to the other part at the same offset (the caret seems stuck). The caret moves one character into it instead,
+   * as over the end of a line. `extend`: Shift, the selection grows.
+   */
+  private crossPart(dir: 1 | -1, extend: boolean): boolean {
+    const root = this.root
+    const s = root && selPoints(root)
+    const el = s?.focusNode && (s.focusNode.nodeType === 1 ? (s.focusNode as Element) : s.focusNode.parentElement)?.closest<HTMLElement>('[data-pa]')
+    if (!root || !el || !root.contains(el) || (el.dataset.from === undefined && el.dataset.to === undefined)) return false
+    const sel = this.readSel()
+    const p = sel && this.host.para(sel.f.pa)
+    if (!sel || !p || (!extend && !collapsed(sel))) return false
+    const [from, to] = partOf(el)
+    const text = runsText(p.runs)
+    let o: number
+    if (dir === 1 && to !== Infinity && sel.f.o >= to) o = nextBoundary(text, to)
+    else if (dir === -1 && from > 0 && sel.f.o <= from) o = prevBoundary(text, from)
+    else return false
+    const f = { pa: sel.f.pa, o }
+    if (!this.restore(extend ? { a: sel.a, f } : caret(f))) return false
+    // shown: the view scrolls to it (the browser does that for the caret it moves itself)
+    const n = getSel(root)?.focusNode
+    const r = n && document.createRange()
+    if (r && n) {
+      r.setStart(n, getSel(root)!.focusOffset)
+      const box = r.getBoundingClientRect()
+      let sc = root.parentElement
+      while (sc && !/(auto|scroll)/.test(getComputedStyle(sc).overflowY)) sc = sc.parentElement
+      const view = sc?.getBoundingClientRect()
+      if (sc && view && box.height) {
+        if (box.bottom > view.bottom - 8) sc.scrollTop += box.bottom - view.bottom + 48
+        else if (box.top < view.top + 8) sc.scrollTop -= view.top - box.top + 48
+      }
+    }
+    return true
   }
 
   /** a click moves the caret: what an edit asked for no longer holds */
