@@ -29,8 +29,6 @@ import { CollabBar, PeerOverlay, useCollab } from '../collab/react'
 import { CommentsContext, CommentsCtl, useCommentsState, type CommentOptions } from './comments/Comments'
 import { COMMENT_KEYS, CommentsPanel } from './comments/CommentsPanel'
 import { formatBytes, StringsProvider, useStrings, type Locale, type StringsOverride } from './strings'
-import { LocaleContext } from './common/locale'
-import { inputLocale } from '../core/number-input'
 import type { FontSource } from '../core/fonts'
 import { FontsContext, useHostFonts } from './common/fonts'
 
@@ -189,7 +187,6 @@ function Viewer(props: DocViewerProps) {
   const t = useStrings()
   const fmtBytes = (n: number) => formatBytes(t, n)
   const { src, name, className, style, toolbar = true, toolbarExtra, zoom, thumbnails, headers, credentials, worker, styleTarget, theme, onLoad, onError } = props
-  const locale = inputLocale(t.locale)
   const root = useThemeRoot(theme, style)
   const fonts = useHostFonts(props.fonts, onError)
   const { allowEdit = true, allowSave = true, allowDownload = true, fileMenu = true, allowOpen = true, captureSelectAll = true, onSave, onDirtyChange } = props
@@ -662,7 +659,6 @@ function Viewer(props: DocViewerProps) {
   else body = <PptxView client={client} initialZoom={zoom} thumbnails={thumbnails} />
 
   return (
-    <LocaleContext.Provider value={locale}>
     <IconsProvider icons={props.icons}>
     <UIComponentsProvider components={props.components}>
     <div ref={rootRef} className={root.className + (className ? ` ${className}` : '')} style={root.style} onKeyDown={onKeyDown}>
@@ -831,6 +827,5 @@ function Viewer(props: DocViewerProps) {
     </div>
     </UIComponentsProvider>
     </IconsProvider>
-    </LocaleContext.Provider>
   )
 }

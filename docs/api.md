@@ -245,7 +245,7 @@ const sheetTexts = { ...de, xlsx: { ...de.xlsx, addSheet: 'Neues Blatt' } }
 </StringsProvider>
 ```
 
-For a regional variant, override only the texts that differ. The `locale` prop is a BCP 47 formatting tag and takes precedence over `strings.locale`; otherwise the local table’s locale takes precedence over the enclosing provider. With neither, displays use the defaults above. Malformed tags (for example `de_DE`) are ignored: a valid table or inherited tag still applies, otherwise the default formatting above is used. Well-formed but unsupported tags follow `Intl` fallback. For example, a host can use US English as the base and supply British formatting and selected British spellings:
+For a regional variant, override only the texts that differ. The `locale` prop is a BCP 47 formatting tag and takes precedence over `strings.locale`; otherwise the local table’s locale takes precedence over the enclosing provider. With neither, displays use the defaults above. Malformed tags (for example `de_DE`) are ignored: a valid table or inherited tag still applies, otherwise the default formatting above is used. For display, well-formed but unsupported tags follow `Intl` fallback. Numeric input instead uses the engine’s default syntax when the resolved tag is missing or unsupported. For example, a host can use US English as the base and supply British formatting and selected British spellings:
 
 ```tsx
 import { DocViewer, StringsProvider, en, type StringsOverride } from '@p10node/office-engine'
@@ -304,7 +304,7 @@ Document content stays in its original language. Default new sheet names, the au
 - With `locale`, the Page setup and Header & footer fields are text fields read by the same rules; without it they stay the browser's number fields.
 - Collaboration: the tag goes with each cell edit (`locale` of the shared `set` operation), so every participant, and a server replaying the log with `compact`, reads `1,5` the same. Participants should run a version that knows it: an older one reads such an edit with a decimal point.
 
-Without `DocViewer`: `client.call('xlsx.set', sheet, cells, { locale: 'de-DE' })`; `mount(el, { src, locale: 'de-DE' })`; `<office-viewer locale="de-DE">`.
+For standalone views or controls, wrap them in `<StringsProvider locale="de-DE">` or supply a table with that locale. The worker also accepts the tag directly in `client.call('xlsx.set', sheet, cells, { locale: 'de-DE' })`; `mount(el, { src, locale: 'de-DE' })`; `<office-viewer locale="de-DE">`.
 
 ### Fonts
 

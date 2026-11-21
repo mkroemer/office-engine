@@ -1,9 +1,9 @@
-import { createContext, useContext } from 'react'
+import { useMemo } from 'react'
+import { inputLocale } from '../../core/number-input'
+import { useStrings } from '../strings'
 
-/**
- * The BCP 47 tag numbers typed into the views are read in (DocViewer's `locale`, canonical); undefined: a decimal
- * point and commas grouping by thousands. The host chooses it: the browser's language does not.
- */
-export const LocaleContext = createContext<string | undefined>(undefined)
-
-export const useLocale = () => useContext(LocaleContext)
+/** The resolved UI locale for numeric input. Missing or unsupported tags use the engine's default number syntax. */
+export function useLocale() {
+  const { locale } = useStrings()
+  return useMemo(() => inputLocale(locale), [locale])
+}
