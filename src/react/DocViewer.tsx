@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useInsertionEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useInsertionEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import type { DocSource } from '../core/source'
 import type { DocumentClient, OpenOptions } from '../core/worker/client'
 import type { Zoom } from './common/ZoomControl'
@@ -16,7 +16,7 @@ import { blankPptx, parasToDocx, rowsToXlsx } from '../core/convert'
 import type { DocKind } from '../core/opc'
 import { extOf, HAS_SOURCE, PLAIN_EXT, PLAIN_FILE, unpackedName, type PlainFormat } from '../core/plain'
 import { injectStyles } from './injectStyles'
-import { isTextEntry, useSize } from './common/hooks'
+import { isTextEntry, useIsoLayoutEffect, useSize } from './common/hooks'
 import { useThemeRoot, type Theme } from './theme'
 import { SourceEditor } from './source/SourceEditor'
 import { CodeView } from './source/CodeView'
@@ -639,7 +639,7 @@ function Viewer(props: DocViewerProps) {
   }, [ctl, client, busy, docEditable, editAllowed, canEdit, dirty, saving])
   const commands = useRef({ editAllowed, save, fileActions, cmCtl })
   commands.current = { editAllowed, save, fileActions, cmCtl }
-  useLayoutEffect(() => {
+  useIsoLayoutEffect(() => {
     return ctl.attachViewer({
       setEditing: (on) => {
         if (!on || commands.current.editAllowed) setEditing(on)
@@ -649,7 +649,7 @@ function Viewer(props: DocViewerProps) {
       toggleComments: (open) => commands.current.cmCtl?.toggle(open),
     })
   }, [ctl])
-  useLayoutEffect(() => viewCtl.activate(), [viewCtl])
+  useIsoLayoutEffect(() => viewCtl.activate(), [viewCtl])
 
   let body: ReactNode
   if (error) {
