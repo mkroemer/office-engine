@@ -108,6 +108,7 @@ async function takeSnapshot(room: string) {
 
 - Undo / redo only touches your own changes: a cell someone else typed over since is left as they left it
 - A formula typed while someone else inserts / deletes rows or columns, or renames a sheet, is rewritten with that operation (it reads the cells meant)
+- A cell edit carries the `locale` its numbers were typed in ([API](api.md#numbers-typed-in-a-locale)): every participant and `compact` read `1,5` typed with `de-DE` as 1.5, whatever their own `locale`. Each replica takes the locale's separators from its own `Intl` data; spaces and apostrophes are read in all their forms, so the usual differences between browser and server versions do not change a value. A participant running an older version reads such an edit with a decimal point
 - DOCX rooms are not snapshotted yet (their edits run in the view's editor): newcomers replay the whole history
 - Deleting rows / columns can't be undone while collaborating
 - One hub process per room; batches not yet flushed (up to 250 ms on S3) are lost if it crashes, and clients ahead of the stored log must reopen

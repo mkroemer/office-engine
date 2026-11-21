@@ -6,7 +6,8 @@
  */
 import type { DocumentClient } from '../core/worker/client'
 import type { Methods } from '../core/worker/protocol'
-import type { BookOp, Range, SheetOp, WorkbookMeta } from '../core/xlsx/types'
+import type { BookOp, Range, SetOptions, SheetOp, WorkbookMeta } from '../core/xlsx/types'
+import { inputLocale } from '../core/number-input'
 import { onLocal } from './hosts'
 import type { Adapter, ApplyResult } from './session'
 import { conflictsX, isStructural, STRUCTURAL, transformX, type PBookOp, type XOp } from './xlsx-ops'
@@ -76,8 +77,11 @@ export class XlsxCollab implements Adapter<XOp> {
     switch (method) {
       case 'comments.set':
         return this.submit({ t: 'comment', id: this.id(), cid: a[0], c: a[1] as CommentOp['c'] })
-      case 'xlsx.set':
-        return this.local({ t: 'set', id: this.id(), sheet: this.path(a[0]), cells: a[1] })
+      case 'xlsx.set': {
+        // (the locale goes with the op: each replica, and a server replaying the log, reads the numbers as typed)
+        const locale = inputLocale((a[2] as SetOptions | undefined)?.locale)
+        return this.local({ t: 'set', id: this.id(), sheet: this.path(a[0]), cells: a[1], ...(locale ? { locale } : {}) })
+      }
       case 'xlsx.format':
         return this.local({ t: 'fmt', id: this.id(), sheet: this.path(a[0]), range: a[1], patch: a[2] })
       case 'xlsx.sheetOp': {
