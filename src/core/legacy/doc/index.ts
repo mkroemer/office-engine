@@ -155,6 +155,7 @@ class Packager {
     let out =
       `<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${f(root.f0)}" w:hAnsi="${f(root.f2)}" w:eastAsia="${f(root.f1)}" w:cs="${f(root.fBi)}"/>` +
       `<w:sz w:val="${root.hps}"/><w:szCs w:val="${root.hpsBi}"/></w:rPr></w:rPrDefault>` +
+      // (a Word 97 paragraph has widow control unless its sprm turns it off, as an OOXML one without the element)
       '<w:pPrDefault/></w:docDefaults>'
     for (const s of st.styles) {
       if (!s || (s.stk !== 1 && s.stk !== 2)) continue
