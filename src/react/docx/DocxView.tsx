@@ -898,7 +898,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     const off = editor.subscribeState((s) => {
       const sel = s && editor.input.formatSelection()
       publishedSelection.current = sel
-      const current = sel && editor.state(sel)
+      const current = sel && editor.state(sel, { pendingList: true })
       publishFormat(current ? docxFormat(current) : null)
     })
     return () => {

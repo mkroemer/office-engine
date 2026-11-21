@@ -2083,7 +2083,7 @@ export class DocxEditor implements RichHost<Paragraph> {
 
   // ---------------------------------------------------------------- toolbar state
 
-  state(sel = this.input.sel()): FormatState | null {
+  state(sel = this.input.sel(), { pendingList = false } = {}): FormatState | null {
     if (!sel) return null
     const [s] = ordered(this, sel)
     const p = this.para(s.pa)
@@ -2119,7 +2119,7 @@ export class DocxEditor implements RichHost<Paragraph> {
       font: rs.font ?? p.markFont ?? this.defaultFont,
       align: p.ps.align ?? 'left',
       style: p.sid,
-      lst: p.pd?.list === 'none' ? undefined : p.pd?.list ?? p.lst,
+      lst: pendingList ? listOf(p) : p.lst,
       canUndo: this.canUndo,
       canRedo: this.canRedo,
     }
