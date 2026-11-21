@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { docxParas, fromB64, runsOf, useBrowser, viewer, type Viewer } from './harness'
+import { docxParas, fromB64, runsOf, useBrowser, viewer, xlsxSheet, type Viewer } from './harness'
 
 useBrowser()
 
@@ -72,7 +72,7 @@ describe('host-placed controls around a headless viewer', () => {
     await until(v, 's.editing')
     await v.selectText('document')
     await until(v, 's.format && s.format.size !== 12.5')
-    const size = v.page.locator('#host-chrome').getByLabel('Schriftgröße', { exact: true })
+    const size = v.page.locator('#host-chrome').getByLabel('Schriftgrad', { exact: true })
     await size.fill('12,5')
     await size.press('Enter')
     await until(v, 's.format?.size === 12.5')
@@ -132,7 +132,7 @@ describe('host-placed controls around a headless viewer', () => {
   })
 
   test('xlsx: text being typed is committed on its own sheet when a sheet tab is clicked', async () => {
-    const v = await viewer({ src: 'samples/sample.xlsx', headless: true, chrome: true, editable: true })
+    const v = await viewer({ src: 'samples/sample.xlsx', headless: true, chrome: true, editable: true, onSave: true })
     const tabs = chrome(v, '.de-tabs [role="tab"]')
     await tabs.first().waitFor()
     await v.clickCell('J12')
@@ -143,9 +143,15 @@ describe('host-placed controls around a headless viewer', () => {
     await until(v, 's.outline.items[1].current')
     // a click on the other sheet does not carry the text over to it
     await v.clickCell('A1')
+    expect(await tabs.nth(1).getAttribute('aria-selected')).toBe('true')
     await tabs.first().click()
     await until(v, 's.outline.items[0].current')
+    await v.page.locator('.de-cell').getByText('hello', { exact: true }).waitFor()
     expect(await v.shown('J12')).toBe('hello')
+    await v.page.evaluate(() => window.__ctl.save())
+    const bytes = fromB64((await v.waitEvent('save')).b64 as string)
+    expect((await xlsxSheet(bytes, 0)).cell('J12')).toBe('hello')
+    expect((await xlsxSheet(bytes, 1)).cell('J12')).toBe('')
     expect(v.errors).toEqual([])
   })
 })
