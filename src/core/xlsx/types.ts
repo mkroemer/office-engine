@@ -111,6 +111,15 @@ export interface CellInput {
   input: string
 }
 
+/** how the inputs of an `xlsx.set` are read */
+export interface SetOptions {
+  /**
+   * BCP 47 tag the numbers were typed in: its decimal and grouping separators (`1,5` and `1.234,5` in `de-DE`).
+   * Undefined: a decimal point and commas grouping by thousands. Formulas are read the same in every locale.
+   */
+  locale?: string
+}
+
 export type BorderKind = 'all' | 'outer' | 'inner' | 'none' | 'top' | 'bottom' | 'left' | 'right'
 
 export interface FmtPatch {

@@ -2,7 +2,7 @@
  * HTML → paragraphs of formatted runs: clipboard HTML (main thread, parsed by the browser's DOMParser) and HTML files
  * (also in the worker, where a small DOM-free parser reads them).
  */
-import type { Inline, RunSet, RunStyle } from './docx/types'
+import type { Inline, RunSet, RunStyle, TexMath } from './docx/types'
 import { cssFont } from './fonts'
 import { safeHref } from './url'
 import { dict } from './dict'
@@ -161,6 +161,20 @@ function textOf(n: HNode): string {
   return n.nodeType === 3 ? (n.textContent ?? '') : Array.from(n.childNodes).map(textOf).join('')
 }
 
+const TEX_ENCODING = /^(?:application\/x-tex|application\/x-latex|text\/x-tex|text\/x-latex|tex|latex)$/i
+
+/** the TeX of a MathML element, from its TeX annotation; null when it has none */
+function texAnnotation(n: HNode): string | null {
+  for (const k of Array.from(n.childNodes)) {
+    if (k.nodeType !== 1) continue
+    const e = k as HElement
+    if (e.tagName.toUpperCase() === 'ANNOTATION' && TEX_ENCODING.test((e.getAttribute('encoding') ?? '').trim())) return textOf(e)
+    const inner = texAnnotation(e)
+    if (inner !== null) return inner
+  }
+  return null
+}
+
 /** whether the marker text Word writes in front of a list paragraph ("1.", "a)", "(i)") numbers, as opposed to a bullet ("·", "o", "§") */
 const NUMBERED = /^\(?[\dA-Za-z]{1,4}[.)]$/
 
@@ -208,6 +222,15 @@ function convert(root: HNode, base: Ctx, rich: boolean, tables: boolean): Pasted
       if (el.tagName === 'BR') {
         ;(cur ?? para()).runs.push(toRun('\n', c))
         continue
+      }
+      // MathML that says its TeX (a Markdown formula, ours copied, KaTeX / Wikipedia): the formula; other MathML: its text
+      if (el.tagName.toUpperCase() === 'MATH') {
+        const tex = texAnnotation(el)
+        if (tex !== null) {
+          const math: TexMath = { tex, delim: el.getAttribute('display') === 'block' ? '$$' : '$' }
+          ;(cur ?? para()).runs.push({ t: 'ref', text: tex.trim(), s: c.sz ? { sz: c.sz } : {}, math })
+          continue
+        }
       }
       if (el.tagName === 'IMG' && rich) {
         const src = (el.getAttribute('src') ?? '').trim()

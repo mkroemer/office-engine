@@ -313,6 +313,7 @@ export class InternalViewerController {
             return () => {
               if (!current() || this.view !== commands) return
               this.view = null
+              this.update({ format: null })
             }
           },
           publishFormat: (commands, format) => { if (current() && this.view === commands) this.update({ format }) },

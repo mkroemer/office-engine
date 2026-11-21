@@ -146,20 +146,24 @@ A host `Select` can render its trigger and option icons with the exported `Icon`
 
 ## Tokens
 
-| Group | Tokens |
-|---|---|
-| Surfaces and text | `bg` (around the document), `chrome` (bars), `pop` (menus, dialogs), `ebar` (formatting toolbar), `text`, `muted`, `ink`, `inkStrong`, `inkSoft`, `border`, `sep`, `tbSep` |
-| Accent and states | `accent`, `accentHover`, `accentInk` (text on the accent), `accentSoft`, `on`, `onInk`, `onInkStrong` (pressed buttons), `hover`, `hoverSolid`, `hoverSoft`, `disabled`, `danger`, `dangerBorder`, `ok` |
-| Inputs and tabs | `inputBg`, `inputBorder`, `swatchBorder`, `tabHover`, `tabOn`, `tabInk` |
-| Overlays | `popShadow`, `shadow`, `shadowSm`, `shadowMd`, `shadowLg`, `backdrop`, `toastBg`, `toastInk`, `tipBg`, `tipInk` |
-| Type and shape | `font`, `fontMono`, `fontSize`, `radiusSm`, `radius`, `radiusLg`, `radiusXl` |
-| Sheets | `grid`, `head`, `headInk`, `headBorder`, `cornerBorder`, `freeze` |
-| Comments | `cmBg`, `cmOn`, `cmLine`, `cmLineOn`, `cmCard`, `cmQuote` |
-| Find | `find`, `findOn` (text matches), `findCell`, `findCellOn`, `findCellLine` (cell matches) |
-| Files, people, connection | `kindDocx`, `kindXlsx`, `kindPptx`, `kindInk` (badges), `avatarInk` (text on a person's color), `statusIdle`, `statusLive`, `statusBusy`, `statusError` |
-| Slideshow | `presentBg`, `presentInk` |
-| Paper | `page`, `pageInk`, `sheetInk`, `skeleton` (loading pages), `phBorder`, `phA`, `phB`, `phInk` (placeholders), `phOutline`, `phHint` (empty text boxes) |
-| Source editor | `srcBg`, `srcGutter`, `srcSel`, `srcFont`, `srcComment`, `srcKeyword`, `srcString`, `srcOperator`, `srcNumber`, `srcHeading`, `srcAttr`, `srcTag`, `srcMeta` |
+| Group                     | Tokens                                                                                                                                                                                                  |
+|---------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Surfaces and text         | `bg` (around the document), `chrome` (bars), `pop` (menus, dialogs), `ebar` (formatting toolbar), `text`, `muted`, `ink`, `inkStrong`, `inkSoft`, `border`, `sep`, `tbSep`                              |
+| Accent and states         | `accent`, `accentHover`, `accentInk` (text on the accent), `accentSoft`, `on`, `onInk`, `onInkStrong` (pressed buttons), `hover`, `hoverSolid`, `hoverSoft`, `disabled`, `danger`, `dangerBorder`, `ok` |
+| Inputs and tabs           | `inputBg`, `inputBorder`, `swatchBorder`, `tabHover`, `tabOn`, `tabInk`                                                                                                                                 |
+| Overlays                  | `popShadow`, `shadow`, `shadowSm`, `shadowMd`, `shadowLg`, `backdrop`, `toastBg`, `toastInk`, `tipBg`, `tipInk`                                                                                         |
+| Type and shape            | `font`, `fontMono`, `fontSize`, `radiusSm`, `radius`, `radiusLg`, `radiusXl`                                                                                                                            |
+| Sheets                    | `grid`, `head`, `headInk`, `headBorder`, `cornerBorder`, `freeze`                                                                                                                                       |
+| Comments                  | `cmBg`, `cmOn`, `cmLine`, `cmLineOn`, `cmCard`, `cmQuote`                                                                                                                                               |
+| Find                      | `find`, `findOn` (text matches), `findCell`, `findCellOn`, `findCellLine` (cell matches)                                                                                                                |
+| Files, people, connection | `kindDocx`, `kindXlsx`, `kindPptx`, `kindInk` (badges), `avatarInk` (text on a person's color), `statusIdle`, `statusLive`, `statusBusy`, `statusError`                                                 |
+| Slideshow                 | `presentBg`, `presentInk`                                                                                                                                                                               |
+| Paper                     | `page`, `pageInk`, `sheetInk`, `skeleton` (loading pages), `phBorder`, `phA`, `phB`, `phInk` (placeholders), `phOutline`, `phHint` (empty text boxes)                                                   |
+| Source editor, code view  | `srcBg`, `srcGutter`, `srcSel`, `srcFont`, `srcComment`, `srcKeyword`, `srcString`, `srcOperator`, `srcNumber`, `srcHeading`, `srcAttr`, `srcTag`, `srcMeta`, `srcFunction`, `srcType`                  |
+| Code on the page          | `codeComment`, `codeKeyword`, `codeString`, `codeOperator`, `codeNumber`, `codeAttr`, `codeTag`, `codeMeta`, `codeFunction`, `codeType`                                                                 |
 
 The paper tokens are the same in both modes: a document is drawn on white paper with black ink unless it says
-otherwise. Built-in values: `src/react/styles.css`, the `.de-root` and `.de-root.de-dark` blocks.
+otherwise. So are the `code*` tokens, the colors of code blocks drawn on the page (Markdown code blocks) and of printed
+code; the `src*` tokens color the source pane and the code view of a source file, in each mode. The colors of code are
+only drawn: they are not in the document, and what is saved is the code. Built-in values: `src/react/styles.css`, the
+`.de-root` and `.de-root.de-dark` blocks.

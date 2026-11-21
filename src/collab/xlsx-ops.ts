@@ -1,6 +1,7 @@
 /** XLSX collaboration operations (shared by the main-thread adapter and the worker) + their transforms. */
 import { renameSheetInFormula, shiftFormula } from '../core/xlsx/formula'
 import type { CellInput, ClipCell, FindOptions, FmtPatch, Range, SheetOp } from '../core/xlsx/types'
+import { numberSyntax } from '../core/number-input'
 import type { CommentOp } from './comments'
 
 /** sheets are addressed by part path: indexes move when sheets are added / reordered */
@@ -13,7 +14,8 @@ export type PBookOp =
   | { op: 'duplicate'; path: string }
 
 export type XOp =
-  | { t: 'set'; id: string; sheet: string; cells: CellInput[] }
+  /** `locale`: the tag numbers were typed in, for every replica to read them alike (left out: a decimal point) */
+  | { t: 'set'; id: string; sheet: string; cells: CellInput[]; locale?: string }
   | { t: 'fmt'; id: string; sheet: string; range: Range; patch: FmtPatch }
   /** `name`: the sheet's name where the operation was made, for rows / columns inserted or deleted (formulas typed meanwhile elsewhere read it by that name) */
   | { t: 'sheet'; id: string; sheet: string; op: SheetOp; name?: string }
@@ -211,7 +213,13 @@ const ALL: Range = { r0: 0, c0: 0, r1: Number.MAX_SAFE_INTEGER, c1: Number.MAX_S
 const multiline = (op: XOp) => op.t === 'set' && op.cells.some((c) => c.input.includes('\n'))
 
 /** a cell edit that may give its cell a number format (derived style): a date or a percentage typed into a cell without one */
-const formats = (op: XOp) => op.t === 'set' && op.cells.some((c) => /^\s*[=+@-]|[$€£¥₫₩₹₽₱฿%]|^\s*\d{1,3}(,\d{3})+|^\s*\d{1,4}[-/]\d{1,2}[-/]\d{1,4}/.test(c.input))
+const formats = (op: XOp) => {
+  if (op.t !== 'set') return false
+  // in a locale: its percent sign, and a number grouped by its separator (1.234, 1 234, 12,34,567)
+  const s = op.locale ? numberSyntax(op.locale) : undefined
+  const local = (input: string) => !!s && (s.percent.some((p) => input.includes(p)) || s.group.some((g) => input.includes(g)))
+  return op.cells.some((c) => /^\s*[=+@-]|[$€£¥₫₩₹₽₱฿%]|^\s*\d{1,3}(,\d{3})+|^\s*\d{1,4}[-/]\d{1,2}[-/]\d{1,4}/.test(c.input) || local(c.input))
+}
 
 export function footprint(op: XOp): { sheet: string; range: Range } | null {
   switch (op.t) {

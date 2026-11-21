@@ -143,6 +143,22 @@ describe('viewer controller', () => {
     expect(ctl.snapshot().format).toBeNull()
   })
 
+  test('releasing current grid commands clears format without clearing a successor', () => {
+    const ctl = new InternalViewerController()
+    const { view } = mount(ctl)
+    const first = {}, next = {}
+    const format = { bold: true, italic: false, underline: false, strike: false, size: 25 }
+    const releaseFirst = view.attachView(first)
+    view.publishFormat(first, format)
+    const releaseNext = view.attachView(next)
+    view.publishFormat(next, { ...format, size: 15 })
+    releaseFirst()
+    expect(ctl.snapshot().format?.size).toBe(15)
+    releaseNext()
+    view.publishFormat(next, format)
+    expect(ctl.snapshot().format).toBeNull()
+  })
+
   test('invalid sizes never reach a view command; valid sizes use the shared half-point range', () => {
     const ctl = new InternalViewerController()
     const sizes: number[] = []

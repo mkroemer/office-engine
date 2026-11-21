@@ -5,7 +5,7 @@
 [![CI](https://github.com/p10node/office-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/p10node/office-engine/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/npm/l/@p10node/office-engine)](LICENSE)
 
-View + edit **DOCX / XLSX / PPTX** directly in the browser, open and edit **DOC / XLS / PPT** (Office 97-2003), **RTF** and **OpenDocument** (ODT / ODS / ODP), view Apple **Pages**, **Keynote** and **Numbers** files and Microsoft **Visio** drawings, open **CSV**, text, Markdown, HTML and SVG as editable sheets / documents, and draw **Mermaid**, **PlantUML** and **Graphviz** diagrams (no server, no extra library). Loads progressively like Google Docs, handles heavy files, one-line React embed, saves back to the original format.
+View + edit **DOCX / XLSX / PPTX** directly in the browser, open and edit **DOC / XLS / PPT** (Office 97-2003), **RTF** and **OpenDocument** (ODT / ODS / ODP), view Apple **Pages**, **Keynote** and **Numbers** files and Microsoft **Visio** drawings, open **CSV**, text, Markdown, HTML and SVG as editable sheets / documents and source code with syntax colors, and draw **Mermaid**, **PlantUML** and **Graphviz** diagrams (no server, no extra library). Loads progressively like Google Docs, handles heavy files, one-line React embed, saves back to the original format.
 
 **Zero runtime dependencies, zero servers.** Parsing, layout, formulas, diagrams and ZIP are all in the library, running in a Web Worker: nothing leaves the browser.
 
@@ -66,6 +66,7 @@ Also online at [p10node.github.io/office-engine](https://p10node.github.io/offic
 
 - **Progressive loading**: lazy ZIP, HTTP Range requests, streaming XML parser in a Web Worker → UI never blocks
 - **Virtualized views**: only visible pages, cells and slides render
+- **DOCX pages cut like Word's**: a paragraph goes on at the top of the next page between two lines, a table between two rows with its header rows repeated; widow / orphan control, keep with next, keep lines together; editing goes on across the page end
 - **Editing** with a Google Docs-style toolbar: DOCX text, styles, lists, images, tables; XLSX cells, formulas (540+ functions of Excel and Google Sheets, dynamic arrays, `LET` / `LAMBDA`), formats, borders, rows/columns, sheets; PPTX text, shapes, images, slides, slideshow
 - **Fast save**: only edited parts are regenerated, everything else keeps its original bytes
 - **Word, Excel and PowerPoint 97-2003, RTF, OpenDocument**: `.doc` / `.xls` / `.ppt`, `.rtf` and `.odt` / `.ods` / `.odp` (also templates and flat XML) are converted in the worker to DOCX / XLSX / PPTX and open **editable**: styles, lists, tables, pictures, headers and footers, notes and comments; formulas with their values, number formats, merged cells, frozen panes; masters, shapes, text and pictures of slides. Saved as `.docx` / `.xlsx` / `.pptx`
@@ -73,12 +74,16 @@ Also online at [p10node.github.io/office-engine](https://p10node.github.io/offic
 - **Microsoft Visio (view only)**: `.vsdx` drawings (also `.vsdm`, templates and stencils) open read-only, a slide per page: shapes with their geometry (lines, arcs, ellipses, Béziers, NURBS), masters, groups, connectors with line ends, fills, gradients, themes, text, pictures, background pages and layers; *Download as* PowerPoint saves the converted file
 - **CSV, text, Markdown, HTML, SVG**: `.csv` / `.tsv` open as a workbook (streamed: a million rows in about 2 s; past 12 million cells the rows are read from the file as they are shown, so there is no row limit), `.txt` / `.md` / `.html` as a document, `.svg` / `.svgz` as a picture (`.gz` files are unpacked first), from any `src` (file, Blob, URL); format from the extension, MIME type or content; UTF-8 / UTF-16 / Windows-1252; editable. Markdown, HTML and SVG are saved back in their own format (CSV and text as `.xlsx` / `.docx`)
 - **Diagrams as code**: `.mmd` (Mermaid), `.puml` (PlantUML), `.dot` / `.gv` (Graphviz) open as a document with the drawing; ` ```mermaid ` / ` ```plantuml ` / ` ```dot ` blocks in Markdown and `<pre class="mermaid">` in HTML are drawn too. Drawn by a built-in layout engine in the worker: no server, no network, no dependency
+- **Math in Markdown**: `$…$` and `$$…$$` TeX formulas are drawn as equations (the browser's own MathML: selectable, read by screen readers, printed); the document stays editable around them and saves each formula back exactly as it was written. Currency (`$5 and $10`), `\$` and code are left alone; a formula that cannot be read shows its source. *Download as* Word gives real Word equations
 - **Code side by side**: Markdown, HTML, SVG and diagram files show their source next to the document (**Code** button); edit it and the document is rebuilt as you type; edit the document and the Markdown / HTML is built again from it
-- **File menu**: new, open (also DOC / XLS / PPT / RTF / OpenDocument / Pages / Keynote / Numbers / Visio / CSV / text / Markdown / HTML / SVG / diagrams), import CSV, rename, download as PDF / HTML / text / CSV, document details, print
+- **Syntax highlighting**: Markdown code blocks are colored by their fence's language (JavaScript / TypeScript / JSX, JSON, Python, CSS, HTML / XML, YAML, shell, SQL, Go, Rust, Java, C / C++ / C#, and more), stay editable, and are saved back with their language and exact code; the colors are only drawn, never stored. Source files (`main.ts`, `script.py`, `config.json`…, or any text with the `language` prop) open in a **code view** with line numbers, in light and dark, editable and saved as plain text. One built-in tokenizer, no dependency ([Features](docs/features.md#syntax-highlighting))
+- **File menu**: new, open (also DOC / XLS / PPT / RTF / OpenDocument / Pages / Keynote / Numbers / Visio / CSV / text / Markdown / HTML / SVG / diagrams / source code), import CSV, rename, download as PDF / HTML / text / CSV, document details, print
 - **Comments**: threads with replies, resolve, edit / delete, @mentions; on DOCX text, XLSX cells and PPTX slides, stored in the file the way Word, Excel and PowerPoint store them
 - **Real-time collaboration**: live edits, avatars, collaborators' cursors, offline edits sync on reconnect
+- **Fonts**: hand the viewer font files (the OFL fallbacks Carlito, Caladea, Liberation, or the originals) and documents are laid out once they are loaded, so lines and pages break as with the fonts the document names ([API](docs/api.md#fonts))
 - **Dark mode and theming**: `theme="dark"` or `"auto"` (follows the OS), or a theme object with design tokens for colors, type and shape ([Theming](docs/theming.md)); documents keep their own colors
 - **Translatable UI**: every text of the bars, menus and dialogs from one typed table; only English bundled by default; German available through an optional import with `de-DE` formatting (see [UI texts](docs/api.md#ui-texts)); any text replaceable through `strings`
+- **Numbers typed in a locale**: `locale="de-DE"` reads `1,5` and `1.234,5` typed into cells and fields (font size, margins); the whole entry or nothing, saved as the number itself, formulas unchanged ([API](docs/api.md#numbers-typed-in-a-locale))
 - **Embed anywhere**: React component, hook, vanilla `mount()`, `<office-viewer>` web component, single `<script>` file
 
 Full list, format coverage and limitations: [Features](docs/features.md).
@@ -105,7 +110,7 @@ The renderers also ship on their own, to show diagrams and Markdown in any page 
 | [`@p10node/mermaid`](packages/mermaid)   | Mermaid → SVG                                                       | 26 KB       |
 | [`@p10node/plantuml`](packages/plantuml) | PlantUML → SVG (no Java)                                            | 29 KB       |
 | [`@p10node/graphviz`](packages/graphviz) | Graphviz DOT → SVG (no WebAssembly)                                 | 16 KB       |
-| [`@p10node/markdown`](packages/markdown) | Markdown → safe HTML, diagram code blocks drawn                     | 39 KB       |
+| [`@p10node/markdown`](packages/markdown) | Markdown → safe HTML, diagrams drawn, code colored, TeX as MathML   | 66 KB       |
 
 ```ts
 import { render } from '@p10node/mermaid'

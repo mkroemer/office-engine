@@ -27,9 +27,12 @@ export const THEME_TOKENS = [
   'status-idle', 'status-live', 'status-busy', 'status-error',
   // paper: pages, slides and sheets (the same in both modes, as documents keep their own colors)
   'page', 'page-ink', 'sheet-ink', 'skeleton', 'ph-border', 'ph-a', 'ph-b', 'ph-ink', 'ph-outline', 'ph-hint',
-  // source editor (Markdown, HTML, diagrams)
+  // source editor and code view (Markdown, HTML, diagrams, source files)
   'src-bg', 'src-gutter', 'src-sel', 'src-font', 'src-comment', 'src-keyword', 'src-string', 'src-operator',
-  'src-number', 'src-heading', 'src-attr', 'src-tag', 'src-meta',
+  'src-number', 'src-heading', 'src-attr', 'src-tag', 'src-meta', 'src-function', 'src-type',
+  // code blocks on the page and printed code (paper: the same in both modes)
+  'code-comment', 'code-keyword', 'code-string', 'code-operator', 'code-number', 'code-attr', 'code-tag', 'code-meta',
+  'code-function', 'code-type',
 ] as const
 
 export type ThemeToken = (typeof THEME_TOKENS)[number]

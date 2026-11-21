@@ -10,7 +10,9 @@ export function inlineSpec(x: Inline): SpecRun {
       if (x.src) return { obj: 'copy', src: x.src, size: x.resized ? [x.w, x.h] : undefined, alt: x.altSet ? (x.alt ?? '') : undefined, rid: x.repl ? x.rid : undefined, cm: x.cm?.length ? x.cm : undefined, ...(x.tc ? { tc: x.tc } : {}) }
       return x.rid ? { obj: 'image', rid: x.rid, w: x.w, h: x.h, alt: x.alt, cm: x.cm?.length ? x.cm : undefined } : { text: '' }
     default:
-      return x.src ? { obj: 'copy', src: x.src, ...(x.tc ? { tc: x.tc } : {}) } : { text: '' }
+      if (x.src) return { obj: 'copy', src: x.src, ...(x.tc ? { tc: x.tc } : {}) }
+      // a pasted formula: made from its TeX
+      return x.t === 'ref' && x.math ? { obj: 'math', math: x.math, ...(x.tc ? { tc: x.tc } : {}) } : { text: '' }
   }
 }
 

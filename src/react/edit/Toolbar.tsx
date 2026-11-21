@@ -21,6 +21,8 @@ import { fontSize } from './format-values'
 import { cssColor } from '../../core/color'
 import { useStrings } from '../strings'
 import { useHostUI, type ButtonProps, type SelectProps } from '../ui'
+import { inputLocale, numberText, parseNumber } from '../../core/number-input'
+import { useLocale } from '../common/locale'
 
 const BORDER_GRID = <path d="M4 4h16v16H4zM12 4v16M4 12h16" strokeDasharray="1.2 2.6" opacity={0.5} strokeWidth={1.4} />
 
@@ -491,9 +493,29 @@ export function Select<T extends string | number>(props: {
   return <Dropdown {...props} />
 }
 
+/** the number typed into a size box, by the rules of `sizeOf` */
+function typedSize(text: string, locale?: string): number | null {
+  if (inputLocale(locale) || !text.includes(',')) return parseNumber(text, locale)
+  const m = /^\s*(\d+),(\d{1,2}|\d{4,})\s*$/.exec(text)
+  return m ? Number(`${m[1]}.${m[2]}`) : null
+}
+
+/**
+ * The size typed into a size box, in half points; null when the whole text is not one (12pt, 1.2.5, empty) and the
+ * box keeps the size it had. With a locale, the locale's rules as for every number typed (12,5 in `de-DE`; not in
+ * `en-US`). Without one, the exception of this box alone: a decimal comma is read as well as a point (12,5 is 12.5,
+ * as since #17), since a size from 1 to 400 needs no grouping; but not a comma that could group thousands (1,234:
+ * three digits after it) and not two (1,2,5). Cells, Page setup and Header & footer keep the rules of no locale.
+ */
+export function sizeOf(text: string, locale?: string) {
+  const pt = typedSize(text, locale)
+  return pt === null ? null : fontSize(pt)
+}
+
 /** Font size box: − [size] + with a list of common sizes (Google Docs style). */
 export function SizeBox(props: { value?: number; placeholder?: number; sizes?: number[]; onChange: (n: number) => void; title?: string; disabled?: boolean }) {
   const sizes = props.sizes ?? SIZES
+  const locale = useLocale()
   const [text, setText] = useState<string | null>(null)
   const draft = useRef<string | null>(null)
   const editText = (value: string | null) => {
@@ -505,11 +527,11 @@ export function SizeBox(props: { value?: number; placeholder?: number; sizes?: n
   const inputRef = useRef<HTMLInputElement>(null)
   const onMouseDownCapture = useDismiss(ref, open, () => setOpen(false))
   const base = props.value ?? props.placeholder ?? 11
-  const set = (n: number) => {
+  const shown = (n: number | undefined) => (n !== undefined ? numberText(n, locale) : '')
+  const set = (n: number | null) => {
     editText(null)
     setOpen(false)
-    const value = fontSize(n)
-    if (value !== null) props.onChange(value)
+    if (n !== null) props.onChange(n)
   }
   // where the focus came from (the document, usually): Enter and Escape go back there, since a plain blur leaves the
   // focus on the page body and a document then has no selection to format
@@ -520,15 +542,16 @@ export function SizeBox(props: { value?: number; placeholder?: number; sizes?: n
     if (to?.isConnected) to.focus({ preventScroll: true })
     else inputRef.current?.blur()
   }
+  // a size that is not one (12pt, 1.2.5, 12,5 in en-US): the box shows the size it had again
   const done = () => {
-    if (draft.current !== null) set(parseFloat(draft.current))
+    if (draft.current !== null) set(sizeOf(draft.current, locale))
     leave()
   }
   const t = useStrings()
   const title = props.title ?? t.toolbar.fontSize
   return (
     <span ref={ref} className="de-size" onMouseDownCapture={onMouseDownCapture}>
-      <ToolButton title={t.toolbar.fontSizeDown} iconName="minus" iconSize={16} extraClass="de-size-step" disabled={props.disabled} onClick={() => set(Math.max(1, Math.ceil(base) - 1))} />
+      <ToolButton title={t.toolbar.fontSizeDown} iconName="minus" iconSize={16} extraClass="de-size-step" disabled={props.disabled} onClick={() => set(fontSize(Math.max(1, Math.ceil(base) - 1)))} />
       <input
         ref={inputRef}
         className="de-size-input"
@@ -536,15 +559,15 @@ export function SizeBox(props: { value?: number; placeholder?: number; sizes?: n
         aria-label={title}
         inputMode="decimal"
         disabled={props.disabled}
-        value={text ?? (props.value !== undefined ? String(props.value) : '')}
-        placeholder={props.placeholder !== undefined ? String(props.placeholder) : ''}
+        value={text ?? shown(props.value)}
+        placeholder={shown(props.placeholder)}
         onFocus={(e) => {
           back.current = e.relatedTarget instanceof HTMLElement ? e.relatedTarget : null
           e.currentTarget.select()
           setOpen(true)
         }}
-        // a decimal comma is a decimal point (12,5 is not 125)
-        onChange={(e) => editText(e.target.value.replace(/,/g, '.').replace(/[^\d.]/g, '').replace(/^(\d*\.\d*)\..*$/, '$1'))}
+        // what is typed, as typed: it is read whole when committed
+        onChange={(e) => editText(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter') {
             e.preventDefault()
@@ -556,22 +579,22 @@ export function SizeBox(props: { value?: number; placeholder?: number; sizes?: n
             leave()
           } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
             e.preventDefault()
-            const cur = parseFloat(text ?? String(base))
+            const cur = (text !== null ? typedSize(text, locale) : null) ?? base
             const next = e.key === 'ArrowUp' ? sizes.find((n) => n > cur) : [...sizes].reverse().find((n) => n < cur)
-            if (next !== undefined) editText(String(next))
+            if (next !== undefined) editText(shown(next))
           }
         }}
         onBlur={() => {
-          if (draft.current !== null) set(parseFloat(draft.current))
+          if (draft.current !== null) set(sizeOf(draft.current, locale))
           setOpen(false)
         }}
       />
-      <ToolButton title={t.toolbar.fontSizeUp} iconName="plus" iconSize={16} extraClass="de-size-step" disabled={props.disabled} onClick={() => set(Math.floor(base) + 1)} />
+      <ToolButton title={t.toolbar.fontSizeUp} iconName="plus" iconSize={16} extraClass="de-size-step" disabled={props.disabled} onClick={() => set(fontSize(Math.floor(base) + 1))} />
       {open && (
         <div className="de-dd-pop de-size-pop" role="listbox" aria-label={title} onMouseDown={keep}>
           {sizes.map((n) => (
-            <div key={n} role="option" aria-selected={n === props.value} className={'de-dd-opt' + (String(n) === (text ?? String(props.value)) ? ' de-dd-hi' : '')} onClick={() => set(n)}>
-              {n}
+            <div key={n} role="option" aria-selected={n === props.value} className={'de-dd-opt' + (shown(n) === (text ?? shown(props.value)) ? ' de-dd-hi' : '')} onClick={() => set(fontSize(n))}>
+              {shown(n)}
             </div>
           ))}
         </div>

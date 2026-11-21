@@ -402,6 +402,31 @@ describe('controller and headless mode', () => {
     expect(v.errors).toEqual([])
   })
 
+  test('xlsx: a sheet switch clears the old grid format and publishes the new grid format', async () => {
+    const v = await viewer({ controller: true, src: 'samples/sample.xlsx', editable: true, headless: true })
+    await v.typeCell('J10', 'First sheet')
+    await v.clickCell('J10')
+    await until(v, 's.format && !s.format.bold')
+    await v.page.evaluate(() => window.__ctl.format({ op: 'toggle', mark: 'bold' }))
+    await until(v, 's.format?.bold')
+    const formats = await v.page.evaluate(() => new Promise<(boolean | null)[]>((resolve) => {
+      const ctl = window.__ctl
+      const seen: (boolean | null)[] = []
+      const off = ctl.subscribe(() => {
+        const { outline, format } = ctl.snapshot()
+        seen.push(format?.bold ?? null)
+        if (outline?.items[1].current && format?.bold === false) {
+          off()
+          resolve(seen)
+        }
+      })
+      ctl.goto(ctl.snapshot().outline!.items[1].id)
+    }))
+    expect(formats).toContain(null)
+    expect(formats.at(-1)).toBe(false)
+    expect(v.errors).toEqual([])
+  })
+
   test('xlsx: the sheets as the outline, no tabs of its own', async () => {
     const v = await viewer({ controller: true, src: 'samples/sample.xlsx', headless: true })
     const { page } = v

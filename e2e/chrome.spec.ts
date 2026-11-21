@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { useBrowser, viewer, type Viewer } from './harness'
+import { docxParas, fromB64, runsOf, useBrowser, viewer, type Viewer } from './harness'
 
 useBrowser()
 
@@ -64,6 +64,25 @@ describe('host-placed controls around a headless viewer', () => {
     await size.fill('20')
     await size.press('Enter')
     await until(v, 's.format && s.format.size === 20')
+    expect(v.errors).toEqual([])
+  })
+
+  test('docx: the host format bar uses the shared German locale for text and typed sizes', async () => {
+    const v = await viewer({ src: 'samples/sample.docx', headless: true, chrome: true, editable: true, onSave: true, texts: 'de' })
+    await until(v, 's.editing')
+    await v.selectText('document')
+    await until(v, 's.format && s.format.size !== 12.5')
+    const size = v.page.locator('#host-chrome').getByLabel('Schriftgröße', { exact: true })
+    await size.fill('12,5')
+    await size.press('Enter')
+    await until(v, 's.format?.size === 12.5')
+    await size.fill('17pt')
+    await size.press('Enter')
+    expect(await size.inputValue()).toBe('12,5')
+    await v.page.evaluate(() => window.__ctl.save())
+    const saved = await v.waitEvent('save')
+    const runs = (await docxParas(fromB64(saved.b64 as string))).flatMap(runsOf)
+    expect(runs.find((r) => r.text === 'document')?.s.sz).toBe(12.5)
     expect(v.errors).toEqual([])
   })
 

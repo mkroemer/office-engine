@@ -39,6 +39,7 @@ export const en = {
     save: 'Save',
     download: 'Download',
     sourceStale: 'Changes made in the document are not in this source: editing it builds the document again from the source.',
+    codeCopied: 'Code copied',
     sourceCopied: 'Source copied',
     cannotCopy: 'Cannot copy here',
     resizeSource: 'Resize the source',
@@ -77,6 +78,7 @@ export const en = {
     mermaid: 'Mermaid diagram',
     plantuml: 'PlantUML diagram',
     graphviz: 'Graphviz diagram',
+    code: 'Source code',
   },
 
   details: {
@@ -125,7 +127,7 @@ export const en = {
     preparing: 'Preparing…',
     /** `what`: what the file is instead, where its first bytes tell (a ZIP archive, an executable, ...) */
     unsupported: (name: string, what?: string) =>
-      `Cannot open “${name}”${what ? ` (it is ${what})` : ''}: supported files are Word, Excel, PowerPoint (also 97-2003), OpenDocument, RTF, Pages, Keynote, Numbers, Visio, CSV, text, Markdown, HTML, SVG, Mermaid, PlantUML and Graphviz (also gzip-compressed: .svgz, .csv.gz)`,
+      `Cannot open “${name}”${what ? ` (it is ${what})` : ''}: supported files are Word, Excel, PowerPoint (also 97-2003), OpenDocument, RTF, Pages, Keynote, Numbers, Visio, CSV, text, Markdown, HTML, SVG, Mermaid, PlantUML, Graphviz and source code (also gzip-compressed: .svgz, .csv.gz)`,
   },
 
   zoom: {
@@ -373,6 +375,10 @@ export const en = {
     commentHint: 'Select a cell to comment on.',
     addSheet: 'Add sheet',
     renameSheet: 'Rename',
+    sheetNameEmpty: 'A sheet name cannot be empty',
+    sheetNameTaken: (name: string) => `A sheet named “${name}” already exists`,
+    sheetNameShortened: (name: string) => `Sheet names have at most 31 characters: shortened to “${name}”.`,
+    sheetNameInvalidChars: 'Sheet names cannot contain \\ / ? * [ ] : — they were replaced by _.',
     duplicateSheet: 'Duplicate sheet',
     moveLeft: 'Move left',
     moveRight: 'Move right',
@@ -507,7 +513,10 @@ export const en = {
 
   source: {
     source: 'Source',
-    lines: (n: number): string => (n === 1 ? 'line' : 'lines'),
+    language: 'Language',
+    lineCount: 'Lines',
+    characterCount: 'Characters',
+    lines: (n: number, locale: string | undefined = undefined) => `${n.toLocaleString(locale)} ${n === 1 ? 'line' : 'lines'}`,
     copy: 'Copy the source',
     download: 'Download the source',
     input: (format: string) => `${format} source`,

@@ -6,7 +6,7 @@ useBrowser()
 
 describe('locale: DOCX', () => {
   test('status, toolbar and page setup in German', async () => {
-    const v = await viewer({ src: 'samples/sample.docx', locale: 'de-DE', editable: true })
+    const v = await viewer({ src: 'samples/sample.docx', texts: 'de', editable: true })
     await v.page.locator('.de-ebar').first().waitFor()
     expect(await v.status()).toMatch(/Seite 1 von \d+/)
     expect(await v.btn('Fett').count()).toBe(1)
