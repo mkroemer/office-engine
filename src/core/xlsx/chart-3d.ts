@@ -690,8 +690,8 @@ export function drawPie3D(svg: Svg, m: ChartModel, g: ChartGroup, box: Box) {
     const fill = pt?.color ?? s.fill ?? '#4472c4'
     const look = pt?.look ?? (pt?.color ? undefined : s.look)
     const face = look ? fillPaint(svg, fill, look) : undefined
-    // slices cut into pieces of at most a quarter turn, each a convex wedge
-    const parts = Math.max(1, Math.ceil(sweep / (Math.PI / 2)))
+    // a slice of more than half the pie cut in two: each piece a convex wedge
+    const parts = Math.max(1, Math.ceil(sweep / Math.PI - 1e-9))
     for (let q = 0; q < parts; q++) {
       const b0 = a + (sweep * q) / parts
       const b1 = a + (sweep * (q + 1)) / parts
