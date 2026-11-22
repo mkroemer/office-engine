@@ -1,3 +1,4 @@
+import type { ChartModel } from '../xlsx/chart'
 /** All lengths in points unless stated otherwise. */
 
 export interface RunStyle {
@@ -122,7 +123,8 @@ export type Inline =
     }
   | { t: 'field'; kind: 'PAGE' | 'NUMPAGES'; s: RunStyle; src?: SrcRef; tc?: TrackMark }
   | { t: 'box'; w: number; h: number; blocks: Block[]; fill?: string; border?: string; src?: SrcRef; tc?: TrackMark }
-  | { t: 'shape'; w: number; h: number; label?: string; src?: SrcRef; tc?: TrackMark }
+  /** `chart`: a chart's model, drawn in place of its label */
+  | { t: 'shape'; w: number; h: number; label?: string; chart?: ChartModel; src?: SrcRef; tc?: TrackMark }
   /**
    * kept whole and written back as it is (an equation, a field result, ruby…); `text` is what it reads as.
    * `math`: a TeX formula (Markdown `$…$` / `$$…$$`), drawn from its TeX and saved back as it was written

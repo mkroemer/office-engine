@@ -860,6 +860,14 @@ export async function readChart(root: XEl | undefined, opts: { theme: Theme; dat
   }
 }
 
+/**
+ * A chart of a Word document or PowerPoint slide: its values are those saved with it (the workbook they come from is
+ * embedded in the file and not read), its colors resolved against the document's theme.
+ */
+export function readSavedChart(root: XEl | undefined, theme: Theme): Promise<ChartModel | null> {
+  return readChart(root, { theme, date1904: on(kid(root, 'date1904')), read: async () => null })
+}
+
 /** a 3D chart's view, its walls and floor; Excel's defaults where the file gives none */
 function viewOf(chart: XEl, groups: ChartGroup[], ctx: ColorCtx): View3D {
   const v = kid(chart, 'view3D')

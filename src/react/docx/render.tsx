@@ -4,6 +4,7 @@ import type { Block, Inline, Paragraph, ParaStyle, RunStyle, Table, TableCell, T
 import { texToMathml, type MNode } from '../../core/math/tex'
 import { safeHref } from '../../core/url'
 import type { DocumentClient } from '../../core/worker/client'
+import { chartUrl } from '../common/chart'
 import { useMediaUrl } from '../common/hooks'
 import { dict } from '../../core/dict'
 import { en, type Strings } from '../strings/en'
@@ -283,7 +284,10 @@ function InlineView({ x, ctx, o, pieces }: { x: Inline; ctx: RenderCtx; o: numbe
           ))}
         </span>
       )
-    case 'shape':
+    case 'shape': {
+      // a chart drawn at its size (pt), else (and while measuring) its label in a box of that size
+      const url = x.chart && !ctx.measuring ? chartUrl(x.chart, (x.w * 96) / 72, (x.h * 96) / 72) : ''
+      if (url) return <img {...obj} src={url} alt={x.label} style={{ width: `${x.w}pt`, height: `${x.h}pt`, verticalAlign: 'bottom', display: 'inline-block' }} draggable={false} />
       return x.label ? (
         <span {...obj} className="de-ph" style={{ width: `${x.w}pt`, height: `${x.h}pt` }}>
           {x.label}
@@ -291,6 +295,7 @@ function InlineView({ x, ctx, o, pieces }: { x: Inline; ctx: RenderCtx; o: numbe
       ) : (
         <span {...obj} />
       )
+    }
   }
 }
 
