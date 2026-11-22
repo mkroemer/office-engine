@@ -142,6 +142,9 @@ const textOf = (m: ChartModel, look: TextLook | undefined) => ({ size: (look?.si
 
 const defIds = new WeakMap<Svg, number>()
 
+/** a pattern's tile: 8 pt, in CSS pixels */
+const PATTERN_TILE = Math.round((8 * 96 * 1000) / 72) / 1000
+
 /** the paint for a fill: its color, or a gradient or pattern defined in the picture */
 function fillPaint(svg: Svg, fill: string | null | undefined, look?: FillLook): string {
   if (!look || fill === null) return fill ?? 'none'
@@ -158,61 +161,49 @@ function fillPaint(svg: Svg, fill: string | null | undefined, look?: FillLook): 
       svg.raw(`<defs><linearGradient id="${id}" x1="${r(x1)}%" y1="${r(y1)}%" x2="${r(x2)}%" y2="${r(y2)}%">${stops}</linearGradient></defs>`)
     }
   } else {
-    svg.raw(`<defs><pattern id="${id}" width="8" height="8" patternUnits="userSpaceOnUse"><rect width="8" height="8" fill="${look.bg}"/>${patternTile(look.preset, look.fg)}</pattern></defs>`)
+    svg.raw(`<defs><pattern id="${id}" width="${PATTERN_TILE}" height="${PATTERN_TILE}" viewBox="0 0 8 8" patternUnits="userSpaceOnUse"><rect width="8" height="8" fill="${look.bg}"/>${patternTile(look.preset, look.fg)}</pattern></defs>`)
   }
   return `url(#${id})`
 }
 
-/** an 8 × 8 Bayer matrix: a pattern of n % fills the cells below n % of 64, spread evenly */
-const BAYER = [0, 32, 8, 40, 2, 34, 10, 42, 48, 16, 56, 24, 50, 18, 58, 26, 12, 44, 4, 36, 14, 46, 6, 38, 60, 28, 52, 20, 62, 30, 54, 22, 3, 35, 11, 43, 1, 33, 9, 41, 51, 19, 59, 27, 49, 17, 57, 25, 15, 47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21]
+/**
+ * DrawingML's preset patterns as Office draws them: 8 × 8 bitmaps (the Windows hatch bitmaps), a row per byte, its high
+ * bit at the left. A cell is a point, so the tile is 8 pt wide.
+ */
+const PATTERNS: Record<string, string> = dict({
+  pct5: '8000000008000000', pct10: '8000080080000800', pct20: '8800220088002200', pct25: '8822882288228822',
+  pct30: 'aa44aa11aa44aa11', pct40: 'aa55aa51aa55aa15', pct50: 'aa55aa55aa55aa55', pct60: 'ee55bb55ee55bb55',
+  pct70: '77dd77dd77dd77dd', pct75: '77ffddff77ffddff', pct80: 'effffeffeffffeff', pct90: 'fffffff7ffffff7f',
+  horz: 'ff00000000000000', vert: '8080808080808080', ltHorz: 'ff000000ff000000', ltVert: '8888888888888888',
+  dkHorz: 'ffff0000ffff0000', dkVert: 'cccccccccccccccc', narHorz: 'ff00ff00ff00ff00', narVert: '5555555555555555',
+  dashHorz: 'f00000000f000000', dashVert: '8080808008080808', cross: 'ff80808080808080',
+  dnDiag: '8040201008040201', upDiag: '0102040810204080', ltDnDiag: '8844221188442211', ltUpDiag: '1122448811224488',
+  dkDnDiag: 'cc663399cc663399', dkUpDiag: '3366cc993366cc99', wdDnDiag: 'c1e070381c0e0783', wdUpDiag: '83070e1c3870e0c1',
+  dashDnDiag: '0000884422110000', dashUpDiag: '0000112244880000', diagCross: '8142241818244281',
+  smCheck: '9966669999666699', lgCheck: 'f0f0f0f00f0f0f0f', smGrid: 'ff888888ff888888', lgGrid: 'ff80808080808080',
+  dotGrid: 'aa00800080008000', smConfetti: '8008400210012004', lgConfetti: 'b130031bd8c00c8d', horzBrick: 'ff808080ff080808',
+  diagBrick: '0102040818244281', solidDmnd: '10387cfe7c381000', openDmnd: '8244281028448201', dotDmnd: '8000220008002200',
+  plaid: 'aa55aa55f0f0f0f0', sphere: '77898f8f7798f8f8', weave: '8854224588142251', divot: '0010081000800180',
+  shingle: '038448300c020101', wave: '001825c0001825c0', trellis: 'ff66ff99ff66ff99', zigZag: '8142241881422418',
+})
 
-/** a preset pattern's foreground in an 8 × 8 tile (DrawingML's `prst` names); one not drawn here is shown at 50 % */
+/** a preset pattern's foreground in its 8 × 8 tile, a run of set bits as one rectangle; one not known is drawn at 50 % */
 function patternTile(preset: string, fg: string): string {
-  const cells = (on: (x: number, y: number) => boolean) => {
-    let s = ''
-    for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) if (on(x, y)) s += `M${x} ${y}h1v1h-1z`
-    return s ? `<path d="${s}" fill="${fg}"/>` : ''
+  const bits = PATTERNS[preset] ?? PATTERNS.pct50
+  let d = ''
+  for (let y = 0; y < 8; y++) {
+    const row = parseInt(bits.slice(y * 2, y * 2 + 2), 16)
+    for (let x = 0; x < 8; ) {
+      if (!(row & (0x80 >> x))) {
+        x++
+        continue
+      }
+      const from = x
+      while (x < 8 && row & (0x80 >> x)) x++
+      d += `M${from} ${y}h${x - from}v1h${from - x}z`
+    }
   }
-  const lines = (d: string, w: number) => `<path d="${d}" stroke="${fg}" stroke-width="${w}" fill="none"/>`
-  const horz = (gap: number, w: number, dash = false) => lines(Array.from({ length: 8 / gap }, (_, k) => `M0 ${k * gap + w / 2}H${dash ? 4 : 8}`).join(''), w)
-  const vert = (gap: number, w: number, dash = false) => lines(Array.from({ length: 8 / gap }, (_, k) => `M${k * gap + w / 2} 0V${dash ? 4 : 8}`).join(''), w)
-  const down = (gap: number, w: number) => lines([-8, ...Array.from({ length: 8 / gap }, (_, k) => k * gap)].map((o) => `M${o} 0L${o + 8} 8`).join(''), w)
-  const up = (gap: number, w: number) => lines([16, ...Array.from({ length: 8 / gap }, (_, k) => 8 + k * gap)].map((o) => `M${o} 0L${o - 8} 8`).join(''), w)
-  const pct = /^pct(\d+)$/.exec(preset)
-  if (pct) return cells((x, y) => BAYER[y * 8 + x] < Math.round((Number(pct[1]) / 100) * 64))
-  switch (preset) {
-    case 'horz': return horz(4, 1)
-    case 'ltHorz': return horz(4, 1)
-    case 'narHorz': return horz(2, 1)
-    case 'dkHorz': return horz(4, 2)
-    case 'dashHorz': return horz(4, 1, true)
-    case 'vert': return vert(4, 1)
-    case 'ltVert': return vert(4, 1)
-    case 'narVert': return vert(2, 1)
-    case 'dkVert': return vert(4, 2)
-    case 'dashVert': return vert(4, 1, true)
-    case 'dnDiag': return down(4, 1)
-    case 'ltDnDiag': return down(4, 1)
-    case 'dkDnDiag': return down(4, 2)
-    case 'wdDnDiag': return down(8, 3)
-    case 'dashDnDiag': return down(8, 1)
-    case 'upDiag': return up(4, 1)
-    case 'ltUpDiag': return up(4, 1)
-    case 'dkUpDiag': return up(4, 2)
-    case 'wdUpDiag': return up(8, 3)
-    case 'dashUpDiag': return up(8, 1)
-    case 'cross':
-    case 'smGrid': return horz(4, 1) + vert(4, 1)
-    case 'lgGrid': return horz(8, 1) + vert(8, 1)
-    case 'diagCross':
-    case 'openDmnd': return down(8, 1) + up(8, 1)
-    case 'smCheck': return cells((x, y) => ((x >> 1) + (y >> 1)) % 2 === 0)
-    case 'lgCheck': return cells((x, y) => ((x >> 2) + (y >> 2)) % 2 === 0)
-    case 'solidDmnd': return `<path d="M4 0L8 4L4 8L0 4z" fill="${fg}"/>`
-    case 'dotGrid': return cells((x, y) => x % 4 === 0 && y % 4 === 0)
-    case 'dotDmnd': return cells((x, y) => (x % 4 === 0 && y % 4 === 0) || (x % 4 === 2 && y % 4 === 2))
-    default: return cells((x, y) => BAYER[y * 8 + x] < 32)
-  }
+  return d ? `<path d="${d}" fill="${fg}"/>` : ''
 }
 
 // ---------------------------------------------------------------- markers and lines

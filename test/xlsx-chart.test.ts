@@ -184,7 +184,9 @@ describe('xlsx charts: looks', () => {
     const patt = '<a:pattFill prst="dkDnDiag"><a:fgClr><a:srgbClr val="C55A11"/></a:fgClr><a:bgClr><a:srgbClr val="FFFFFF"/></a:bgClr></a:pattFill>'
     const { model: pm } = await modelOf(await withChart(colored(patt)))
     expect(pm!.groups[0].series[0].look).toMatchObject({ kind: 'pattern', preset: 'dkDnDiag', fg: '#c55a11', bg: '#ffffff' })
-    expect(renderChart(pm!, 400, 300)).toMatch(/<pattern id="de-fill\d+"[^>]*>.*stroke="#C55A11"/i)
+    // dkDnDiag: 2-cell runs stepping right a cell a row, in an 8 pt tile
+    const tile = /<pattern id="de-fill\d+" width="10.667" height="10.667" viewBox="0 0 8 8"[^>]*><rect[^>]*fill="#ffffff"\/><path d="([^"]*)" fill="#c55a11"\/>/i.exec(renderChart(pm!, 400, 300))
+    expect(tile?.[1].startsWith('M0 0h2v1h-2zM4 0h2v1h-2zM1 1h2v1h-2zM5 1h2v1h-2z')).toBe(true)
   })
 
   test('axis and legend text, gridlines and the plot area in the colors the file gives', async () => {
