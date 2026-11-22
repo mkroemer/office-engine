@@ -12,7 +12,7 @@
 import { dict } from '../dict'
 import { lineHeight, pathData, Svg, textWidth, wrap, type Paint, type Pt } from '../diagram/svg'
 import type { ChartAxis, ChartGroup, ChartModel, ChartSeries, ChartText, FillLook, LineLook, TextLook } from './chart'
-import { SURFACE_BANDS } from './chart'
+import { labelsAt, SURFACE_BANDS } from './chart'
 import { formatValue } from './numfmt'
 
 const PX = 96 / 72
@@ -59,7 +59,10 @@ function highest(xs: readonly number[]): number {
   return m
 }
 
-/** Excel's automatic bounds: zero kept in view unless the values sit far from it, a step of 1, 2 or 5 × 10ⁿ */
+/**
+ * Excel's automatic bounds: zero kept in view unless the values sit close together far from it, 5 % of the span left
+ * past the values, and the smallest step of 1, 2 or 5 × 10ⁿ that keeps the axis to `ticks` intervals (at most 10)
+ */
 export function niceScale(lo: number, hi: number, opts: { min?: number; max?: number; major?: number; zero?: boolean; ticks?: number } = {}): Scale {
   if (!Number.isFinite(lo) || !Number.isFinite(hi)) (lo = 0), (hi = 1)
   if (lo > hi) [lo, hi] = [hi, lo]
@@ -70,10 +73,17 @@ export function niceScale(lo: number, hi: number, opts: { min?: number; max?: nu
   if (opts.major !== undefined && !(Number.isFinite(opts.major) && opts.major > 0)) opts.major = undefined
   if (opts.min !== undefined && opts.max !== undefined && opts.max <= opts.min) opts.max = undefined
   if (opts.zero !== false) {
-    // values all alike keep zero in view too, so bars of them have a height
-    if (lo > 0 && (lo < (hi * 5) / 6 || lo === hi)) lo = 0
-    if (hi < 0 && (hi > (lo * 5) / 6 || lo === hi)) hi = 0
+    // values close together far from zero: the axis starts half their spread below them; values all alike keep zero
+    // in view, so bars of them have a height
+    if (lo > 0 && lo > (hi * 5) / 6 && lo !== hi) lo -= (hi - lo) / 2
+    else if (lo > 0) lo = 0
+    if (hi < 0 && hi < (lo * 5) / 6 && lo !== hi) hi += (hi - lo) / 2
+    else if (hi < 0) hi = 0
   }
+  // room past the values, on the sides that are not zero: the largest value is not left on the top line
+  const span = hi - lo || Math.abs(hi) * 0.1 || 1
+  if (opts.max === undefined && hi !== 0) hi += span * 0.05
+  if (opts.min === undefined && lo !== 0) lo -= span * 0.05
   if (opts.min !== undefined) lo = opts.min
   if (opts.max !== undefined) hi = opts.max
   // one bound fixed past all the values: the other one moves to give the axis a span
@@ -82,22 +92,27 @@ export function niceScale(lo: number, hi: number, opts: { min?: number; max?: nu
     else if (opts.min === undefined) lo = hi
   }
   if (lo === hi) hi = lo === 0 ? 1 : lo + Math.abs(lo) * 0.1
-  const want = Math.max(2, opts.ticks ?? 6)
+  const most = Math.min(10, Math.max(1, Math.floor(opts.ticks ?? 6)))
   let step = opts.major
   if (!step || step <= 0) {
-    const rough = (hi - lo) / want
+    const rough = (hi - lo) / most
     const mag = 10 ** Math.floor(Math.log10(rough))
-    step = ([1, 2, 5, 10].find((m) => m * mag >= rough) ?? 10) * mag
+    step = ([1, 2, 5, 10].find((m) => m * mag >= rough * 0.995) ?? 10) * mag
   }
-  let min = opts.min ?? Math.floor(lo / step + 1e-9) * step
+  const min = opts.min ?? Math.floor(lo / step + 1e-9) * step
   let max = opts.max ?? Math.ceil(hi / step - 1e-9) * step
-  // the largest value is not left on the top line
-  if (opts.max === undefined && max === hi && hi !== 0 && hi > 0) max += step
-  if (opts.min === undefined && min === lo && lo < 0) min -= step
   if (max <= min) max = min + step
   const ticks: number[] = []
   for (let k = 0, v = min; v <= max + step * 1e-6 && k < 200; k++, v = min + k * step) ticks.push(Math.abs(v) < step * 1e-9 ? 0 : v)
   return { min, max, ticks }
+}
+
+/**
+ * How many intervals an automatic value axis of `len` px may have, as Excel allows them: labels of `size` px about
+ * 1.6 times their size apart up the side, a label's width or so apart along the bottom
+ */
+function intervals(len: number, size: number, across: boolean): number {
+  return Math.max(1, Math.floor(len / (across ? Math.max(40, size * 4.5) : size * 1.6)))
 }
 
 function logScale(lo: number, hi: number, base: number, opts: { min?: number; max?: number }): Scale {
@@ -363,7 +378,6 @@ function drawRing(svg: Svg, m: ChartModel, g: ChartGroup, s: ChartSeries, o: { c
   const total = vals.reduce((a, b) => a + b, 0)
   if (!total) return
   let a = ((g.firstSliceAng - 90) * Math.PI) / 180
-  const lt = textOf(m, s.labels?.text)
   const n = (x: number) => Math.round(x * 100) / 100
   vals.forEach((v, k) => {
     if (!v) return
@@ -394,17 +408,20 @@ function drawRing(svg: Svg, m: ChartModel, g: ChartGroup, s: ChartSeries, o: { c
         : `M${n(ox)} ${n(oy)} L${n(p1.x)} ${n(p1.y)} A${n(r)} ${n(r)} 0 ${large} 1 ${n(p2.x)} ${n(p2.y)} Z`
       svg.path(d, { fill, stroke, sw })
     }
-    if (s.labels) {
+    const l = labelsAt(s, k)
+    if (l) {
       const parts: string[] = []
-      if (s.labels.series) parts.push(s.name)
-      if (s.labels.category) parts.push(s.cats[k] ?? '')
-      if (s.labels.value) parts.push(fmt(s.values[k]!, s.labels.format ?? s.format, m.date1904))
-      if (s.labels.percent) parts.push(fmt(v / total, s.labels.format && s.labels.format.includes('%') ? s.labels.format : '0%', m.date1904))
-      const lr = outside ? r * 1.15 : rin ? (r + rin) / 2 : r * 0.65
+      if (l.series) parts.push(s.name)
+      if (l.category) parts.push(s.cats[k] ?? '')
+      if (l.value) parts.push(fmt(s.values[k]!, l.format ?? s.format, m.date1904))
+      if (l.percent) parts.push(fmt(v / total, l.format && l.format.includes('%') ? l.format : '0%', m.date1904))
+      const out = outside || l.pos === 'outEnd'
+      const lr = out ? r * 1.15 : l.pos === 'inEnd' ? r * 0.8 : rin ? (r + rin) / 2 : r * 0.65
       const p = at(lr, mid)
-      const anchor = outside ? (Math.cos(mid) >= 0 ? 'start' : 'end') : 'middle'
-      const color = s.labels.text?.color ?? (outside ? m.textColor : '#ffffff')
-      svg.text(p.x, p.y, parts.join(s.labels.sep ?? (outside ? '; ' : '\n')).split('\n'), { size: lt.size, color, bold: lt.bold, anchor })
+      const anchor = out ? (Math.cos(mid) >= 0 ? 'start' : 'end') : 'middle'
+      const lk = textOf(m, l.text)
+      const color = l.text?.color ?? (out ? m.textColor : '#ffffff')
+      svg.text(p.x, p.y, parts.join(l.sep ?? (out ? '; ' : '\n')).split('\n'), { size: lk.size, color, bold: lk.bold, anchor })
     }
     a += sweep
   })
@@ -563,7 +580,7 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
     const whole = on.every((g) => g.grouping === 'percentStacked')
     const scale = a?.logBase
       ? logFor(on.flatMap((g) => g.series.flatMap((s) => s.values)), a.logBase, a)
-      : niceScale(lo, hi, { min: a?.min ?? (whole ? lo : undefined), max: a?.max ?? (whole ? hi : undefined), major: a?.major, ticks: Math.round(valLen / 40) })
+      : niceScale(lo, hi, { min: a?.min ?? (whole ? lo : undefined), max: a?.max ?? (whole ? hi : undefined), major: a?.major, ticks: intervals(valLen, textOf(m, a?.text).size, horizontal) })
     const f = a?.format ?? (pct ? '0%' : on[0]?.series.find((s) => s.format)?.format)
     plans.set(id, { axis: a ?? fallbackAxis(id, horizontal ? 'b' : 'l'), scale: { ...scale, format: f }, labels: scale.ticks.map((t) => fmt(t, f, m.date1904)) })
   }
@@ -581,7 +598,7 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
     if (a?.logBase) sc = logFor(xs, a.logBase, a)
     else {
       const [lo, hi] = on.some((x) => x.type === 'bubble') ? bubbleRoom(lowest(xs), highest(xs)) : [lowest(xs), highest(xs)]
-      sc = niceScale(lo, hi, { min: a?.min, max: a?.max, major: a?.major, ticks: Math.round(area.w / 70) })
+      sc = niceScale(lo, hi, { min: a?.min, max: a?.max, major: a?.major, ticks: intervals(area.w, textOf(m, a?.text).size, true) })
     }
     // linked to its source: the format of the X values, never the Y values'
     const f = a?.format ?? on.flatMap((x) => x.series).find((s) => s.xFormat)?.xFormat
@@ -604,10 +621,27 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
   const valW = (p: AxisPlan | undefined) => (shows(p) ? highest(p!.labels.map((l) => textWidth(l, look(p!.axis).size, look(p!.axis).bold))) + 6 : 0)
   const catW = showCats ? Math.min(area.w * 0.35, highest(cats.map((c) => textWidth(c, catT.size, catT.bold)))) + 6 : 0
   const titleH = (a: ChartAxis | undefined) => (a?.title && !a.deleted ? lineHeight(a.title.size * PX) + 4 : 0)
-  // category labels too wide to stand side by side are tilted by 45°, as Excel does
+  // category labels at the angle the file gives; else flat where they fit, wrapped at their spaces where that makes
+  // them fit, and tilted by 45° where neither does, as Excel does
   const catTextW = showCats ? highest(cats.map((c) => textWidth(c, catT.size, catT.bold))) : 0
-  const tilt = showCats && !horizontal && catTextW + 2 > (area.w * 0.85) / n
-  const catBottom = tilt ? Math.min(area.h * 0.4, catTextW * Math.SQRT1_2 + catLh) : catLh + 4
+  const room = (area.w * 0.85) / n
+  let angle = 0
+  let wrapped: string[][] | null = null
+  if (showCats && !horizontal) {
+    if (catAxis?.rot !== undefined) angle = catAxis.rot
+    else if (catTextW + 2 > room) {
+      const ws = cats.map((c) => wrap([c], Math.max(8, room - 2), catT.size, catT.bold))
+      const widest = highest(ws.flatMap((l) => l.map((x) => textWidth(x, catT.size, catT.bold))))
+      if (widest + 2 <= room && highest(ws.map((l) => l.length)) * catLh <= area.h * 0.4) wrapped = ws
+      else angle = -45
+    }
+  }
+  const rad = (Math.abs(angle) * Math.PI) / 180
+  const catBottom = angle
+    ? Math.min(area.h * 0.4, catTextW * Math.sin(rad) + catLh * Math.cos(rad)) + 4
+    : wrapped
+      ? highest(wrapped.map((l) => l.length)) * catLh + 4
+      : catLh + 4
   let inner: Box
   if (fixed) inner = fixed
   else {
@@ -686,19 +720,24 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
       if (shows(xPlan)) svg.text(x, inner.y + inner.h + 4 + lineHeight(t.size) / 2, xPlan.labels[k], { size: t.size, color: t.color, bold: t.bold, anchor: 'middle' })
     }
   }
-  // category labels: flat, tilted where they do not fit flat, and every k-th where they overlap even so
+  // category labels: flat, wrapped or turned, and every k-th where they overlap even so
   if (showCats) {
-    const space = horizontal || tilt ? catLh * (tilt ? Math.SQRT2 : 1) : catTextW + 2
+    // wrapped labels were made to fit their categories: all of them are shown
+    const space = horizontal ? catLh : angle ? catLh / Math.max(0.2, Math.sin(rad)) : wrapped ? 0 : catTextW + 2
     const every = Math.max(1, Math.ceil(space / Math.max(1, band)))
     const y0 = inner.y + inner.h + 4
     const o = { size: catT.size, color: catT.color, bold: catT.bold }
     cats.forEach((c, k) => {
       if (k % every) return
       if (horizontal) svg.text(inner.x - 4, catMid(k), c, { ...o, anchor: 'end' })
-      else if (tilt) {
+      else if (angle) {
+        // turned about its end next to the axis: a label turned back (counterclockwise) ends there, one turned
+        // forward starts there
         const x = catMid(k)
-        svg.raw(`<g transform="rotate(-45 ${Math.round(x)} ${Math.round(y0)})">`).text(x, y0, c, { ...o, anchor: 'end' }).raw('</g>')
-      } else svg.text(catMid(k), y0 + catLh / 2, c, { ...o, anchor: 'middle' })
+        const y = y0 + (catLh / 2) * Math.cos(rad)
+        svg.raw(`<g transform="rotate(${Math.round(angle * 100) / 100} ${Math.round(x)} ${Math.round(y)})">`).text(x, y, c, { ...o, anchor: angle < 0 ? 'end' : 'start' }).raw('</g>')
+      } else if (wrapped) svg.text(catMid(k), y0 + (wrapped[k].length * catLh) / 2, wrapped[k], { ...o, anchor: 'middle' })
+      else svg.text(catMid(k), y0 + catLh / 2, c, { ...o, anchor: 'middle' })
     })
   }
   // the category axis line, where it crosses the value axis: zero (or the bound nearest it), or where the file says
@@ -741,7 +780,7 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
   for (const g of [...groups].sort((a, b) => order(a) - order(b))) {
     const p = plans.get(g.axIds[1]) ?? plans.get(primary)
     if (!p) continue
-    if (g.type === 'bar') drawBars(svg, m, g, p, { valPos, catMid, band, horizontal, size, base: crossOf(p) })
+    if (g.type === 'bar') drawBars(svg, m, g, p, { valPos, catMid, band, horizontal, flip: horizontal !== catReverse, size, base: crossOf(p) })
     else if (g.type === 'area') drawArea(svg, g, p, { valPos, catMid, base: crossOf(p) })
     else if (g.type === 'line') drawLines(svg, m, g, p, { valPos, catMid, size })
     else if (g.type === 'stock') drawStock(svg, m, g, p, { valPos, catMid, band, size })
@@ -779,7 +818,8 @@ interface Geo {
 }
 
 function label(svg: Svg, m: ChartModel, s: ChartSeries, k: number, v: number, x: number, y: number, anchor: 'start' | 'middle' | 'end' = 'middle', color?: string) {
-  const l = s.labels!
+  const l = labelsAt(s, k)
+  if (!l) return
   const parts: string[] = []
   if (l.series) parts.push(s.name)
   if (l.category) parts.push(s.cats[k] ?? '')
@@ -794,7 +834,7 @@ function baseline(s: Scale): number {
   return Math.min(Math.max(0, s.min), s.max)
 }
 
-function drawBars(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo & { band: number; horizontal: boolean; size: number; base: number }) {
+function drawBars(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo & { band: number; horizontal: boolean; flip: boolean; size: number; base: number }) {
   const { valPos, catMid, band, horizontal } = geo
   const stacked = isStacked(g)
   const n = stacked ? 1 : g.series.length
@@ -823,7 +863,9 @@ function drawBars(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo 
         else negSum = to
       }
       const off = stacked ? 0 : i * w * (1 - ov)
-      const c0 = catMid(k) - total / 2 + off
+      // the series of a cluster follow the category axis' direction: the first one nearest its start (a horizontal
+      // bar chart's bottom)
+      const c0 = geo.flip ? catMid(k) + total / 2 - off - w : catMid(k) - total / 2 + off
       const a = valPos(p, from)
       const b = valPos(p, to)
       const pt = s.points[k]
@@ -831,12 +873,20 @@ function drawBars(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo 
       const paint: Paint = { fill, stroke: s.line?.color ?? (raw < 0 && s.invertIfNegative ? (s.fill ?? undefined) : undefined), sw: s.line ? Math.max(0.75, s.line.width * PX) : 1, dash: s.line ? dashOf(s.line.dash, s.line.width) : undefined }
       if (horizontal) svg.rect(Math.min(a, b), c0, Math.abs(b - a), w, paint)
       else svg.rect(c0, Math.min(a, b), w, Math.abs(b - a), paint)
-      if (s.labels) {
-        const mid = (a + b) / 2
-        const inside = stacked || s.labels.pos === 'ctr' || s.labels.pos === 'inEnd' || s.labels.pos === 'inBase'
-        const lh = lineHeight(textOf(m, s.labels.text).size)
-        if (horizontal) label(svg, m, s, k, raw, inside ? mid : Math.max(a, b) + 4, c0 + w / 2, inside ? 'middle' : 'start', inside ? '#ffffff' : undefined)
-        else label(svg, m, s, k, raw, c0 + w / 2, inside ? mid : Math.min(a, b) - lh / 2, 'middle', inside ? '#ffffff' : undefined)
+      const l = labelsAt(s, k)
+      if (l) {
+        // a clustered bar's label sits past its end unless the file places it; a stacked one's in its middle
+        const pos = l.pos ?? (stacked ? 'ctr' : 'outEnd')
+        const t = textOf(m, l.text)
+        const inside = pos !== 'outEnd'
+        // along the bar: a and b are its base and end; dir points from the base to the end
+        const dir = Math.sign(b - a) || (horizontal ? 1 : -1)
+        const pad = 4
+        const half = horizontal ? textWidth(fmt(raw, l.format ?? s.format, m.date1904), t.size, t.bold) / 2 : lineHeight(t.size) / 2
+        const at = pos === 'outEnd' ? b + dir * (pad + half) : pos === 'inEnd' ? b - dir * (pad + half) : pos === 'inBase' ? a + dir * (pad + half) : (a + b) / 2
+        const color = inside ? '#ffffff' : undefined
+        if (horizontal) label(svg, m, s, k, raw, at, c0 + w / 2, 'middle', color)
+        else label(svg, m, s, k, raw, c0 + w / 2, at, 'middle', color)
       }
     })
   }

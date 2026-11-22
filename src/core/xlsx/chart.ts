@@ -69,6 +69,8 @@ export interface DataLabels {
   format?: string
   sep?: string
   text?: TextLook
+  /** points with labels of their own (`c:dLbl`), by index; null: that point shows none */
+  points?: Record<number, DataLabels | null>
 }
 
 export interface ChartPoint {
@@ -80,6 +82,8 @@ export interface ChartPoint {
 
 export interface ChartSeries {
   name: string
+  /** the name is Excel's own ("Series1"): the file gives the series none */
+  unnamed?: boolean
   /** category labels (bar, line, area, pie) */
   cats: string[]
   /** x values (scatter, bubble) */
@@ -165,6 +169,8 @@ export interface ChartAxis {
   labels: boolean
   /** the tick labels' own look */
   text?: TextLook
+  /** the tick labels' angle the file fixes, degrees clockwise; undefined: Excel's own choice */
+  rot?: number
   title?: ChartText
   crossAx: string
   crosses: 'autoZero' | 'min' | 'max'
@@ -236,15 +242,27 @@ function richText(el: XEl | undefined, ctx: ColorCtx, defSize: number, defBold: 
   const paras = kids(rich, 'p')
   const text = paras.map((p) => kids(p, 'r').map((r) => textOf(kid(r, 't'))).join('') + kids(p, 'fld').map((f) => textOf(kid(f, 't'))).join('')).join('\n').trim()
   if (!text) return undefined
-  const rPr = kid(kids(paras[0], 'r')[0], 'rPr') ?? kid(kid(paras[0], 'pPr'), 'defRPr')
-  return { text, ...runLook(rPr, ctx, defSize, defBold) }
+  // the first run's own look over its paragraph's defaults (`a:pPr/a:defRPr`), over the body's (`a:lstStyle`)
+  const para = kid(kid(paras[0], 'pPr'), 'defRPr')
+  const list = kid(kid(kid(rich, 'lstStyle'), 'lvl1pPr'), 'defRPr')
+  const look = runLook(list, ctx, defSize, defBold)
+  const own = runLook(kid(kids(paras[0], 'r')[0], 'rPr'), ctx, 0, defBold)
+  const mid = runLook(para, ctx, 0, defBold)
+  return {
+    text,
+    size: own.size || mid.size || look.size,
+    bold: own.boldGiven ?? mid.boldGiven ?? look.boldGiven ?? defBold,
+    color: own.color ?? mid.color ?? look.color,
+  }
 }
 
 function runLook(rPr: XEl | undefined, ctx: ColorCtx, defSize: number, defBold: boolean) {
   const sz = num(rPr?.a.sz)
+  const boldGiven = rPr?.a.b !== undefined ? rPr.a.b === '1' || rPr.a.b === 'true' : undefined
   return {
     size: sz ? sz / 100 : defSize,
-    bold: rPr?.a.b !== undefined ? rPr.a.b === '1' || rPr.a.b === 'true' : defBold,
+    bold: boldGiven ?? defBold,
+    boldGiven,
     color: safe(colorOf(kid(rPr, 'solidFill'), ctx)),
   }
 }
@@ -254,7 +272,9 @@ const safe = (c: string | undefined) => (c && cssColor(c) ? c : undefined)
 /** a text body's default run size and look (`c:txPr`) */
 function txLook(el: XEl | undefined, ctx: ColorCtx) {
   const rPr = kid(kid(kids(kid(el, 'txPr'), 'p')[0], 'pPr'), 'defRPr')
-  return rPr ? runLook(rPr, ctx, 0, false) : undefined
+  if (!rPr) return undefined
+  const { size, bold, color } = runLook(rPr, ctx, 0, false)
+  return { size, bold, color }
 }
 
 /** the text look an element's `c:txPr` gives (size 0 there: none given), or undefined */
@@ -388,16 +408,45 @@ function ownLine(spPr: XEl | undefined, ctx: ColorCtx, defWidth: number): LineLo
 
 function labelsOf(el: XEl | undefined, ctx: ColorCtx): DataLabels | undefined {
   if (!el || on(kid(el, 'delete'))) return undefined
-  const l: DataLabels = {
-    value: on(kid(el, 'showVal')),
-    percent: on(kid(el, 'showPercent')),
-    category: on(kid(el, 'showCatName')),
-    series: on(kid(el, 'showSerName')),
-    pos: val(kid(el, 'dLblPos')),
-    format: kid(el, 'numFmt')?.a.formatCode,
-    sep: textOf(kid(el, 'separator')) || undefined,
-    text: textLookOf(el, ctx),
+  const l = labelOf(el, ctx, undefined)
+  // a point's own label (`c:dLbl`) over the series': shown, hidden or placed elsewhere
+  const points: Record<number, DataLabels | null> = {}
+  for (const d of kids(el, 'dLbl')) {
+    const k = num(val(kid(d, 'idx')), -1)!
+    if (k < 0 || !Number.isInteger(k)) continue
+    const own = on(kid(d, 'delete')) ? null : labelOf(d, ctx, l)
+    points[k] = own && (own.value || own.percent || own.category || own.series) ? own : null
   }
+  const shown = l.value || l.percent || l.category || l.series
+  if (Object.keys(points).length) return { ...l, points }
+  return shown ? l : undefined
+}
+
+/** a `c:dLbls` or `c:dLbl` element's labels, what it leaves out taken from `under` */
+function labelOf(el: XEl, ctx: ColorCtx, under: DataLabels | undefined): DataLabels {
+  const flag = (n: string, def: boolean) => (kid(el, n) ? on(kid(el, n)) : def)
+  const text = textLookOf(el, ctx) ?? under?.text
+  const format = kid(el, 'numFmt')?.a.formatCode ?? under?.format
+  const sep = textOf(kid(el, 'separator')) || under?.sep
+  const pos = val(kid(el, 'dLblPos')) ?? under?.pos
+  return {
+    value: flag('showVal', under?.value ?? false),
+    percent: flag('showPercent', under?.percent ?? false),
+    category: flag('showCatName', under?.category ?? false),
+    series: flag('showSerName', under?.series ?? false),
+    ...(pos ? { pos } : {}),
+    ...(format ? { format } : {}),
+    ...(sep ? { sep } : {}),
+    ...(text ? { text } : {}),
+  }
+}
+
+/** the labels point `k` of a series shows: its own, else the series'; undefined where it shows none */
+export function labelsAt(s: { labels?: DataLabels }, k: number): DataLabels | undefined {
+  const l = s.labels
+  if (!l) return undefined
+  const own = l.points?.[k]
+  if (own !== undefined) return own ?? undefined
   return l.value || l.percent || l.category || l.series ? l : undefined
 }
 
@@ -492,7 +541,8 @@ interface SeriesCtx {
 async function seriesOf(ser: XEl, i: number, type: ChartType, varyColors: boolean, sc: SeriesCtx): Promise<ChartSeries> {
   const { ctx, read, plotVisOnly, date1904, style } = sc
   const tx = await source(kid(ser, 'tx'), read)
-  const name = tx?.values.filter((x) => x !== null && x !== '').join(' ') || textOf(kid(kid(ser, 'tx'), 'v')) || `Series${num(val(kid(ser, 'idx')), i)! + 1}`
+  const given = tx?.values.filter((x) => x !== null && x !== '').join(' ') || textOf(kid(kid(ser, 'tx'), 'v'))
+  const name = given || `Series${num(val(kid(ser, 'idx')), i)! + 1}`
   const scatter = type === 'scatter' || type === 'bubble'
   const catSrc = await source(kid(ser, scatter ? 'xVal' : 'cat'), read)
   const valSrc = await source(kid(ser, scatter ? 'yVal' : 'val'), read)
@@ -507,8 +557,10 @@ async function seriesOf(ser: XEl, i: number, type: ChartType, varyColors: boolea
   }
   let cats = (catSrc?.values ?? []).map(catText)
   let catValues = !scatter && catSrc ? catSrc.values.map(toNum) : undefined
-  // a scatter series without X values is numbered 1, 2, 3, ... (left undefined); with them, a missing one leaves a gap
-  let xs = scatter && catSrc ? catSrc.values.map(toNum) : undefined
+  // a scatter series without X values, or with X values that are text, is numbered 1, 2, 3, ... (left undefined), as
+  // Excel does; with numbers, a missing one leaves a gap
+  const textX = !!catSrc?.values.some((v) => v !== null && v !== '' && toNum(v) === null)
+  let xs = scatter && catSrc && !textX ? catSrc.values.map(toNum) : undefined
   // hidden rows / columns are left out where the chart shows visible cells only
   const hidden = valSrc?.hidden
   // the file's point index → the index among the points shown, when hidden ones are left out
@@ -577,6 +629,7 @@ async function seriesOf(ser: XEl, i: number, type: ChartType, varyColors: boolea
   if (explosion) values.forEach((_, k) => (points[k] = { explosion, ...points[k] }))
   return {
     name,
+    ...(given ? {} : { unnamed: true }),
     cats,
     xs,
     ...(scatter && catSrc?.format ? { xFormat: catSrc.format } : {}),
@@ -591,8 +644,19 @@ async function seriesOf(ser: XEl, i: number, type: ChartType, varyColors: boolea
     smooth: on(kid(ser, 'smooth')),
     invertIfNegative: on(kid(ser, 'invertIfNegative')),
     points,
-    labels: labelsOf(kid(ser, 'dLbls'), ctx),
+    labels: shownLabels(labelsOf(kid(ser, 'dLbls'), ctx), shownAt),
   }
+}
+
+/** a series' labels with its points' own ones moved to their places among the points shown (hidden ones left out) */
+function shownLabels(l: DataLabels | undefined, shownAt: ((k: number) => number | undefined) | undefined): DataLabels | undefined {
+  if (!l?.points || !shownAt) return l
+  const points: Record<number, DataLabels | null> = {}
+  for (const [k, v] of Object.entries(l.points)) {
+    const at = shownAt(Number(k))
+    if (at !== undefined) points[at] = v
+  }
+  return { ...l, points }
 }
 
 function axisOf(el: XEl, ctx: ColorCtx, defSize: number): ChartAxis {
@@ -603,7 +667,11 @@ function axisOf(el: XEl, ctx: ColorCtx, defSize: number): ChartAxis {
   const gridLine = grid ? ownLine(kid(grid, 'spPr'), ctx, 0.75) : undefined
   const axLine = ownLine(kid(el, 'spPr'), ctx, 0.75)
   const text = textLookOf(el, ctx)
+  // -60000000 is the file's word for "as Excel sees fit"
+  const rotRaw = num(kid(kid(el, 'txPr'), 'bodyPr')?.a.rot)
+  const rot = rotRaw !== undefined && rotRaw !== -60000000 && Number.isFinite(rotRaw) ? Math.max(-90, Math.min(90, rotRaw / 60000)) : undefined
   return {
+    ...(rot !== undefined ? { rot } : {}),
     ...(gridLine !== undefined ? { grid: gridLine } : {}),
     ...(axLine !== undefined ? { line: axLine } : {}),
     ...(text ? { text } : {}),
@@ -701,13 +769,13 @@ export async function readChart(root: XEl | undefined, opts: { theme: Theme; dat
   }
   if (!groups.length || !groups.some((g) => g.series.length)) return null
   const axes = plot.c.filter((a) => a.n === 'catAx' || a.n === 'valAx' || a.n === 'dateAx' || a.n === 'serAx').map((a) => axisOf(a, ctx, fontSize))
-  // a title without text of its own is Excel's automatic one: the series' name for one series, else "Chart Title"; a chart
-  // of one series without a title element has that automatic title too unless it was deleted
+  // a title without text of its own is Excel's automatic one: the name of a lone series that has one, else "Chart Title";
+  // a chart of one series without a title element has that automatic title too unless it was deleted
   const single = groups.length === 1 && groups[0].series.length === 1
   const titleEl = kid(chart, 'title')
-  const auto = (): ChartText => ({ text: single ? groups[0].series[0].name : 'Chart Title', size: fontSize * 1.4, bold: false, ...txLook(titleEl, ctx) })
+  const auto = (): ChartText => ({ text: single && !groups[0].series[0].unnamed ? groups[0].series[0].name : 'Chart Title', size: fontSize * 1.4, bold: false, ...txLook(titleEl, ctx) })
   let title = titleEl ? (richText(titleEl, ctx, fontSize * 1.4, false) ?? (await referencedText(titleEl, ctx, src, fontSize * 1.4)) ?? auto()) : undefined
-  if (!titleEl && single && !on(kid(chart, 'autoTitleDeleted')) && groups[0].type !== 'scatter') title = auto()
+  if (!titleEl && single && !groups[0].series[0].unnamed && !on(kid(chart, 'autoTitleDeleted')) && groups[0].type !== 'scatter') title = auto()
   if (title) {
     if (!title.size) title.size = fontSize * 1.4
     title.color ??= textColor

@@ -7,6 +7,7 @@ import { rebuildZip } from '../src/core/zipwrite'
 import type { SheetDrawing } from '../src/core/xlsx/drawings'
 import type { ChartModel } from '../src/core/xlsx/chart'
 import { niceScale, renderChart } from '../src/core/xlsx/chart-svg'
+import { labelsAt } from '../src/core/xlsx/chart'
 
 const RELS = 'http://schemas.openxmlformats.org/package/2006/relationships'
 const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
@@ -612,5 +613,86 @@ describe('xlsx charts: hostile input', () => {
       expect(s.ticks.length).toBeGreaterThan(1)
       expect(s.ticks.every(Number.isFinite)).toBe(true)
     }
+  })
+})
+
+describe('xlsx charts: as Excel draws them', () => {
+  test('automatic bounds leave 5 % of the span past the values, in as many steps as the axis has room for', () => {
+    expect(niceScale(1, 4, { ticks: 10 })).toMatchObject({ min: 0, max: 4.5 })
+    expect(niceScale(1, 4, { ticks: 10 }).ticks).toHaveLength(10)
+    expect(niceScale(-0.185, 0.194, { ticks: 10 })).toMatchObject({ min: -0.25, max: 0.25 })
+    expect(niceScale(0, 13, { ticks: 7 })).toMatchObject({ min: 0, max: 14, ticks: [0, 2, 4, 6, 8, 10, 12, 14] })
+    // values close together far from zero: the axis starts below them, not at zero
+    expect(niceScale(95, 100, { ticks: 10 }).min).toBeGreaterThan(90)
+  })
+
+  test("a title's size, weight and color from its paragraph's defaults, under the run's own", async () => {
+    const titleXml = '<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:pPr><a:defRPr sz="1600" b="1"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:defRPr></a:pPr><a:r><a:rPr lang="en-US" sz="1100"/><a:t>Big</a:t></a:r></a:p></c:rich></c:tx></c:title>'
+    const { model } = await modelOf(await withChart(CLUSTERED, { titleXml }))
+    expect(model!.title).toMatchObject({ text: 'Big', size: 11, bold: true, color: '#ff0000' })
+  })
+
+  test('an automatic title is a lone series\' own name, else "Chart Title"; none without a title element', async () => {
+    const lone = (tx: string) => `<c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/><c:order val="0"/>${tx}<c:val>${numRef('Data!$B$2:$B$4', [1, 1, 1])}</c:val></c:ser><c:axId val="1"/><c:axId val="2"/></c:barChart>${AXES}`
+    const titleXml = '<c:title><c:overlay val="0"/></c:title>'
+    expect((await modelOf(await withChart(lone(''), { titleXml }))).model!.title?.text).toBe('Chart Title')
+    expect((await modelOf(await withChart(lone(`<c:tx>${strRef('Data!$B$1', ['x'])}</c:tx>`), { titleXml }))).model!.title?.text).toBe('Sales')
+    expect((await modelOf(await withChart(lone('')))).model!.title).toBeUndefined()
+  })
+
+  test('a scatter series whose X values are text is numbered 1, 2, 3', async () => {
+    const plot = `<c:scatterChart><c:scatterStyle val="lineMarker"/><c:ser><c:idx val="0"/><c:order val="0"/><c:xVal>${strRef('Data!$A$2:$A$4', ['x', 'y', 'z'])}</c:xVal><c:yVal>${numRef('Data!$B$2:$B$4', [1, 2, 3])}</c:yVal></c:ser><c:axId val="1"/><c:axId val="2"/></c:scatterChart><c:valAx><c:axId val="1"/><c:axPos val="b"/><c:crossAx val="2"/></c:valAx><c:valAx><c:axId val="2"/><c:axPos val="l"/><c:crossAx val="1"/></c:valAx>`
+    const { model } = await modelOf(await withChart(plot))
+    const s = model!.groups[0].series[0]
+    expect(s.xs).toBeUndefined()
+    expect(s.values).toEqual([10, 20, 15])
+    // three markers on the line
+    expect(renderChart(model!, 400, 300).match(/<polygon /g)?.length).toBeGreaterThanOrEqual(3)
+  })
+
+  test('a point with a label of its own: shown elsewhere, or hidden', async () => {
+    const dLbls = '<c:dLbls><c:dLbl><c:idx val="0"/><c:dLblPos val="outEnd"/><c:showVal val="1"/></c:dLbl><c:dLbl><c:idx val="2"/><c:delete val="1"/></c:dLbl><c:dLblPos val="ctr"/><c:showVal val="1"/></c:dLbls>'
+    const plot = CLUSTERED.replace(ser(0, 'B', numRef('Data!$B$2:$B$4', [1, 1, 1])), ser(0, 'B', numRef('Data!$B$2:$B$4', [1, 1, 1]), dLbls))
+    const { model } = await modelOf(await withChart(plot))
+    const s = model!.groups[0].series[0]
+    expect(labelsAt(s, 0)?.pos).toBe('outEnd')
+    expect(labelsAt(s, 1)?.pos).toBe('ctr')
+    expect(labelsAt(s, 2)).toBeUndefined()
+    const svg = renderChart(model!, 400, 300)
+    // the data labels are drawn after the clipped series
+    const layer = svg.slice(svg.lastIndexOf('</g>'))
+    expect(layer).toMatch(/>10</)
+    expect(layer).toMatch(/>20</)
+    expect(layer).not.toMatch(/>15</)
+    // the label past its bar's end sits above it; the centered one inside its bar
+    const textY = (t: string) => Number(new RegExp(`<text [^>]*y="([\\d.]+)"[^>]*>${t}<`).exec(layer)![1])
+    const bars = [...svg.matchAll(/<rect x="[\d.]+" y="([\d.]+)" width="[\d.]+" height="([\d.]+)" fill="([^"]+)"/g)].filter((m) => m[3] === s.fill)
+    expect(textY('10')).toBeLessThan(Number(bars[0][1]))
+    expect(textY('20')).toBeGreaterThan(Number(bars[1][1]))
+  })
+
+  test("a horizontal bar chart's clusters run from the bottom up: the first series lowest", async () => {
+    const { model } = await modelOf(await withChart(CLUSTERED.replace('<c:barDir val="col"/>', '<c:barDir val="bar"/>')))
+    const [a, b] = model!.groups[0].series
+    // the bars, not the legend's keys
+    const svg = renderChart(model!, 400, 300).split('clip-path="url(#de-plot)"')[1]
+    const firstY = (fill: string) => Number([...svg.matchAll(/<rect x="[\d.]+" y="([\d.]+)"[^>]*fill="([^"]+)"/g)].find((m) => m[2] === fill)![1])
+    expect(firstY(a.fill!)).toBeGreaterThan(firstY(b.fill!))
+  })
+
+  test('category labels at the angle the file fixes; wrapped at their spaces where they do not fit flat', async () => {
+    const turned = AXES.replace('<c:axPos val="b"/>', '<c:axPos val="b"/><c:txPr><a:bodyPr rot="-5400000"/><a:p><a:pPr><a:defRPr/></a:pPr></a:p></c:txPr>')
+    const { model } = await modelOf(await withChart(CLUSTERED.replace(AXES, turned)))
+    expect(model!.axes[0].rot).toBe(-90)
+    expect(renderChart(model!, 400, 300)).toContain('rotate(-90 ')
+    const auto = AXES.replace('<c:axPos val="b"/>', '<c:axPos val="b"/><c:txPr><a:bodyPr rot="-60000000"/><a:p><a:pPr><a:defRPr/></a:pPr></a:p></c:txPr>')
+    const { model: m2 } = await modelOf(await withChart(CLUSTERED.replace(AXES, auto)))
+    expect(m2!.axes[0].rot).toBeUndefined()
+    m2!.groups[0].series[0].cats = ['A long axis label, which has multiple line 1', 'A long axis label, which has multiple line 2', 'A long axis label, which has multiple line 3']
+    const svg = renderChart(m2!, 480, 300)
+    expect(svg).not.toContain('rotate(')
+    // each label in lines of its words
+    expect(svg).toContain('>A long axis label,<')
+    expect(svg).toContain('>line 3<')
   })
 })
