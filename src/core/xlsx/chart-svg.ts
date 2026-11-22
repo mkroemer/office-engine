@@ -2,7 +2,7 @@
  * An Excel chart (chart.ts `ChartModel`) drawn as a self-contained SVG picture of `w` × `h` CSS pixels, DOM-free (it
  * runs anywhere): bars and columns (clustered, stacked, 100%), lines (markers, smoothing), areas, scatter, bubbles,
  * stock (high-low lines, up-down bars), pie and doughnut, radar, and surface (seen from above, as Excel's contour
- * chart), combined on primary and secondary axes; axis bounds chosen the way Excel does when the file fixes none
+ * chart), combined on primary and secondary axes; 3D charts in their view (chart-3d.ts); axis bounds chosen the way Excel does when the file fixes none
  * (zero included, steps of 1, 2 or 5), major gridlines, tick and data labels in the series' number formats, title and
  * legend, in the colors, lines, fills (gradients and patterns too) and text looks the file gives. Text is measured
  * with the diagram renderers' widths (diagram/svg.ts), so labels are placed without a browser.
@@ -13,12 +13,13 @@ import { dict } from '../dict'
 import { lineHeight, pathData, Svg, textWidth, wrap, type Paint, type Pt } from '../diagram/svg'
 import type { ChartAxis, ChartGroup, ChartModel, ChartSeries, ChartText, FillLook, LineLook, TextLook } from './chart'
 import { labelsAt, SURFACE_BANDS } from './chart'
+import { drawCartesian3D, drawPie3D } from './chart-3d'
 import { formatValue } from './numfmt'
 
-const PX = 96 / 72
+export const PX = 96 / 72
 const PAD = 8
 
-interface Box {
+export interface Box {
   x: number
   y: number
   w: number
@@ -41,19 +42,19 @@ const DASH: Record<string, number[]> = dict({
 const dashOf = (d: string | undefined, w: number) => (d && DASH[d] ? DASH[d].map((x) => x * Math.max(1, w)).join(' ') : undefined)
 
 /** a line's paint: its color, width and dash */
-const linePaint = (l: LineLook): Paint => ({ stroke: l.color, sw: Math.max(0.75, l.width * PX), dash: dashOf(l.dash, l.width) })
+export const linePaint = (l: LineLook): Paint => ({ stroke: l.color, sw: Math.max(0.75, l.width * PX), dash: dashOf(l.dash, l.width) })
 
-const fmt = (v: number, f: string | undefined, date1904: boolean) => formatValue(v, f || 'General', date1904).text
+export const fmt = (v: number, f: string | undefined, date1904: boolean) => formatValue(v, f || 'General', date1904).text
 
 // a chart's values run to tens of thousands: spread into Math.min / Math.max they exceed the engine's argument limit
 /** the smallest of `xs` (Infinity for none), as Math.min */
-function lowest(xs: readonly number[]): number {
+export function lowest(xs: readonly number[]): number {
   let m = Infinity
   for (const x of xs) if (x < m) m = x
   return m
 }
 /** the largest of `xs` (-Infinity for none), as Math.max */
-function highest(xs: readonly number[]): number {
+export function highest(xs: readonly number[]): number {
   let m = -Infinity
   for (const x of xs) if (x > m) m = x
   return m
@@ -111,7 +112,7 @@ export function niceScale(lo: number, hi: number, opts: { min?: number; max?: nu
  * How many intervals an automatic value axis of `len` px may have, as Excel allows them: labels of `size` px about
  * 1.6 times their size apart up the side, a label's width or so apart along the bottom
  */
-function intervals(len: number, size: number, across: boolean): number {
+export function intervals(len: number, size: number, across: boolean): number {
   return Math.max(1, Math.floor(len / (across ? Math.max(40, size * 4.5) : size * 1.6)))
 }
 
@@ -151,7 +152,7 @@ function textBlock(svg: Svg, t: ChartText, x: number, y: number, maxW: number, a
 }
 
 /** a text's size in px and color: its own look over the chart's */
-const textOf = (m: ChartModel, look: TextLook | undefined) => ({ size: (look?.size ?? m.fontSize) * PX, color: look?.color ?? m.textColor, bold: look?.bold })
+export const textOf = (m: ChartModel, look: TextLook | undefined) => ({ size: (look?.size ?? m.fontSize) * PX, color: look?.color ?? m.textColor, bold: look?.bold })
 
 // ---------------------------------------------------------------- fills: gradients and patterns
 
@@ -161,7 +162,7 @@ const defIds = new WeakMap<Svg, number>()
 const PATTERN_TILE = Math.round((8 * 96 * 1000) / 72) / 1000
 
 /** the paint for a fill: its color, or a gradient or pattern defined in the picture */
-function fillPaint(svg: Svg, fill: string | null | undefined, look?: FillLook): string {
+export function fillPaint(svg: Svg, fill: string | null | undefined, look?: FillLook): string {
   if (!look || fill === null) return fill ?? 'none'
   const k = (defIds.get(svg) ?? 0) + 1
   defIds.set(svg, k)
@@ -279,7 +280,7 @@ function linePath(pts: Pt[], smooth: boolean): string {
 }
 
 /** a group drawn as lines (its legend entries show a line and a marker) */
-const lined = (g: ChartGroup) => g.type === 'line' || g.type === 'scatter' || g.type === 'stock' || (g.type === 'radar' && g.radarStyle !== 'filled')
+const lined = (g: ChartGroup) => (g.type === 'line' && !g.three) || g.type === 'scatter' || g.type === 'stock' || (g.type === 'radar' && g.radarStyle !== 'filled')
 
 // ---------------------------------------------------------------- legend
 
@@ -436,11 +437,11 @@ interface AxisPlan {
   labels: string[]
 }
 
-const isStacked = (g: ChartGroup) => g.grouping === 'stacked' || g.grouping === 'percentStacked'
+export const isStacked = (g: ChartGroup) => g.grouping === 'stacked' || g.grouping === 'percentStacked'
 const xValued = (g: ChartGroup) => g.type === 'scatter' || g.type === 'bubble'
 
 /** the extent of a group's values on its value axis (sums when stacked, 0…1 when 100%) */
-function extent(g: ChartGroup, blanks: ChartModel['blanks'] = 'gap'): [number, number] {
+export function extent(g: ChartGroup, blanks: ChartModel['blanks'] = 'gap'): [number, number] {
   if (g.grouping === 'percentStacked') {
     const neg = g.series.some((s) => s.values.some((v) => v !== null && v < 0))
     return [neg ? -1 : 0, 1]
@@ -478,7 +479,7 @@ function bubbleRoom(lo: number, hi: number): [number, number] {
 }
 
 /** a stacked line's points: each series on top of those before it */
-function cumulative(g: ChartGroup, s: ChartSeries): (number | null)[] {
+export function cumulative(g: ChartGroup, s: ChartSeries): (number | null)[] {
   const i = g.series.indexOf(s)
   return s.values.map((v, k) => {
     if (v === null) return null
@@ -537,7 +538,11 @@ export function renderChart(m: ChartModel, W: number, H: number): string {
   const pie = m.groups.find((g) => g.type === 'pie' || g.type === 'doughnut')
   const radar = m.groups.find((g) => g.type === 'radar')
   const surface = m.groups.find((g) => g.type === 'surface')
-  if (pie) drawPie(svg, m, pie, inner ?? area)
+  const g0 = m.groups[0]
+  if (m.view3d && g0?.three) {
+    if (g0.type === 'pie') drawPie3D(svg, m, g0, inner ?? area)
+    else drawCartesian3D(svg, m, g0, area, inner)
+  } else if (pie) drawPie(svg, m, pie, inner ?? area)
   else if (radar) drawRadar(svg, m, radar, inner ?? area, size)
   else if (surface) drawSurface(svg, m, surface, area, inner, size)
   else drawCartesian(svg, m, area, inner, size)
@@ -554,7 +559,7 @@ function plotArea(svg: Svg, m: ChartModel, b: Box) {
 }
 
 /** a value axis' gridline paint, or null where it has none */
-function gridPaint(m: ChartModel, a: ChartAxis): Paint | null {
+export function gridPaint(m: ChartModel, a: ChartAxis): Paint | null {
   if (!a.gridlines || a.grid === null) return null
   return a.grid ? linePaint(a.grid) : { stroke: m.gridColor }
 }
@@ -1070,7 +1075,7 @@ const ptOf = ([x, y]: [number, number]): Pt => ({ x, y })
 
 // ---------------------------------------------------------------- surface
 
-interface Band {
+export interface Band {
   lo: number
   hi: number
   label: string
@@ -1079,7 +1084,7 @@ interface Band {
 }
 
 /** a surface's value bands: one per step of its value axis, in the style's colors unless the file gives a band its own */
-function surfaceBands(g: ChartGroup, m: ChartModel): Band[] {
+export function surfaceBands(g: ChartGroup, m: ChartModel): Band[] {
   const a = m.axes.find((x) => x.kind === 'val' && g.axIds.includes(x.id))
   const all = g.series.flatMap((s) => s.values).filter((v): v is number => v !== null)
   const s = niceScale(all.length ? lowest(all) : 0, all.length ? highest(all) : 1, { min: a?.min, max: a?.max, major: a?.major, ticks: 6 })
@@ -1095,7 +1100,7 @@ function surfaceBands(g: ChartGroup, m: ChartModel): Band[] {
 /**
  * A surface seen from above, as Excel's contour chart: categories across, series up, each point of the grid between
  * the values colored by the band its value (interpolated between the four around it) falls in. A wireframe draws the
- * grid's lines in their bands' colors instead. A 3D surface is drawn the same way, flat.
+ * grid's lines in their bands' colors instead. A 3D surface is drawn in its view (chart-3d.ts).
  */
 function drawSurface(svg: Svg, m: ChartModel, g: ChartGroup, area: Box, fixed: Box | null, size: number) {
   const bands = surfaceBands(g, m)

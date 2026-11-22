@@ -31,7 +31,7 @@ const ser = (i: number, name: string, val: string, extra = '') =>
 const AXES = '<c:catAx><c:axId val="1"/><c:axPos val="b"/><c:crossAx val="2"/></c:catAx><c:valAx><c:axId val="2"/><c:axPos val="l"/><c:majorGridlines/><c:crossAx val="1"/></c:valAx>'
 
 /** a workbook whose sheet "Data" holds ROWS and one chart (its `plotArea` body given); `hideRow` hides a row (1-based) */
-async function withChart(plot: string, opts: { hideRow?: number; title?: string; titleXml?: string; style?: number; anchors?: number } = {}): Promise<Blob> {
+async function withChart(plot: string, opts: { hideRow?: number; title?: string; titleXml?: string; style?: number; anchors?: number; view?: string } = {}): Promise<Blob> {
   const base = await rowsToXlsx(ROWS, 'Data')
   const zip = await ZipArchive.open(new BlobSource(base))
   const files = new Map<string, string>()
@@ -46,7 +46,7 @@ async function withChart(plot: string, opts: { hideRow?: number; title?: string;
     `${HEAD}<xdr:wsDr ${NS}>${Array.from({ length: opts.anchors ?? 1 }, (_, k) => `<xdr:twoCellAnchor><xdr:from><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${1 + k * 20}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>10</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${16 + k * 20}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="${2 + k}" name="Chart ${1 + k}"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rId1"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor>`).join('')}</xdr:wsDr>`,
   )
   const title = opts.titleXml ?? (opts.title ? `<c:title><c:tx><c:rich><a:p><a:r><a:t>${opts.title}</a:t></a:r></a:p></c:rich></c:tx></c:title>` : '')
-  files.set('xl/charts/chart1.xml', `${HEAD}<c:chartSpace ${NS}>${opts.style ? `<c:style val="${opts.style}"/>` : ''}<c:chart>${title}<c:plotArea><c:layout/>${plot}</c:plotArea><c:legend><c:legendPos val="b"/></c:legend><c:plotVisOnly val="1"/></c:chart></c:chartSpace>`)
+  files.set('xl/charts/chart1.xml', `${HEAD}<c:chartSpace ${NS}>${opts.style ? `<c:style val="${opts.style}"/>` : ''}<c:chart>${title}${opts.view ?? ''}<c:plotArea><c:layout/>${plot}</c:plotArea><c:legend><c:legendPos val="b"/></c:legend><c:plotVisOnly val="1"/></c:chart></c:chartSpace>`)
   const ct = (await zip.text('[Content_Types].xml')).replace(
     '</Types>',
     '<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/><Override PartName="/xl/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/></Types>',
@@ -694,5 +694,89 @@ describe('xlsx charts: as Excel draws them', () => {
     // each label in lines of its words
     expect(svg).toContain('>A long axis label,<')
     expect(svg).toContain('>line 3<')
+  })
+})
+
+describe('xlsx charts: 3D', () => {
+  const VIEW = '<c:view3D><c:rotX val="15"/><c:rotY val="20"/><c:depthPercent val="100"/><c:rAngAx val="1"/></c:view3D>'
+  const bar3d = (shape = 'box', grouping = 'clustered') =>
+    `<c:bar3DChart><c:barDir val="col"/><c:grouping val="${grouping}"/><c:varyColors val="0"/>${ser(0, 'B', numRef('Data!$B$2:$B$4', [1, 1, 1]))}${ser(1, 'C', numRef('Data!$C$2:$C$4', [2, 2, 2]))}<c:gapWidth val="150"/><c:shape val="${shape}"/><c:axId val="1"/><c:axId val="2"/>${grouping === 'standard' ? '<c:axId val="3"/>' : ''}</c:bar3DChart>${AXES}${grouping === 'standard' ? '<c:serAx><c:axId val="3"/><c:axPos val="b"/><c:crossAx val="2"/></c:serAx>' : ''}`
+  const polys = (svg: string, fill: string) => [...svg.matchAll(/<polygon [^>]*fill="([^"]+)"/g)].filter((m) => m[1].toLowerCase() === fill.toLowerCase()).length
+
+  test('the view, walls and shape are read; a 3D chart says it is one', async () => {
+    const { model } = await modelOf(await withChart(bar3d('cylinder'), { view: VIEW.replace('<c:rAngAx val="1"/>', '<c:rAngAx val="0"/><c:perspective val="40"/>') + '<c:backWall><c:spPr><a:solidFill><a:srgbClr val="EEEEEE"/></a:solidFill></c:spPr></c:backWall>' }))
+    expect(model!.view3d).toMatchObject({ rotX: 15, rotY: 20, rightAngle: false, perspective: 40, depthPercent: 100 })
+    expect(model!.view3d!.back?.fill?.toLowerCase()).toBe('#eeeeee')
+    expect(model!.groups[0]).toMatchObject({ three: true, shape: 'cylinder', gapDepth: 150 })
+  })
+
+  test('3D columns: a box per value, its front in the series color and its top and side shaded darker', async () => {
+    const { model } = await modelOf(await withChart(bar3d(), { view: VIEW }))
+    const svg = renderChart(model!, 480, 300)
+    expect(svg).not.toContain('NaN')
+    const [a, b] = model!.groups[0].series
+    // the fronts (a polygon each, three categories) and the legend's keys (rects)
+    expect(polys(svg, a.fill!)).toBe(3)
+    expect(polys(svg, b.fill!)).toBe(3)
+    // tops and right sides: shades of the series colors, no lighter than them
+    const shaded = [...svg.matchAll(/<polygon [^>]*fill="(#[0-9a-f]{6})"/gi)].map((m) => m[1].toLowerCase()).filter((c) => c !== a.fill && c !== b.fill)
+    expect(shaded.length).toBeGreaterThanOrEqual(12)
+  })
+
+  test('cylinders, cones and pyramids: round sides shaded along a gradient, a cone narrowing to its tip', async () => {
+    for (const shape of ['cylinder', 'cone', 'coneToMax', 'pyramid', 'pyramidToMax']) {
+      const { model } = await modelOf(await withChart(bar3d(shape), { view: VIEW }))
+      const svg = renderChart(model!, 480, 300)
+      expect(svg).not.toContain('NaN')
+      if (shape.startsWith('c')) expect(svg).toMatch(/<linearGradient id="de-3d\d+" gradientUnits="userSpaceOnUse"/)
+      else expect(svg).not.toContain('de-3d')
+    }
+  })
+
+  test('series one behind another: a row each along the depth, labeled by the series axis, in perspective', async () => {
+    const { model } = await modelOf(await withChart(bar3d('box', 'standard'), { view: VIEW.replace('<c:rAngAx val="1"/>', '<c:rAngAx val="0"/>') }))
+    const svg = renderChart(model!, 480, 300)
+    expect(svg).not.toContain('NaN')
+    expect(svg).toMatch(/>Sales</)
+    expect(svg).toMatch(/>Cost</)
+  })
+
+  test('a 3D line is a ribbon in its fill even where its line is none', async () => {
+    const look = '<c:spPr><a:solidFill><a:srgbClr val="2E7D32"/></a:solidFill><a:ln><a:noFill/></a:ln></c:spPr>'
+    const plot = `<c:line3DChart><c:grouping val="standard"/><c:varyColors val="0"/>${ser(0, 'B', numRef('Data!$B$2:$B$4', [1, 1, 1]), look)}<c:axId val="1"/><c:axId val="2"/><c:axId val="3"/></c:line3DChart>${AXES}<c:serAx><c:axId val="3"/><c:axPos val="b"/><c:crossAx val="2"/></c:serAx>`
+    const { model } = await modelOf(await withChart(plot, { view: VIEW }))
+    const s = model!.groups[0].series[0]
+    expect(s.fill?.toLowerCase()).toBe('#2e7d32')
+    const svg = renderChart(model!, 480, 300)
+    // two stretches of ribbon, each with its front in the series color
+    expect(polys(svg, '#2e7d32')).toBe(2)
+  })
+
+  test('a 3D pie: its slices as thick wedges, their tops in their colors and their rims darker', async () => {
+    const plot = `<c:pie3DChart><c:varyColors val="1"/>${ser(0, 'B', numRef('Data!$B$2:$B$4', [1, 1, 1]))}</c:pie3DChart>`
+    const { model } = await modelOf(await withChart(plot, { view: '<c:view3D><c:rotX val="30"/><c:rotY val="0"/><c:rAngAx val="0"/></c:view3D>' }))
+    expect(model!.view3d).toMatchObject({ rotX: 30, rotY: 0, rightAngle: false })
+    const svg = renderChart(model!, 400, 300)
+    expect(svg).not.toContain('NaN')
+    const s = model!.groups[0].series[0]
+    for (const k of [0, 1, 2]) expect(polys(svg, s.points[k].color!)).toBeGreaterThanOrEqual(1)
+    expect(svg).toMatch(/<linearGradient id="de-3d\d+"/)
+  })
+
+  test('a 3D surface: pieces of its cells in the colors of the bands they fall in', async () => {
+    const plot = `<c:surface3DChart><c:wireframe val="0"/>${ser(0, 'B', numRef('Data!$B$2:$B$4', [1, 1, 1]))}${ser(1, 'C', numRef('Data!$C$2:$C$4', [2, 2, 2]))}<c:axId val="1"/><c:axId val="2"/><c:axId val="3"/></c:surface3DChart>${AXES}<c:serAx><c:axId val="3"/><c:axPos val="b"/><c:crossAx val="2"/></c:serAx>`
+    const { model } = await modelOf(await withChart(plot, { view: VIEW.replace('<c:rAngAx val="1"/>', '<c:rAngAx val="0"/>') }))
+    const svg = renderChart(model!, 480, 300)
+    expect(svg).not.toContain('NaN')
+    expect([...svg.matchAll(/<polygon /g)].length).toBeGreaterThan(4)
+  })
+
+  test('a view out of range is kept to Excel\'s; values on the floor or empty draw nothing', async () => {
+    const odd = '<c:view3D><c:rotX val="9999"/><c:rotY val="-40"/><c:depthPercent val="0"/><c:hPercent val="100000"/><c:rAngAx val="0"/><c:perspective val="999"/></c:view3D>'
+    const { model } = await modelOf(await withChart(bar3d('cone'), { view: odd }))
+    expect(model!.view3d).toMatchObject({ rotX: 90, rotY: 0, depthPercent: 20, hPercent: 500, perspective: 240 })
+    expect(renderChart(model!, 480, 300)).not.toContain('NaN')
+    model!.groups[0].series.forEach((s) => (s.values = s.values.map(() => 0)))
+    expect(renderChart(model!, 480, 300)).not.toContain('NaN')
   })
 })

@@ -1,6 +1,6 @@
 /**
  * An Excel chart part (`xl/charts/chartN.xml`) read into what the SVG renderer (chart-svg.ts) draws: its plot groups
- * (bar / column, line, area, pie, doughnut, scatter, bubble, radar, stock, surface; 3D ones as their flat form; several
+ * (bar / column, line, area, pie, doughnut, scatter, bubble, radar, stock, surface; 3D ones with their view; several
  * groups make a combo chart, each on its own axes), series with their values, axes, title, legend and the plot area's
  * manual layout, and the looks the file gives them: fills (a color, a gradient, a pattern), lines, text colors and sizes,
  * and the built-in chart style (`c:style`) for what it leaves to that.
@@ -95,6 +95,8 @@ export interface ChartSeries {
   values: (number | null)[]
   /** bubble sizes */
   sizes?: (number | null)[]
+  /** 3D bars: the series' own shape, over its group's */
+  shape?: string
   /** the values' number format */
   format?: string
   /** fill (bars, areas, slices, bubbles); null: none */
@@ -138,6 +140,12 @@ export interface ChartGroup {
   upDown?: { gapWidth: number; up: Fill & { line?: LineLook | null }; down: Fill & { line?: LineLook | null } }
   /** surface: drawn as a mesh of lines without fills */
   wireframe?: boolean
+  /** a 3D kind (`c:bar3DChart`, ...): drawn in the chart's 3D view */
+  three?: boolean
+  /** 3D bars: their shape (box, cylinder, cone, coneToMax, pyramid, pyramidToMax) */
+  shape?: string
+  /** 3D: the gap between rows of the depth axis, % of a bar's depth */
+  gapDepth?: number
   /** surface: the bands' own fills, by band */
   bands?: Record<number, Fill>
   /** surface: the built-in style's color for each band without a fill of its own */
@@ -187,8 +195,29 @@ export interface ChartLayout {
   target: 'inner' | 'outer'
 }
 
+/** a 3D chart's view (`c:view3D`) and its walls and floor */
+export interface View3D {
+  /** degrees the chart is tipped toward the viewer (seen from above when positive) */
+  rotX: number
+  /** degrees the chart is turned about its upright axis */
+  rotY: number
+  /** right-angle axes: the front stays square to the viewer and depth is drawn obliquely */
+  rightAngle: boolean
+  /** the field of view, degrees (0: none, a parallel projection) */
+  perspective: number
+  /** the depth of a row of the depth axis, % of a category's width */
+  depthPercent: number
+  /** the height, % of the width; undefined: as the plot area allows */
+  hPercent?: number
+  floor?: Fill & { line?: LineLook | null }
+  side?: Fill & { line?: LineLook | null }
+  back?: Fill & { line?: LineLook | null }
+}
+
 export interface ChartModel {
   title?: ChartText
+  /** a 3D chart's view; absent for a flat chart */
+  view3d?: View3D
   legend?: { pos: string; overlay: boolean; deleted: number[]; text?: TextLook }
   groups: ChartGroup[]
   axes: ChartAxis[]
@@ -536,6 +565,8 @@ interface SeriesCtx {
   radarStyle?: string
   /** the group's own word on markers, for series that say nothing of theirs (a line chart's `c:marker`, a scatter style) */
   markers: boolean
+  /** a 3D group: its lines are ribbons, filled */
+  three: boolean
 }
 
 async function seriesOf(ser: XEl, i: number, type: ChartType, varyColors: boolean, sc: SeriesCtx): Promise<ChartSeries> {
@@ -582,9 +613,10 @@ async function seriesOf(ser: XEl, i: number, type: ChartType, varyColors: boolea
   const ownFill = fillOf(spPr, ctx)
   const look = lookOf(spPr, ctx)
   const lineOwn = lineOf(spPr, ctx)
-  // lines, scatter, stock and radar draw lines; a filled radar draws areas as bars and areas do
-  const lined = type === 'line' || type === 'scatter' || type === 'stock' || (type === 'radar' && sc.radarStyle !== 'filled')
-  const fill = lined ? null : ownFill === undefined ? color : ownFill
+  // lines, scatter, stock and radar draw lines; a filled radar draws areas as bars and areas do; a 3D line is a ribbon,
+  // filled with its fill (or its line's color)
+  const lined = (type === 'line' && !sc.three) || type === 'scatter' || type === 'stock' || (type === 'radar' && sc.radarStyle !== 'filled')
+  const fill = lined ? null : ownFill === undefined ? (sc.three && type === 'line' ? (lineOwn?.color ?? color) : color) : ownFill
   const line =
     lineOwn === null
       ? null
@@ -642,6 +674,7 @@ async function seriesOf(ser: XEl, i: number, type: ChartType, varyColors: boolea
     line,
     marker,
     smooth: on(kid(ser, 'smooth')),
+    ...(kid(ser, 'shape') ? { shape: val(kid(ser, 'shape'), 'box') } : {}),
     invertIfNegative: on(kid(ser, 'invertIfNegative')),
     points,
     labels: shownLabels(labelsOf(kid(ser, 'dLbls'), ctx), shownAt),
@@ -737,7 +770,8 @@ export async function readChart(root: XEl | undefined, opts: { theme: Theme; dat
     // a line chart marks its points unless it says not to; a scatter chart of style line or smooth has no markers
     const scatterStyle = val(kid(g, 'scatterStyle'))
     const markers = type === 'scatter' ? scatterStyle !== 'line' && scatterStyle !== 'smooth' : on(kid(g, 'marker'), true)
-    const sc: SeriesCtx = { ctx, read: src, plotVisOnly, date1904: opts.date1904, style, count, radarStyle, markers }
+    const three = g.n.includes('3D')
+    const sc: SeriesCtx = { ctx, read: src, plotVisOnly, date1904: opts.date1904, style, count, radarStyle, markers, three }
     for (const ser of kids(g, 'ser')) series.push(await seriesOf(ser, seriesIndex++, type, vary, sc))
     // a group with no series draws nothing (and has no values to scale)
     if (!series.length) continue
@@ -762,6 +796,7 @@ export async function readChart(root: XEl | undefined, opts: { theme: Theme; dat
           }
         : {}),
       ...(type === 'stock' ? stockParts(g, ctx, textColor) : {}),
+      ...(three ? { three, gapDepth: within(num(val(kid(g, 'gapDepth')), 150)!, 0, 500, 150), ...(type === 'bar' ? { shape: val(kid(g, 'shape'), 'box') } : {}) } : {}),
       ...(type === 'surface' ? surfaceParts(g, ctx, style) : {}),
       axIds: kids(g, 'axId').map((a) => a.a.val ?? ''),
       series,
@@ -790,8 +825,10 @@ export async function readChart(root: XEl | undefined, opts: { theme: Theme; dat
   const plotFill = fillOf(plotSp, ctx)
   const plotLook = lookOf(plotSp, ctx)
   const plotBorder = ownLine(plotSp, ctx, 0.75)
+  const view3d = groups.some((g) => g.three) ? viewOf(chart, groups, ctx) : undefined
   return {
     title,
+    ...(view3d ? { view3d } : {}),
     legend: legend
       ? {
           pos: val(kid(legend, 'legendPos'), 'r')!,
@@ -816,6 +853,36 @@ export async function readChart(root: XEl | undefined, opts: { theme: Theme; dat
     // Excel leaves a gap where the element is missing
     blanks: ((b) => (b === 'zero' || b === 'span' ? b : 'gap'))(val(kid(chart, 'dispBlanksAs'))),
     date1904: opts.date1904,
+  }
+}
+
+/** a 3D chart's view, its walls and floor; Excel's defaults where the file gives none */
+function viewOf(chart: XEl, groups: ChartGroup[], ctx: ColorCtx): View3D {
+  const v = kid(chart, 'view3D')
+  const pie = groups[0].type === 'pie'
+  // a chart with a depth axis (series one behind another) or a surface is drawn in perspective unless it says not
+  const deep = groups.some((g) => g.type === 'surface' || (g.grouping === 'standard' && g.type !== 'pie'))
+  const wall = (n: string) => {
+    const el = kid(chart, n)
+    const sp = kid(el, 'spPr')
+    if (!sp) return undefined
+    const line = ownLine(sp, ctx, 0.75)
+    return { ...fullFill(sp, ctx, null), ...(line !== undefined ? { line } : {}) }
+  }
+  const hp = num(val(kid(v, 'hPercent')))
+  const floor = wall('floor')
+  const side = wall('sideWall')
+  const back = wall('backWall')
+  return {
+    rotX: within(num(val(kid(v, 'rotX')), pie ? 30 : 15)!, -90, 90, 15),
+    rotY: within(num(val(kid(v, 'rotY')), pie ? 0 : 20)!, 0, 360, 20),
+    rightAngle: pie ? false : on(kid(v, 'rAngAx'), !deep),
+    perspective: within(num(val(kid(v, 'perspective')), 30)!, 0, 240, 30),
+    depthPercent: within(num(val(kid(v, 'depthPercent')), 100)!, 20, 2000, 100),
+    ...(hp !== undefined && Number.isFinite(hp) ? { hPercent: within(hp, 5, 500, 100) } : {}),
+    ...(floor ? { floor } : {}),
+    ...(side ? { side } : {}),
+    ...(back ? { back } : {}),
   }
 }
 
