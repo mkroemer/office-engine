@@ -12,7 +12,7 @@ const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main
 const W14 = 'xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"'
 
 /** a document the way Word writes comments: a thread with a reply, a resolved one spanning two paragraphs, one without a range */
-export function wordDocx(opts: { extended?: boolean } = {}): Promise<Blob> {
+export function wordDocx(opts: { extended?: boolean; body?: (ref: (id: number) => string) => string } = {}): Promise<Blob> {
   const ext = opts.extended ?? true
   const files = new Map<string, string>()
   files.set(
@@ -28,9 +28,10 @@ export function wordDocx(opts: { extended?: boolean } = {}): Promise<Blob> {
   files.set(
     'word/document.xml',
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${W} ${W14}><w:body>` +
+      (opts.body?.(ref) ??
       `<w:p w14:paraId="00000001"><w:r><w:t xml:space="preserve">Hello </w:t></w:r><w:commentRangeStart w:id="0"/><w:commentRangeStart w:id="1"/><w:r><w:t>brave new</w:t></w:r><w:commentRangeEnd w:id="0"/>${ref(0)}<w:commentRangeEnd w:id="1"/>${ref(1)}<w:r><w:t xml:space="preserve"> </w:t></w:r><w:commentRangeStart w:id="3"/><w:r><w:t>world</w:t></w:r>${ref(2)}</w:p>` +
       `<w:p w14:paraId="00000002"><w:r><w:t>Second</w:t></w:r><w:commentRangeEnd w:id="3"/>${ref(3)}<w:r><w:t xml:space="preserve"> line</w:t></w:r></w:p>` +
-      `<w:p w14:paraId="00000003"><w:r><w:t>Third</w:t></w:r></w:p>` +
+      `<w:p w14:paraId="00000003"><w:r><w:t>Third</w:t></w:r></w:p>`) +
       `<w:sectPr/></w:body></w:document>`,
   )
   const cm = (id: number, author: string, para: string, text: string) =>
@@ -154,6 +155,40 @@ describe('docx comments', () => {
     const re = await openDocx(out)
     expect(threadsOf(re.list).map((t) => t.root.id)).toEqual(['1A2B3C03', '1A2B3C04'])
     expect(await partText(out, 'word/comments.xml')).not.toContain('Is this right?')
+  })
+
+  test('a reference in a run with text (other writers, converted .doc): the text stays when the file is saved after an edit', async () => {
+    const body = () =>
+      `<w:p><w:commentRangeStart w:id="0"/><w:r><w:t>marked</w:t></w:r><w:commentRangeEnd w:id="0"/><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve"> kept before</w:t><w:commentReference w:id="0"/><w:t xml:space="preserve"> kept after</w:t></w:r></w:p>` +
+      `<w:p><w:r><w:t>point</w:t><w:commentReference w:id="2"/><w:tab/><w:t>tail</w:t></w:r></w:p>` +
+      `<w:p><w:r><w:t>Other</w:t></w:r></w:p>`
+    const { engine, blocks } = await openDocx(await wordDocx({ extended: false, body }))
+    expect(paras(blocks).map(textOf)).toEqual(['marked kept before kept after', 'point\ttail', 'Other'])
+    const last = paras(blocks)[2]
+    await engine.call('docx.edit', [{ anchor: last.pid, list: [paraSpec([{ ...last, runs: [{ t: 'text', text: 'Other edited', s: {} }], edited: true }])] }])
+    const out = (await engine.call('save', [])) as Blob
+    const doc = (await partText(out, 'word/document.xml'))!
+    // the text of the reference runs is still there, once, with its formatting; each thread has one reference
+    expect(doc).toContain('<w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve"> kept before</w:t><w:t xml:space="preserve"> kept after</w:t></w:r>')
+    expect(doc).toContain('<w:r><w:t>point</w:t><w:tab/><w:t>tail</w:t></w:r>')
+    expect(doc.match(/commentReference/g)?.length).toBe(2)
+    const re = await openDocx(out)
+    expect(paras(re.blocks).map(textOf)).toEqual(['marked kept before kept after', 'point\ttail', 'Other edited'])
+    expect(re.list.map((c) => c.text)).toEqual(expect.arrayContaining(['Is this right?', 'Point']))
+    expect(covered(re.blocks, '10000000')).toEqual(['marked'])
+  })
+
+  test('a comment without a range at the start of a paragraph takes the next character, and survives an edit of the paragraph', async () => {
+    const body = (ref: (id: number) => string) => `<w:p>${ref(2)}<w:r><w:t>Test text</w:t></w:r></w:p><w:p><w:r><w:t>Other</w:t></w:r></w:p>`
+    const { engine, blocks } = await openDocx(await wordDocx({ extended: false, body }))
+    const p0 = paras(blocks)[0]
+    expect(covered(blocks, '10000002')).toEqual(['T'])
+    await engine.call('docx.edit', [{ anchor: p0.pid, list: [paraSpec([{ ...p0, runs: [...p0.runs, { t: 'text', text: ' more', s: {} }], edited: true }])] }])
+    const out = (await engine.call('save', [])) as Blob
+    const re = await openDocx(out)
+    expect(paras(re.blocks).map(textOf)).toEqual(['Test text more', 'Other'])
+    expect(re.list.map((c) => c.text)).toContain('Point')
+    expect(covered(re.blocks, '10000002')).toEqual(['T'])
   })
 
   test('documents without thread parts get them; saving twice keeps the new ids', async () => {

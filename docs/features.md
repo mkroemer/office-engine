@@ -250,6 +250,7 @@ Diagram sources open as a document holding the drawing (an SVG picture, editable
 
 - **Text**: font, size, B/I/U/S, color, highlight, superscript/subscript, alignment, vertical alignment, line spacing, bullet/numbered list, indent level (also Tab / Shift+Tab in a list item), clear formatting; the text of table cells is edited like a shape's (click a cell; Tab / Shift+Tab move between cells; Delete in a cell edits the text, with the table selected as an object it deletes the table)
 - **Shapes**: select/drag/resize/delete (arrow keys to nudge), fill, border color/weight/dash, arrange (front/forward/backward/back), rotate 90°/flip, align on slide, duplicate (⌘D), undo/redo
+- **Undo**: shape, slide and text edits share one history: text typed in a shape or a cell is one step once the text is left (inside it, undo goes back through the typing)
 - **Insert**: 30 shapes, text box, image
 - **Slides**: background, add/duplicate/delete/move/hide (all undoable, also a deleted slide with its notes and comments), slideshow from current slide or beginning
 - **Speaker notes**: read from the notes slide (also of converted `.ppt` / `.odp`) and included in *Download as plain text*; not shown or edited in the view
@@ -330,10 +331,22 @@ Comment text is plain (lines kept); formatting inside comments read from a file 
 | Open (rows paged, <1 GB of memory)     | CSV 500M rows × 10 cols (55 GB)       | ~4.5 min       |
 | Save (every row written)               | CSV 1M rows → XLSX (56 MB)            | ~13 s          |
 
+## Browsers
+
+The library uses what current browsers have built in, with no polyfill: Web Workers, `DecompressionStream` /
+`CompressionStream` with `deflate-raw` (the ZIP of every Office file), regular expressions with lookbehind, ES2022.
+That means Chrome / Edge 103 or newer, Safari 16.4 or newer, Firefox 113 or newer; an older browser fails to open
+files. Where the CSS Custom Highlight API is missing (Firefox before 140, Safari before 17.2), Find in a document still
+goes from match to match but does not mark them, nor the text a comment is being written on.
+
+The browser tests (`e2e/`) run in Chromium only: Firefox and Safari are not covered by automated tests. Editing is
+built for a mouse and a keyboard: on a touch screen a document can be read, scrolled and zoomed, but cells cannot be
+selected by dragging, nor shapes moved.
+
 ## Limitations
 
 - Formulas: no names or tables can be defined or edited (those of the file are read); a formula pointing at another workbook keeps its value; pivot tables are not computed (`GETPIVOTDATA` reads what the file shows); the limits of single functions are in [formula-coverage.md](formula-coverage.md)
-- DOCX: text boxes and nested tables are read-only; paragraphs with fields spanning multiple paragraphs (TOC) are read-only; headers / footers are edited as text lines (pictures, tables and shapes in them are replaced when edited, with a warning); a header taller than the top margin overlaps the text; tracked changes don't cover formatting changes, paragraph marks or pictures; page setup applies to the whole document (not per section)
+- DOCX: text boxes and nested tables are read-only; paragraphs with fields spanning multiple paragraphs (TOC) are read-only; headers / footers are edited as text lines (pictures, tables and shapes in them are replaced when edited, with a warning); a header taller than the top margin overlaps the text; tracked changes don't cover formatting changes, paragraph marks or pictures; page setup applies to the whole document (not per section); tab stops are not laid out (a tab goes to the next half inch): text set at a centered or right tab stop, or after an absolute position tab (the left / center / right parts of many headers and footers), follows the text before it, and a table of contents has no dot leaders
 - XLSX: no chart/pivot/conditional format/data validation/filter editing; a table whose cells are all deleted stays in the file; cells cut and pasted do not take their merges, comments or conditional formats along; a sheet read by pages (a CSV past 12 million cells) takes no row / column insert or delete, and its formulas only the rows that fit in memory
 - PPTX: can't rotate shapes with the mouse yet, no table insert / row or column edit (Tab in the last cell adds no row), no animations/transitions, speaker notes are not editable; undo of slide list changes (add/delete/move) is not available in a shared (collaborative) session
 - Comments: plain text only; DOCX comments can't cover text in more than one table cell or across a table; comments in headers, footers and footnotes are kept but not shown; PPTX comments anchored to a shape are shown at the shape's position when the file is opened and keep that anchor until moved

@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, type ComponentType, type FormEvent, type MouseEvent, type ReactNode } from 'react'
+import { createContext, useContext, useLayoutEffect, useMemo, useRef, type ComponentType, type FormEvent, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from 'react'
 import type { DropOption, IconName, Icons } from './edit/Toolbar'
 import { IconsProvider } from './edit/Toolbar'
 import { StringsProvider, type Locale, type StringsOverride } from './strings'
@@ -118,6 +118,69 @@ export function OfficeUIProvider(props: { icons?: Icons; components?: Partial<UI
 
 // ---------------------------------------------------------------- the engine's own dialog and toast
 
+const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]), [contenteditable="true"]'
+
+/**
+ * A dialog keeps the keyboard while it is open and gives it back when it closes: Tab goes round inside it (behind it
+ * Escape would no longer reach it), and the focus returns to where it was, else to the document, so that the
+ * viewer's keys (Ctrl+S, Ctrl+F…) work again without a click.
+ */
+function useDialogFocus(back: RefObject<HTMLDivElement | null>) {
+  // what has the focus as the dialog is first drawn: before a field of it takes it
+  const before = useRef<Element | null | undefined>(undefined)
+  if (before.current === undefined) before.current = typeof document === 'undefined' ? null : document.activeElement
+  useLayoutEffect(() => {
+    const el = back.current
+    if (!el) return
+    const scope = el.getRootNode() as Document | ShadowRoot
+    const root = el.closest<HTMLElement>('.de-root')
+    return () => {
+      // once the dialog is gone: unless what closed it put the focus somewhere itself
+      setTimeout(() => {
+        const now = scope.activeElement
+        if (now && now !== el.ownerDocument.body && now.isConnected) return
+        const was = before.current
+        // (inside a shadow root the page only knows the host: the document is looked for instead)
+        const back = was instanceof HTMLElement && was.isConnected && root?.contains(was) ? was : null
+        const doc = (q: string) => root?.querySelector<HTMLElement>(q)
+        ;(back ?? doc('.de-pages[contenteditable="true"]') ?? doc('.de-grid') ?? doc('.de-scroll'))?.focus({ preventScroll: true })
+      }, 0)
+    }
+  }, [back])
+  return (e: KeyboardEvent<HTMLElement>) => {
+    const el = back.current
+    if (e.key !== 'Tab' || !el) return
+    const items = Array.from(el.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((x) => x.getClientRects().length > 0)
+    if (!items.length) return e.preventDefault()
+    const active = (el.getRootNode() as Document | ShadowRoot).activeElement
+    const edge = items[e.shiftKey ? 0 : items.length - 1]
+    if (active !== edge && el.contains(active)) return
+    e.preventDefault()
+    items[e.shiftKey ? items.length - 1 : 0].focus()
+  }
+}
+
+/** what a dialog is drawn over: closes it (a press beside it, Escape) and keeps the keyboard in it */
+function DialogBack(props: { onClose: () => void; children: ReactNode }) {
+  const back = useRef<HTMLDivElement>(null)
+  const onTab = useDialogFocus(back)
+  return (
+    <div
+      ref={back}
+      className="de-dialog-back"
+      onMouseDown={(e) => e.target === e.currentTarget && props.onClose()}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.stopPropagation()
+          props.onClose()
+        } else onTab(e)
+      }}
+    >
+      {props.children}
+    </div>
+  )
+}
+
 export function DefaultDialog(props: DialogProps) {
   const body = (
     <>
@@ -143,26 +206,17 @@ export function DefaultDialog(props: DialogProps) {
     props.onSubmit?.()
   }
   return (
-    <div
-      className="de-dialog-back"
-      onMouseDown={(e) => e.target === e.currentTarget && props.onClose()}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') {
-          e.stopPropagation()
-          props.onClose()
-        }
-      }}
-    >
+    <DialogBack onClose={props.onClose}>
       {props.onSubmit ? (
-        <form className="de-dialog" role={props.kind === 'alert' ? 'alertdialog' : 'dialog'} aria-label={props.title} onSubmit={submit}>
+        <form className="de-dialog" role={props.kind === 'alert' ? 'alertdialog' : 'dialog'} aria-modal="true" aria-label={props.title} onSubmit={submit}>
           {body}
         </form>
       ) : (
-        <div className="de-dialog" role={props.kind === 'alert' ? 'alertdialog' : 'dialog'} aria-label={props.title}>
+        <div className="de-dialog" role={props.kind === 'alert' ? 'alertdialog' : 'dialog'} aria-modal="true" aria-label={props.title}>
           {body}
         </div>
       )}
-    </div>
+    </DialogBack>
   )
 }
 

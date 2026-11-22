@@ -253,6 +253,115 @@ describe('collab docx', () => {
     for (const x of [a, b]) x.collab.close()
   })
 
+  test('QA 3: undo and redo of typing keep what a collaborator typed in the same paragraph since', async () => {
+    const hub = new CollabHub()
+    const a = await open(hub, 'Ann', () => 0)
+    const b = await open(hub, 'Bob', () => 0)
+    await settle([a.collab, b.collab])
+    const [, intro] = editable(a.st).map(([p]) => p.pid!)
+    const INTRO = 'This document shows bold, italic, underlined red and large text. Visit example.com.'
+    const at = (st: DocState, pid: number, o: number) => {
+      const pa = String(st.blocks.findIndex((x) => x.t === 'p' && x.pid === pid))
+      return { a: { pa, o }, f: { pa, o } }
+    }
+    const both = () => [a, b].map((x) => runsText((x.st.blocks.find((p) => p.t === 'p' && p.pid === intro) as Paragraph).runs as RRun[]))
+    // Ann at the start, then Bob at the end of the same paragraph
+    opInsert(a.editor, at(a.st, intro, 0), 'ANN ')
+    await settle([a.collab, b.collab])
+    opInsert(b.editor, at(b.st, intro, 4 + INTRO.length), ' BOB')
+    await settle([a.collab, b.collab])
+    expect(both()).toEqual([`ANN ${INTRO} BOB`, `ANN ${INTRO} BOB`])
+    // her undo takes back her word only
+    a.editor.undo()
+    await settle([a.collab, b.collab])
+    expect(both()).toEqual([`${INTRO} BOB`, `${INTRO} BOB`])
+    expect(a.editor.canRedo).toBe(true)
+    // Bob goes on, before her word's place this time; her redo puts the word back where it was, his text kept
+    opInsert(b.editor, at(b.st, intro, 0), '>> ')
+    await settle([a.collab, b.collab])
+    a.editor.redo()
+    await settle([a.collab, b.collab])
+    expect(both()).toEqual([`>> ANN ${INTRO} BOB`, `>> ANN ${INTRO} BOB`])
+    a.editor.undo()
+    await settle([a.collab, b.collab])
+    expect(both()).toEqual([`>> ${INTRO} BOB`, `>> ${INTRO} BOB`])
+    for (const x of [a, b]) x.client.destroy()
+    for (const x of [a, b]) x.collab.close()
+  })
+
+  test('QA 3: typing that goes on after a collaborator\'s edit is a step of its own; a change of the same characters is not undone over theirs', async () => {
+    const hub = new CollabHub()
+    const a = await open(hub, 'Ann', () => 0)
+    const b = await open(hub, 'Bob', () => 0)
+    await settle([a.collab, b.collab])
+    const [, intro] = editable(a.st).map(([p]) => p.pid!)
+    const INTRO = 'This document shows bold, italic, underlined red and large text. Visit example.com.'
+    const at = (st: DocState, pid: number, o: number) => {
+      const pa = String(st.blocks.findIndex((x) => x.t === 'p' && x.pid === pid))
+      return { a: { pa, o }, f: { pa, o } }
+    }
+    const both = () => [a, b].map((x) => runsText((x.st.blocks.find((p) => p.t === 'p' && p.pid === intro) as Paragraph).runs as RRun[]))
+    // Ann types, Bob's word arrives, Ann types on at once (within the time typing is one step)
+    opInsert(a.editor, at(a.st, intro, 0), 'a', { label: 'type' })
+    await settle([a.collab, b.collab])
+    opInsert(b.editor, at(b.st, intro, 1 + INTRO.length), ' BOB')
+    await settle([a.collab, b.collab])
+    opInsert(a.editor, at(a.st, intro, 1), 'b', { label: 'type' })
+    await settle([a.collab, b.collab])
+    expect(both()).toEqual([`ab${INTRO} BOB`, `ab${INTRO} BOB`])
+    a.editor.undo()
+    await settle([a.collab, b.collab])
+    expect(both()).toEqual([`a${INTRO} BOB`, `a${INTRO} BOB`])
+    a.editor.undo()
+    await settle([a.collab, b.collab])
+    expect(both()).toEqual([`${INTRO} BOB`, `${INTRO} BOB`])
+    // Ann's word, then Bob writes inside it: her undo cannot take the word back without his letters, and leaves it
+    opInsert(a.editor, at(a.st, intro, 0), 'WORD ')
+    await settle([a.collab, b.collab])
+    opInsert(b.editor, at(b.st, intro, 2), '--')
+    await settle([a.collab, b.collab])
+    a.editor.undo()
+    await settle([a.collab, b.collab])
+    expect(both()).toEqual([`WO--RD ${INTRO} BOB`, `WO--RD ${INTRO} BOB`])
+    for (const x of [a, b]) x.client.destroy()
+    for (const x of [a, b]) x.collab.close()
+  })
+
+  test('QA 3: bold over a word keeps what a collaborator typed inside it meanwhile; so does deleting the word', async () => {
+    const hub = new CollabHub()
+    const a = await open(hub, 'Ann', () => 0)
+    const b = await open(hub, 'Bob', () => 0)
+    await settle([a.collab, b.collab])
+    const [title] = editable(a.st).map(([p]) => p.pid!)
+    const pa = (st: DocState) => String(st.blocks.findIndex((x) => x.t === 'p' && x.pid === title))
+    const para = (x: typeof a) => x.st.blocks.find((p) => p.t === 'p' && p.pid === title) as Paragraph
+    const both = () => [a, b].map((x) => runsText(para(x).runs as RRun[]))
+    expect(both()[0]).toBe('Quarterly Report')
+    // offline, Ann makes "Quarterly" bold; Bob's letters inside the word are sequenced first
+    a.transport.drop()
+    a.editor.input.lastSel = { a: { pa: pa(a.st), o: 0 }, f: { pa: pa(a.st), o: 9 } }
+    a.editor.toggle('b')
+    opInsert(b.editor, { a: { pa: pa(b.st), o: 4 }, f: { pa: pa(b.st), o: 4 } }, 'XY')
+    await settle([b.collab])
+    a.transport.connect()
+    await settle([a.collab, b.collab])
+    expect(both()).toEqual(['QuarXYterly Report', 'QuarXYterly Report'])
+    for (const x of [a, b]) {
+      const bold = (para(x).runs as RRun[]).filter((r) => r.t === 'text' && (r.s as { b?: boolean } | undefined)?.b).map((r) => r.text).join('')
+      expect(bold.replace('XY', '')).toBe('Quarterly')
+    }
+    // offline, Ann deletes " Report"; Bob types inside it first: his letters stay, the rest of the word goes
+    a.transport.drop()
+    opDelete(a.editor, { a: { pa: pa(a.st), o: 11 }, f: { pa: pa(a.st), o: 18 } })
+    opInsert(b.editor, { a: { pa: pa(b.st), o: 14 }, f: { pa: pa(b.st), o: 14 } }, 'ZZ')
+    await settle([b.collab])
+    a.transport.connect()
+    await settle([a.collab, b.collab])
+    expect(both()).toEqual(['QuarXYterlyZZ', 'QuarXYterlyZZ'])
+    for (const x of [a, b]) x.client.destroy()
+    for (const x of [a, b]) x.collab.close()
+  })
+
   test('undoing a table insert does not bring back the paragraph before it, joined to another one meanwhile', async () => {
     const hub = new CollabHub()
     const a = await open(hub, 'Ann', () => 0)

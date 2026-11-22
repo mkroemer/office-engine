@@ -181,8 +181,14 @@ export interface FixResult {
  * comment its w:id in the saved file.
  */
 export function fixCommentMarks(xml: string, store: DocxComments, num: (id: string) => number): FixResult {
-  type Tok = { at: number; end: number; kind: 's' | 'e' | 'r'; root?: string; W: string }
+  type Tok = { at: number; end: number; kind: 's' | 'e' | 'r'; root?: string; W: string; rest?: string }
   const toks: Tok[] = []
+  /** a reference run without its reference, when it holds anything else (text, a tab, a picture): that stays */
+  const restOf = (run: string, W: string): string | undefined => {
+    const rest = run.replace(new RegExp(`<${W}commentReference\\b[^>]*?(?:/>|>\\s*</${W}commentReference>)`, 'g'), '')
+    const inner = rest.slice(rest.indexOf('>') + 1, rest.lastIndexOf('<')).replace(new RegExp(`^\\s*<${W}rPr(?:\\s[^>]*)?(?:/>|>[\\s\\S]*?</${W}rPr>)`), '')
+    return inner.trim() ? rest : undefined
+  }
   const rootOf = (v: string | undefined): string | undefined => {
     if (v === undefined) return undefined
     if (v.startsWith('cm:')) {
@@ -198,7 +204,7 @@ export function fixCommentMarks(xml: string, store: DocxComments, num: (id: stri
   MARK_RE.lastIndex = 0
   for (let m = MARK_RE.exec(xml); m; m = MARK_RE.exec(xml)) {
     if (m[2]) toks.push({ at: m.index, end: m.index + m[0].length, kind: m[2] === 'commentRangeStart' ? 's' : 'e', root: rootOf(ID_RE.exec(m[3])?.[1]), W: m[1] ?? '' })
-    else toks.push({ at: m.index, end: m.index + m[0].length, kind: 'r', root: rootOf(ID_RE.exec(m[5])?.[1]), W: m[4] ?? '' })
+    else toks.push({ at: m.index, end: m.index + m[0].length, kind: 'r', root: rootOf(ID_RE.exec(m[5])?.[1]), W: m[4] ?? '', rest: restOf(m[0], m[4] ?? '') })
   }
   if (!toks.length) return { xml, found: new Set() }
   const first = new Map<string, Tok>()
@@ -220,6 +226,7 @@ export function fixCommentMarks(xml: string, store: DocxComments, num: (id: stri
   for (const t of toks) {
     out.push(xml.slice(pos, t.at))
     pos = t.end
+    if (t.rest) out.push(t.rest)
     const ids = t.root ? thread.get(t.root) : undefined
     if (!ids || !t.root) continue
     const W = t.W

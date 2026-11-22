@@ -94,3 +94,46 @@ describe('keepLines / widowControl', () => {
     expect(w.paras.map((p) => p.ps.widowControl)).toEqual([undefined, false, undefined])
   })
 })
+
+describe('a run that holds more than text', () => {
+  const drawing = (id: number) =>
+    `<w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:extent cx="952500" cy="952500"/><wp:docPr id="${id}" name="Chart ${id}"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rId9${id}"/></a:graphicData></a:graphic></wp:inline></w:drawing>`
+  const count = (xml: string, re: RegExp) => xml.match(re)?.length ?? 0
+  const texts = (xml: string) => [...xml.matchAll(/<w:t\b[^>]*>([^<]*)</g)].map((m) => m[1])
+  /** every paragraph written again (as an edit does), `runs` deciding what is left of each; the saved document.xml */
+  async function rewritten(body: string, runs: (p: Paragraph) => Paragraph['runs'] = (p) => p.runs) {
+    const { engine, paras } = await open(await bareDocx(body))
+    for (const p of paras) await engine.call('docx.edit', [{ anchor: p.pid, list: [paraSpec([{ ...p, runs: runs(p), edited: true }])] }])
+    const zip = await ZipArchive.open(new BlobSource((await engine.call('save', [])) as Blob))
+    return zip.text('word/document.xml')
+  }
+
+  test('two objects in one run are written once each', async () => {
+    const xml = await rewritten(`<w:p><w:r><w:t>A</w:t></w:r><w:r><w:rPr><w:noProof/></w:rPr>${drawing(1)}${drawing(2)}</w:r><w:r><w:t>Z</w:t></w:r></w:p>`)
+    expect([...xml.matchAll(/docPr id="(\d+)"/g)].map((m) => m[1])).toEqual(['1', '2'])
+    // each in a run of its own, with the properties of the run they came from
+    expect(count(xml, /<w:r><w:rPr><w:noProof\/><\/w:rPr><w:drawing>/g)).toBe(2)
+    expect(texts(xml)).toEqual(['A', 'Z'])
+  })
+
+  test('text next to an object in one run is not written twice', async () => {
+    const xml = await rewritten(`<w:p><w:r><w:t>before</w:t>${drawing(1)}<w:t>after</w:t></w:r></w:p>`)
+    expect(count(xml, /<w:drawing>/g)).toBe(1)
+    expect(texts(xml)).toEqual(['before', 'after'])
+  })
+
+  test('a footnote and an endnote reference in one run stay one of each', async () => {
+    const xml = await rewritten('<w:p><w:r><w:t>T</w:t></w:r><w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:footnoteReference w:id="1"/><w:endnoteReference w:id="1"/></w:r></w:p>')
+    expect(count(xml, /<w:footnoteReference /g)).toBe(1)
+    expect(count(xml, /<w:endnoteReference /g)).toBe(1)
+  })
+
+  test('one of two objects of a run is deleted: only that one goes', async () => {
+    const body = `<w:p><w:r><w:t>A</w:t></w:r><w:r>${drawing(1)}${drawing(2)}</w:r></w:p>`
+    const xml = await rewritten(body, (p) => p.runs.filter((_, i) => i !== 2))
+    expect([...xml.matchAll(/docPr id="(\d+)"/g)].map((m) => m[1])).toEqual(['1'])
+    // an object alone in its run is written back as it was, to the byte
+    const alone = `<w:p><w:r><w:t>A</w:t></w:r><w:r><w:rPr><w:noProof/></w:rPr>${drawing(7)}</w:r></w:p>`
+    expect(await rewritten(alone)).toContain(`<w:r><w:rPr><w:noProof/></w:rPr>${drawing(7)}</w:r>`)
+  })
+})

@@ -68,6 +68,7 @@ export function PptxToolbar(props: {
   /** anchor of the text box being edited */
   textAnchor?: 't' | 'ctr' | 'b'
   canUndo: boolean
+  canRedo: boolean
   onUndo: (redo: boolean) => void
   onInsert: (k: ShapeKind) => void
   onFill: (c: string | null) => void
@@ -100,7 +101,7 @@ export function PptxToolbar(props: {
   return (
     <EditorBar>
       <Btn icon="undo" title={kb(t.edit.undo, `${MOD}Z`)} disabled={!text && !props.canUndo} onClick={() => (text ? editor.undo() : props.onUndo(false))} />
-      <Btn icon="redo" title={kb(t.edit.redo, `${MOD}Y`)} onClick={() => (text ? editor.redo() : props.onUndo(true))} />
+      <Btn icon="redo" title={kb(t.edit.redo, `${MOD}Y`)} disabled={!text && !props.canRedo} onClick={() => (text ? editor.redo() : props.onUndo(true))} />
       <Sep />
       <Menu title={t.pptx.insert} label={t.pptx.insert} icon="plus" items={SHAPES.map((x) => ({ ...x, label: t.pptx.shapes[x.value] }))} onPick={(v) => props.onInsert(v as ShapeKind)} />
       <Menu

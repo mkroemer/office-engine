@@ -56,6 +56,8 @@ export interface Section {
   bold?: boolean
   italic?: boolean
   center?: boolean
+  /** a rule between the columns (Graphviz record fields side by side) */
+  grid?: boolean
 }
 
 export interface GNode {
@@ -465,6 +467,7 @@ function drawSections(svg: Svg, n: GNode, x: number, y: number, w: number) {
       }
       let cx = x + PX
       row.forEach((c, j) => {
+        if (s.grid && j && r === 0) svg.line(cx - 6, top, cx - 6, top + ss[k].h, { stroke: p.stroke, sw: 1 })
         svg.text(cx, ty, c, { size: SMALL, bold: s.bold, italic: s.italic, color: n.style?.color })
         cx += ss[k].cols[j] + 12
       })

@@ -302,6 +302,11 @@ function links(s: string, image: boolean, repl: (text: string, url: string) => s
   return out + s.slice(last)
 }
 
+/** a character that is no part of a word: what may stand before an underscore that opens emphasis */
+const NOT_WORD = /[^\p{L}\p{N}_]/u
+/** what follows an underscore that closes emphasis: the end, or no part of a word */
+const endsWord = (c: string | undefined) => c === undefined || NOT_WORD.test(c)
+
 /** inline Markdown: code, links, bold, italic, strikethrough (input already HTML-escaped) */
 function mdInline(s: string): string {
   const code: string[] = []
@@ -314,14 +319,17 @@ function mdInline(s: string): string {
   if (/[\n\r\u2028\u2029]/.test(s)) {
     // `.` stops at a line terminator, which the one-pass scanner does not model: the plain regexes (a line never has one here)
     s = s
-      .replace(/(\*\*|__)(?=\S)(.+?)(?<=\S)\1/g, '<b>$2</b>')
+      .replace(/\*\*(?=\S)(.+?)(?<=\S)\*\*/g, '<b>$1</b>')
+      .replace(/(^|[^\p{L}\p{N}_])__(?=\S)(.+?)(?<=\S)__(?![\p{L}\p{N}_])/gu, '$1<b>$2</b>')
       .replace(/(^|[^*\w])\*(?=\S)(.+?)(?<=\S)\*(?!\*)/g, '$1<i>$2</i>')
-      .replace(/(^|[^_\w])_(?=\S)(.+?)(?<=\S)_(?!\w)/g, '$1<i>$2</i>')
+      .replace(/(^|[^\p{L}\p{N}_])_(?=\S)(.+?)(?<=\S)_(?![\p{L}\p{N}_])/gu, '$1<i>$2</i>')
       .replace(/~~(?=\S)(.+?)(?<=\S)~~/g, '<s>$1</s>')
   } else {
-    s = spans(s, ['**', '__'], null, () => true, (x) => `<b>${x}</b>`)
+    s = spans(s, ['**'], null, () => true, (x) => `<b>${x}</b>`)
+    // underscores mark only at the edges of words (letters of any script): snake__case__name and tên_biến are text
+    s = spans(s, ['__'], NOT_WORD, endsWord, (x) => `<b>${x}</b>`)
     s = spans(s, ['*'], /[^*\w]/, (c) => c !== '*', (x) => `<i>${x}</i>`)
-    s = spans(s, ['_'], /[^_\w]/, (c) => c === undefined || !/\w/.test(c), (x) => `<i>${x}</i>`)
+    s = spans(s, ['_'], NOT_WORD, endsWord, (x) => `<i>${x}</i>`)
     s = spans(s, ['~~'], null, () => true, (x) => `<s>${x}</s>`)
   }
   return s.replace(/\u0000(\d+)\u0000/g, (_, i: string) => `<code>${code[Number(i)]}</code>`).replace(/\u0001(\d+)\u0001/g, (_, i: string) => lit[Number(i)])

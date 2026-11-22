@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { CollabHub } from '../src/collab/hub'
 import { CollabSession, type Adapter } from '../src/collab/session'
-import { MemoryTransport } from '../src/collab/transport'
+import { MemoryTransport, type Transport } from '../src/collab/transport'
+import { PEER_COLORS, type ClientMsg, type HubMsg } from '../src/collab/protocol'
 import { decode, encode } from '../src/collab/codec'
 
 type TOp = { t: 'ins'; at: number; s: string } | { t: 'del'; at: number; n: number } | { t: 'set'; k: string; v: number } | { t: 'clear' }
@@ -159,6 +160,56 @@ describe('collab', () => {
     } finally {
       console.error = error
     }
+  })
+
+  test('a message that is not of the protocol is refused: the hub does not throw, the room goes on', async () => {
+    const hub = new CollabHub()
+    const got: HubMsg[] = []
+    const raw = hub.connect((m) => got.push(m))
+    const send = (m: unknown) => raw.receive(m as ClientMsg)
+    // before joining, and a hello that names no user or no room
+    for (const bad of [null, 'text', 42, [], {}, { t: 'nope' }, { t: 'hello' }, { t: 'hello', room: 'w' }, { t: 'hello', room: '', user: { name: 'x' } }, { t: 'hello', room: 'w', user: null }, { t: 'hello', room: 'w', user: { name: 'x' }, site: 'one' }]) {
+      got.length = 0
+      expect(() => send(bad)).not.toThrow()
+      expect(got).toEqual([{ t: 'error', message: 'Malformed message' }])
+    }
+    send({ t: 'hello', room: 'w', user: { name: 42, color: 'url(https://example.com/x)' } })
+    await sleep(5)
+    const welcome = got.find((m) => m.t === 'welcome')
+    expect(welcome).toBeDefined()
+    // batches that are no batches reach nobody
+    const adapter = new TextAdapter()
+    const peer = new CollabSession<TOp>(new MemoryTransport(hub), adapter, { room: 'w', user: { name: 'Bob' } })
+    await settle([peer])
+    expect([...peer.peers.values()].map((p) => [p.name, PEER_COLORS.includes(p.color)])).toEqual([['', true]])
+    for (const bad of [{ t: 'ops', id: 'a', base: 0, ops: 'not-a-list' }, { t: 'ops', id: 'b', base: 0 }, { t: 'ops', base: 0, ops: [] }, { t: 'ops', id: 'c', base: -1, ops: [] }, { t: 'ops', id: 'd', base: '0', ops: [] }]) send(bad)
+    await sleep(5)
+    expect(peer.rev).toBe(0)
+    expect(peer.status).toBe('live')
+    // and the room still works
+    send({ t: 'ops', id: 'ok', base: 0, ops: [{ t: 'ins', at: 0, s: 'hi' }] })
+    await settle([peer])
+    expect(adapter.text).toBe('hi')
+    expect(peer.status).toBe('live')
+    peer.close()
+    raw.close()
+  })
+
+  test('a batch without a list of ops (from a hub that does not check) is applied as an empty one', async () => {
+    const adapter = new TextAdapter()
+    const transport: Transport = { connect: () => transport.onStatus?.('open'), send: () => {}, close: () => {} }
+    const session = new CollabSession<TOp>(transport, adapter, { room: 'w', user: { name: 'Ann' } })
+    const deliver = (m: HubMsg) => transport.onMessage!(m)
+    await sleep(5)
+    deliver({ t: 'welcome', site: 1, seq: 0, from: 0, log: [], peers: [] })
+    await sleep(5)
+    deliver({ t: 'batch', b: { seq: 1, site: 2, base: 0, id: 'x', ops: 'not-a-list' as unknown as unknown[] } })
+    deliver({ t: 'batch', b: { seq: 2, site: 2, base: 1, id: 'y', ops: [{ t: 'ins', at: 0, s: 'ok' }] } })
+    await sleep(10)
+    expect(session.status).toBe('live')
+    expect(session.rev).toBe(2)
+    expect(adapter.text).toBe('ok')
+    session.close()
   })
 
   test('the caller of a pessimistic op goes on with the local ops made meanwhile back in place', async () => {

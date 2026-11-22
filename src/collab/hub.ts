@@ -10,7 +10,7 @@
  * open its file and only replay the batches after it, while the hub drops older batches.
  */
 import { cssColor } from '../core/color'
-import { PEER_COLORS, type Batch, type ClientMsg, type Entry, type HubMsg, type PeerInfo, type Snapshot } from './protocol'
+import { checkClientMsg, PEER_COLORS, type Batch, type ClientMsg, type Entry, type HubMsg, type PeerInfo, type Snapshot } from './protocol'
 
 export interface RoomState {
   id: string
@@ -153,8 +153,11 @@ export class CollabHub {
       r.peers.set(site, { info, send })
       broadcast({ t: 'join', peer: info }, site)
     }
-    const receive = (msg: ClientMsg) => {
+    const receive = (raw: ClientMsg) => {
       if (closed) return
+      // (from the network: whatever was sent)
+      const msg = checkClientMsg(raw)
+      if (!msg) return send({ t: 'error', message: 'Malformed message' })
       if (queued) return void queued.push(msg)
       if (msg.t === 'hello') {
         if (room) return

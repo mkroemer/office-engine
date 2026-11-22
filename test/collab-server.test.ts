@@ -12,8 +12,10 @@ const DATA = join(ROOT, 'data')
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 let server: ReturnType<typeof Bun.spawn> | null = null
 
-afterAll(() => {
+afterAll(async () => {
   server?.kill()
+  // (gone before its data is: a snapshot it is taking would not find its files)
+  await server?.exited
   rmSync(ROOT, { recursive: true, force: true })
 })
 
@@ -127,5 +129,30 @@ describe('reference collab server', () => {
     expect(readdirSync(ROOT)).toEqual(['data'])
     c.collab.close()
     c.client.destroy()
+  }, 60_000)
+
+  test('a frame that is not of the protocol gets an error back; the server and its rooms go on', async () => {
+    const http = await start(19_000 + Math.floor(Math.random() * 1000))
+    const ws = new WebSocket(http.replace('http', 'ws') + '/collab')
+    const got: { t: string; message?: string }[] = []
+    ws.onmessage = (e) => got.push(JSON.parse(String(e.data)))
+    await new Promise((r) => (ws.onopen = r))
+    const frames = ['not json', 'null', '42', '{"t":"hello"}', '{"t":"hello","room":"r1","user":null}', '{"t":"ops","id":"x","base":0,"ops":"not-a-list"}']
+    for (const f of frames) ws.send(f)
+    for (let i = 0; i < 100 && got.length < frames.length; i++) await sleep(20)
+    expect(got).toEqual(frames.map(() => ({ t: 'error', message: 'Malformed message' })))
+    ws.close()
+    // still there, and the room of the test before still opens and syncs
+    expect(server!.exitCode).toBeNull()
+    expect((await fetch(http)).ok).toBe(true)
+    const a = await enter(http, 'Ann')
+    const b = await enter(http, 'Bob')
+    await a.client.call('xlsx.set', 0, [{ r: 20, c: 9, input: 'after' }])
+    for (let i = 0; i < 200 && (await colJ(b.client, 21))[20] !== 'after'; i++) await sleep(20)
+    expect((await colJ(b.client, 21))[20]).toBe('after')
+    for (const x of [a, b]) {
+      x.collab.close()
+      x.client.destroy()
+    }
   }, 60_000)
 })

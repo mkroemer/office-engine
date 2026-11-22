@@ -436,6 +436,15 @@ export class DocxCollab implements Adapter<DocxOp> {
       const pins = plen(prior.ins as RRun[])
       const at = mapPos(op.at, prior.at, prior.del, pins, false)
       const end = op.del ? Math.max(at, mapPos(op.at + op.del, prior.at, prior.del, pins, true)) : at
+      // what the other put inside the range this op replaces is not part of what it replaces (the range now holds it):
+      // it stays. At its place when the op puts back as many characters as it takes (text given another look), else
+      // after what the op puts (the text around it was deleted or typed over).
+      const inside = pins > 0 && prior.at >= op.at && prior.at + prior.del <= op.at + op.del && (prior.del > 0 || (prior.at > op.at && prior.at < op.at + op.del))
+      if (inside) {
+        const k = prior.at - op.at
+        const ins = plen(op.ins as RRun[]) === op.del ? spliceRuns(op.ins, k, prior.del, prior.ins) : (normalize([...op.ins, ...prior.ins] as RRun[]) as Inline[])
+        return { ...op, at, del: end - at, ins }
+      }
       return at === op.at && end - at === op.del ? op : { ...op, at, del: end - at }
     }
     if (prior.t === 'paras' && (prior.before.includes(op.pid) || prior.next.some((p) => p.pid === op.pid))) {
@@ -505,7 +514,12 @@ export class DocxCollab implements Adapter<DocxOp> {
     this.touchedModel = true
     this.suppress++
     try {
-      return { undo: this.run(op) }
+      const undo = this.run(op)
+      // the editor's own undo steps of these paragraphs keep what the collaborator did in them
+      if (kind === 'remote' && undo) {
+        this.ed.remoteEdit(undo.flatMap((s) => (s.t === 'paras' ? [...s.before, ...s.next].flatMap((p) => (p.pid !== undefined ? [p.pid] : [])) : [])))
+      }
+      return { undo }
     } finally {
       this.suppress--
     }

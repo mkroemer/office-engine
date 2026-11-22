@@ -19,6 +19,15 @@ async function select(v: Viewer, kind: 'docx' | 'xlsx' | 'pptx') {
   await v.page.waitForTimeout(150)
 }
 
+/**
+ * The size the controller publishes is `want`, once the view has shown the edit. A view publishes the format of what
+ * it shows, and a sheet reads its rows again after an edit: when that is, the machine decides, not a fixed wait.
+ */
+async function sizeIs(v: Viewer, want: number) {
+  await v.page.waitForFunction((n) => window.__ctl.snapshot().format?.size === n, want, { timeout: 5000 }).catch(() => {})
+  expect(await v.page.evaluate(() => window.__ctl.snapshot().format?.size)).toBe(want)
+}
+
 for (const kind of ['docx', 'xlsx', 'pptx'] as const) {
   test(`built ${kind}: inline React host formatting preserves focus, history and saved/reopened values`, async () => {
     const v = await viewer({}, { page: 'built-locale.html', wait: false })
@@ -64,15 +73,12 @@ for (const kind of ['docx', 'xlsx', 'pptx'] as const) {
     expect(await input.inputValue()).toBe('1')
     expect(await input.evaluate((el) => el === document.activeElement)).toBe(true)
     await v.page.keyboard.type('4')
-    await v.page.waitForTimeout(150)
-    expect(await v.page.evaluate(() => window.__ctl.snapshot().format?.size)).toBe(14)
+    await sizeIs(v, 14)
     await v.page.getByLabel('Production undo', { exact: true }).click()
-    await v.page.waitForTimeout(150)
-    expect(await v.page.evaluate(() => window.__ctl.snapshot().format?.size)).toBe(1)
+    await sizeIs(v, 1)
     if (kind !== 'xlsx') expect(await v.page.evaluate(() => document.activeElement?.matches('.de-pages, .de-txt-edit'))).toBe(true)
     await v.page.evaluate(() => window.__ctl.redo())
-    await v.page.waitForTimeout(150)
-    expect(await v.page.evaluate(() => window.__ctl.snapshot().format?.size)).toBe(14)
+    await sizeIs(v, 14)
     // Main's save flush must include the last PPTX command without waiting for the text debounce.
     await v.page.evaluate(() => window.__ctl.save())
     const bytes = fromB64((await v.waitEvent('save')).b64 as string)
@@ -88,7 +94,7 @@ for (const kind of ['docx', 'xlsx', 'pptx'] as const) {
     await v.waitEvent('load', 2)
     await v.page.waitForTimeout(300)
     await select(v, kind)
-    expect(await v.page.evaluate(() => window.__ctl.snapshot().format?.size)).toBe(14)
+    await sizeIs(v, 14)
     if (kind === 'xlsx') expect(await v.formula('B2')).toBe(inputBefore!)
     if (kind !== 'xlsx') {
       await v.page.evaluate(() => {

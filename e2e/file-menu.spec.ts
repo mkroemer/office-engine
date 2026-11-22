@@ -359,6 +359,31 @@ describe('New / Open', () => {
     await v.page.locator('.de-grid').waitFor()
   })
 
+  test('a file that does not open leaves the document with unsaved changes as it is', async () => {
+    const v = await viewer({ src: 'samples/sample.docx', editable: true, onSave: true })
+    await v.selectText('Quarterly Report', 'end')
+    await v.page.keyboard.type(' kept')
+    await v.page.waitForTimeout(200)
+    // a .docx that is no ZIP: confirmed, tried, refused with a message; the edited document is still there
+    await v.chooseFile(() => v.menu('Open…'), { name: 'broken.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from('not a zip at all') })
+    await v.page.locator('.de-dialog button', { hasText: 'Continue' }).click()
+    await v.page.locator('.de-toast').waitFor()
+    expect(await v.title()).toBe('sample.docx')
+    expect(await v.page.locator('.de-page-inner').first().innerText()).toContain('Quarterly Report kept')
+    expect((await v.events('error')).length).toBe(0)
+    // and it can still be saved, with the change
+    const paras = await docxParas((await v.save()).bytes)
+    expect(paras.some((p) => paraText(p).includes('Quarterly Report kept'))).toBe(true)
+    // a file that does open replaces it as before
+    await v.selectText('Quarterly Report', 'end')
+    await v.page.keyboard.type('!')
+    await v.page.waitForTimeout(200)
+    await v.chooseFile(() => v.menu('Open…'), `${SAMPLES}/sample.xlsx`)
+    await v.page.locator('.de-dialog button', { hasText: 'Continue' }).click()
+    await v.page.locator('.de-grid').waitFor()
+    expect(await v.title()).toBe('sample.xlsx')
+  })
+
   test('Ctrl+O opens the picker; a new src from the host drops the opened file', async () => {
     const v = await viewer({ src: 'samples/sample.docx' })
     await v.page.locator('.de-page').first().click()

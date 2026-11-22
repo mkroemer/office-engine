@@ -8,8 +8,10 @@ import { psFont } from '../src/core/iwork/styles'
 import { Msg } from '../src/core/iwork/proto'
 import { unsnappy } from '../src/core/iwork/snappy'
 import { Engine } from '../src/core/worker/engine'
+import { BufferSource } from '../src/core/source'
+import { ZipArchive } from '../src/core/zip'
 import { writeZip } from '../src/core/zipwrite'
-import { appleDate, charProps, drawable, encode, f32, fixed32, fmt, iwa, IworkBuilder, K, msg, ref, sampleKeynote, sampleNumbers, samplePages, shape, shapeStyle, storage, styleInfo, table, T } from './iwork-builder'
+import { appleDate, charProps, color, drawable, encode, f32, fixed32, fmt, iwa, IworkBuilder, K, msg, ref, sampleKeynote, sampleNumbers, samplePages, shape, shapeStyle, storage, styleInfo, table, T } from './iwork-builder'
 
 async function open(bytes: Uint8Array<ArrayBuffer>) {
   const events: { event: string; data: any }[] = []
@@ -308,6 +310,28 @@ describe('keynote', () => {
     // iWork turns counterclockwise, DrawingML clockwise
     expect(shapes(slides[0])[0].box.rot).toBe(330)
     expect(shapes(slides[1]).map((e) => Math.round((e.box.x * 3) / 4))).toEqual([300, 420])
+  })
+
+  test('the 2018 package layout (Presentation.key/ with a nested Index.zip) opens; an image fill whose Data file is missing is dropped', async () => {
+    const b = new IworkBuilder()
+    // a fill with an image (TSD.FillArchive field 3) whose data id has no file in the package
+    const props = msg({ 1: msg({ 3: msg({ 6: msg({ 1: 999 }) }) }), 2: msg({ 1: color('000000'), 2: f32(1), 6: msg({ 1: 2 }) }) })
+    const style = b.add(K.SHAPE_STYLE, msg({ 1: msg({ 1: styleInfo(undefined), 11: props }), 11: msg({ 2: 0 }) }))
+    const box = ref(shape(b, { frame: [10, 10, 100, 50], style }))
+    const node = b.add(K.SLIDE_NODE, msg({ 2: ref(b.add(K.SLIDE, msg({ 7: [box], 42: [box] }))) }))
+    const show = b.add(K.SHOW, msg({ 3: msg({ 2: [ref(node)] }), 4: msg({ 1: f32(800), 2: f32(600) }) }))
+    b.add(K.DOCUMENT, msg({ 2: ref(show) }), 1)
+    const flat = await ZipArchive.open(new BufferSource(await b.zip()))
+    const index = new Map<string, Uint8Array>()
+    const outer = new Map<string, Uint8Array>()
+    for (const e of flat.list()) {
+      if (/\/$/.test(e.name)) continue
+      if (/^index\//i.test(e.name)) index.set(e.name, await flat.bytes(e.name))
+      else if (!/^data\//i.test(e.name)) outer.set('Presentation.key/' + e.name, await flat.bytes(e.name))
+    }
+    outer.set('Presentation.key/Index.zip', new Uint8Array(await (await writeZip(index)).arrayBuffer()))
+    const { slides } = await openKey(new Uint8Array(await (await writeZip(outer)).arrayBuffer()))
+    expect(slides.length).toBe(1)
   })
 })
 

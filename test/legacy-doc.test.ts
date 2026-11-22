@@ -241,6 +241,9 @@ describe('Word 97 binary → DOCX', () => {
     expect(document).toMatch(/<w:commentRangeStart w:id="0"\/>.*Revenue grew.*<w:commentRangeEnd w:id="0"\/>.*<w:commentReference w:id="0"\/>/)
     expect(document).not.toContain('<w:commentRangeStart w:id="1"/>')
     expect(document).toContain('<w:commentReference w:id="1"/>')
+    // a reference is a run of its own: no text shares its run (a save rewrites reference runs)
+    expect(document).not.toMatch(/<w:r>(?:(?!<\/w:r>).)*<w:t\b(?:(?!<\/w:r>).)*<w:commentReference/)
+    expect(document).not.toMatch(/<w:commentReference[^>]*>(?:(?!<\/w:r>).)*<w:t\b/)
   })
 
   test('special characters', async () => {

@@ -40,6 +40,8 @@ export function useDocument(src: DocSource | null | undefined, options: OpenOpti
       show(null)
       setState({ client: null, error: null, loading: true, progress: null })
     }
+    // a load given up (another source, the viewer gone) ends its worker: a large file is not downloaded and read to the end for nothing
+    const giveUp = new AbortController()
     DocumentClient.open(src, {
       name,
       worker,
@@ -47,6 +49,7 @@ export function useDocument(src: DocSource | null | undefined, options: OpenOpti
       language,
       headers: headersKey ? JSON.parse(headersKey) : undefined,
       onProgress: (p) => live && setState((s) => ({ ...s, progress: p })),
+      signal: giveUp.signal,
     }).then(
       (c) => {
         if (!live) return c.destroy()
@@ -62,6 +65,7 @@ export function useDocument(src: DocSource | null | undefined, options: OpenOpti
     )
     return () => {
       live = false
+      giveUp.abort()
     }
   }, [src, name, worker, credentials, headersKey, language])
   return state

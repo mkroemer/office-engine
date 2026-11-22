@@ -15,7 +15,7 @@ import { docxBodyHtml, docxToText } from '../file/text'
 import { cellsIn, deleteCol, deleteRow, distributeCols, gridOf, insertCol, insertRow, mergeCells, newTable, patchCells, rectOf, setBorders, tableFromRows, unmergeCell, type BorderPreset, type CellRect } from './tables'
 import { changeSpans, hasChanges, resolveRuns, trackEdit } from './track'
 import type { Lines } from './paginate'
-import { collapsed, deleteRange, formatRange, linkSpan, markRange, normalize, plen, rlen, runAt, runsText, shiftPa, splitRuns, type Pos, type RRun, type Sel } from '../edit/rich'
+import { collapsed, deleteRange, formatRange, linkSpan, markRange, normalize, plen, rebaseRuns, rlen, runAt, runsText, shiftPa, splitRuns, type Pos, type RRun, type Sel } from '../edit/rich'
 
 /** a place in a paragraph that survives edits elsewhere: paragraph id, page-break part, offset */
 export interface ParaPos {
@@ -79,6 +79,8 @@ interface Entry {
   hf?: { undo: HFSet; redo: HFSet }
   /** several entries made by one command (accept / reject all), undone and redone together */
   group?: Entry[]
+  /** when the entry was last applied (made, undone or redone): see `DocxEditor.tick` */
+  at?: number
 }
 
 export interface FormatState {
@@ -475,12 +477,14 @@ export class DocxEditor implements RichHost<Paragraph> {
       const selBefore = this.input.caret ?? sel
       // same paragraph, not just same address: a collaborator's edit above can bring another paragraph to that address
       const typing = label === 'type' && last?.label === 'type' && pas.length === 1 && next.length === 1 && last.after.length === 1
-      if (typing && last.pas[0] === pas[0] && last.after[0].pid === before[0].pid && now - last.t < 1500) {
+      // (not one step with typing a collaborator's edit of the paragraph came after: undoing it would take theirs along)
+      if (typing && last.pas[0] === pas[0] && last.after[0].pid === before[0].pid && now - last.t < 1500 && !this.editedSince(last, last.after)) {
         last.after = next
         last.selAfter = sel
         last.t = now
+        last.at = ++this.tick
       } else {
-        this.history.push({ pas, before, after: next, selBefore, selAfter: sel, label, t: now })
+        this.history.push({ pas, before, after: next, selBefore, selAfter: sel, label, t: now, at: ++this.tick })
         if (this.history.length > 500) this.history.shift()
       }
       this.future = []
@@ -834,6 +838,39 @@ export class DocxEditor implements RichHost<Paragraph> {
     return list.map((b) => (b.t === 'p' && b.pid !== undefined && cur.has(b.pid) ? cur.get(b.pid)! : b))
   }
 
+  /** counts the edits of paragraphs, here and by collaborators, to tell which came first */
+  private tick = 0
+  /** paragraph → when a collaborator last changed it */
+  private remoteAt = new Map<number, number>()
+
+  /** a collaborator changed these paragraphs (collaboration hook): undo and redo of older edits of them keep what they did */
+  remoteEdit(pids: Iterable<number>) {
+    const t = ++this.tick
+    for (const pid of pids) this.remoteAt.set(pid, t)
+  }
+
+  /** whether a collaborator changed one of the paragraphs since the entry was last applied */
+  private editedSince(e: Entry, list: Paragraph[]): boolean {
+    return this.remoteAt.size > 0 && list.some((p) => p.pid !== undefined && (this.remoteAt.get(p.pid) ?? 0) > (e.at ?? 0))
+  }
+
+  /**
+   * Undo / redo of an entry whose paragraph a collaborator changed since: the paragraph does not go back to what it was
+   * (their text would go with it). What the entry typed or deleted is taken back in the paragraph as it is now; where
+   * it cannot be told from their change (the same characters, several paragraphs, a look only) the entry is given up.
+   * Returns the entry for the other stack: it brings back the paragraph as it is now.
+   */
+  private rebased(e: Entry, pas: string[], from: Paragraph[], to: Paragraph[]): Entry | undefined {
+    const cur = pas.length === 1 && from.length === 1 && to.length === 1 && to[0].pid === from[0].pid ? this.para(pas[0]) : undefined
+    const r = cur && rebaseRuns(cur.runs as RRun[], from[0].runs as RRun[], to[0].runs as RRun[])
+    if (!cur || !r) return undefined
+    const next: Paragraph = { ...cur, runs: r.runs as Paragraph['runs'], edited: true }
+    const at = { pa: pas[0], o: r.at }
+    const sel = { a: at, f: at }
+    this.replace(pas, [next], sel, { history: false, label: 'undo', want: true })
+    return { ...e, pas, selBefore: sel, selAfter: sel, at: ++this.tick }
+  }
+
   // the state published while an entry is applied comes before its move to the other stack: publish again after
   undo() {
     this.undoStep()
@@ -877,7 +914,14 @@ export class DocxEditor implements RichHost<Paragraph> {
     const pasAfter = e.after.map((_, i) => shiftPa(at, i))
     // a collaborator changed these paragraphs' structure meanwhile: drop the entry
     if (pasAfter.some((pa, i) => this.para(pa)?.pid !== e.after[i].pid)) return
+    if (this.editedSince(e, e.after)) {
+      const cur = pasAfter.map((pa) => this.para(pa)!)
+      const back = this.rebased(e, pasAfter, e.after, e.before)
+      if (back) this.future.push({ ...back, before: [this.para(pasAfter[0])!], after: cur })
+      return
+    }
     this.replace(pasAfter.length ? pasAfter : [at], e.before, moveSel(e.selBefore, e.pas[0], at), { history: false, label: 'undo', want: true })
+    e.at = ++this.tick
     this.future.push(e)
   }
 
@@ -909,7 +953,14 @@ export class DocxEditor implements RichHost<Paragraph> {
     if (at === undefined) return
     const pasNow = e.before.map((_, i) => shiftPa(at, i))
     if (pasNow.some((pa, i) => this.para(pa)?.pid !== e.before[i].pid)) return
+    if (this.editedSince(e, e.before)) {
+      const cur = pasNow.map((pa) => this.para(pa)!)
+      const again = this.rebased(e, pasNow, e.before, e.after)
+      if (again) this.history.push({ ...again, before: cur, after: [this.para(pasNow[0])!] })
+      return
+    }
     this.replace(pasNow, e.after, moveSel(e.selAfter, e.pas[0], at), { history: false, label: 'redo', want: true })
+    e.at = ++this.tick
     this.history.push(e)
   }
 

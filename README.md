@@ -56,7 +56,7 @@ Without React:
 
 Also online at [p10node.github.io/office-engine](https://p10node.github.io/office-engine/).
 
-- [Features](docs/features.md): format coverage, editing, saving, limitations
+- [Features](docs/features.md): format coverage, editing, saving, browsers, limitations
 - [API](docs/api.md): props, custom views, `mount()`, `<office-viewer>`, core API, CSP
 - [Theming](docs/theming.md): design tokens, light / dark, loading the stylesheet yourself
 - [Real-time collaboration](docs/collaboration.md)
@@ -106,10 +106,10 @@ The renderers also ship on their own, to show diagrams and Markdown in any page 
 
 | Package                                  | For                                                                 | Size (gzip) |
 |------------------------------------------|---------------------------------------------------------------------|-------------|
-| [`@p10node/diagram`](packages/diagram)   | Mermaid, PlantUML and Graphviz; draws every diagram block of a page | 37 KB       |
-| [`@p10node/mermaid`](packages/mermaid)   | Mermaid → SVG                                                       | 26 KB       |
-| [`@p10node/plantuml`](packages/plantuml) | PlantUML → SVG (no Java)                                            | 29 KB       |
-| [`@p10node/graphviz`](packages/graphviz) | Graphviz DOT → SVG (no WebAssembly)                                 | 16 KB       |
+| [`@p10node/diagram`](packages/diagram)   | Mermaid, PlantUML and Graphviz; draws every diagram block of a page | 40 KB       |
+| [`@p10node/mermaid`](packages/mermaid)   | Mermaid → SVG                                                       | 28 KB       |
+| [`@p10node/plantuml`](packages/plantuml) | PlantUML → SVG (no Java)                                            | 32 KB       |
+| [`@p10node/graphviz`](packages/graphviz) | Graphviz DOT → SVG (no WebAssembly)                                 | 17 KB       |
 | [`@p10node/markdown`](packages/markdown) | Markdown → safe HTML, diagrams drawn, code colored, TeX as MathML   | 66 KB       |
 
 ```ts

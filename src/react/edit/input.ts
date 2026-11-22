@@ -244,10 +244,19 @@ export function opDeleteForward(host: RichHost, sel: Sel, word = false) {
 
 // ---------------------------------------------------------------- DOM mapping
 
+/** the object span (a text box) a run span is inside of, within `stop` */
+const objAbove = (s: Element, stop: Element): HTMLElement | null => {
+  const up = s.parentElement?.closest<HTMLElement>('[data-o]')
+  return up && up !== stop && stop.contains(up) ? up : null
+}
+
 function runSpan(n: Node | null, stop: Element): HTMLElement | null {
   const el = n && (n.nodeType === 1 ? (n as Element) : n.parentElement)
-  const s = el?.closest('[data-o]') as HTMLElement | null
-  return s && stop.contains(s) ? s : null
+  let s = el?.closest('[data-o]') as HTMLElement | null
+  if (!s || !stop.contains(s)) return null
+  // inside a text box (its paragraphs have runs of their own): the box is the run of this paragraph
+  for (let up = objAbove(s, stop); up; up = objAbove(s, stop)) s = up
+  return s
 }
 
 function spanEnd(s: HTMLElement): number {
@@ -256,6 +265,9 @@ function spanEnd(s: HTMLElement): number {
   if (s.hasAttribute('data-empty')) return o
   return o + (s.textContent?.length ?? 0)
 }
+
+/** the run spans of a paragraph element itself: not those of the paragraphs inside a text box anchored in it */
+const ownSpans = (pel: HTMLElement): HTMLElement[] => Array.from(pel.querySelectorAll<HTMLElement>('[data-o]')).filter((s) => !objAbove(s, pel))
 
 /** the offsets [from, to] a paragraph element shows: all of them, or those of its part when the paragraph is split */
 const partOf = (el: HTMLElement): [number, number] => [Number(el.dataset.from ?? 0), el.dataset.to === undefined ? Infinity : Number(el.dataset.to)]
@@ -313,7 +325,7 @@ export function posFromDom(root: HTMLElement, node: Node, offset: number): Pos |
     r.setStart(node, offset)
     r.collapse(true)
     let o = Number(pel.dataset.from ?? 0)
-    for (const sp of Array.from(pel.querySelectorAll<HTMLElement>('[data-o]'))) {
+    for (const sp of ownSpans(pel)) {
       if (r.comparePoint(sp, sp.childNodes.length) < 0) o = spanEnd(sp)
       else break
     }
@@ -353,7 +365,7 @@ export function domFromPos(root: HTMLElement, pos: Pos, upstream = false): [Node
 /** the DOM place of offset `o` in a paragraph element (or the part of one that holds it) */
 function domIn(pel: HTMLElement, at: number): [Node, number] {
   const pos = { o: at }
-  const spans = Array.from(pel.querySelectorAll<HTMLElement>('[data-o]'))
+  const spans = ownSpans(pel)
   if (!spans.length) return [pel, pel.childNodes.length]
   let pick: HTMLElement | undefined
   for (const s of spans) {
@@ -478,6 +490,7 @@ export class RichInput {
     root.addEventListener('compositionend', this.onCompEnd)
     root.addEventListener('keydown', this.onKeyDown)
     root.addEventListener('mousedown', this.onMouseDown)
+    root.addEventListener('focus', this.onFocus)
     root.addEventListener('copy', this.onCopy)
     root.addEventListener('cut', this.onCopy)
     document.addEventListener('selectionchange', this.onSelChange)
@@ -497,6 +510,7 @@ export class RichInput {
     r.removeEventListener('compositionend', this.onCompEnd)
     r.removeEventListener('keydown', this.onKeyDown)
     r.removeEventListener('mousedown', this.onMouseDown)
+    r.removeEventListener('focus', this.onFocus)
     r.removeEventListener('copy', this.onCopy)
     r.removeEventListener('cut', this.onCopy)
     document.removeEventListener('selectionchange', this.onSelChange)
@@ -890,8 +904,22 @@ export class RichInput {
   }
 
   /** a click moves the caret: what an edit asked for no longer holds */
+  /** when the mouse was last pressed in the text (ms) */
+  private pressed = -1e9
+
   private onMouseDown = () => {
     this.expected = null
+    this.pressed = performance.now()
+  }
+
+  /**
+   * The focus is back in the text without a place for the caret: it was in a field of a dialog (which took the
+   * selection with it), or a script gave it back. The caret returns to where it last was, so that what is typed next
+   * lands there. Not when a press of the mouse brings the focus: the caret goes where it was pressed.
+   */
+  private onFocus = () => {
+    if (performance.now() - this.pressed < 100 || this.composing || this.override || !this.lastSel || this.readSel()) return
+    this.restore(this.lastSel, false)
   }
 
   private onCopy = (e: ClipboardEvent) => {

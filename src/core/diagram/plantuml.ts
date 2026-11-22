@@ -31,6 +31,11 @@ export const renderPlantUml = (src: string): Rendered[] => parsePlantUml(src).ma
 function parseBlock(kind: string, raw: string[]): Model {
   if (kind === 'dot') return { t: 'graph', graph: parseDot(raw.join('\n'))[0] }
   const { lines, title, dir } = clean(preprocess(raw))
+  // kinds PlantUML writes inside @startuml: they would otherwise be read as a description diagram and come out empty or bogus
+  const inner =
+    lines.find((l) => /^(nwdiag|blockdiag|actdiag|packetdiag|rackdiag|seqdiag)\s*\{/.test(l))?.match(/^\w+/)?.[0] ??
+    (lines.some((l) => /^(robust|concise|clock|binary|analog)\s+("|\w+\s+(as|with)\b)/.test(l)) ? 'timing' : '')
+  if (kind === 'uml' && inner) throw new DiagramError(`PlantUML “${inner}” diagrams are not supported yet`)
   switch (kind) {
     case 'uml':
       break
@@ -38,7 +43,7 @@ function parseBlock(kind: string, raw: string[]): Model {
     case 'wbs':
       return { t: 'tree', root: tree(lines, kind === 'wbs'), title }
     default:
-      throw new DiagramError(`PlantUML @start${kind} diagrams are not supported yet`)
+      throw new DiagramError(`PlantUML “${kind}” diagrams are not supported yet`)
   }
   switch (umlKind(lines)) {
     case 'activity':
@@ -220,7 +225,9 @@ function clean(raw: string[]): { lines: string[]; title?: string; dir?: 'LR' | '
 
 function umlKind(lines: string[]): 'activity' | 'sequence' | 'state' | 'description' {
   const has = (re: RegExp) => lines.some((l) => re.test(l))
-  if (has(/^(start|stop)$/) || has(/^:[\s\S]*[;|<>/\]}]$/) || has(/^:/) || has(/^(if\s*\(.*\)\s*then|while\s*\(|repeat\b|fork$|endif$)/)) return 'activity'
+  // `:Main Admin: as Admin` or `:Admin: --> (Use)` is an actor, not an action (actions run on to a closing `;`)
+  const actor = /^:[^:;]+:(?:\s+as\s|\s*[-.=<o*]{1,3}[->|]|\s*$)/
+  if (has(/^(start|stop)$/) || has(/^:[\s\S]*[;|<>/\]}]$/) || lines.some((l) => l.startsWith(':') && !actor.test(l)) || has(/^(if\s*\(.*\)\s*then|while\s*\(|repeat\b|fork$|endif$)/)) return 'activity'
   if (has(/\[\*\]/) || has(/^state\s/)) return 'state'
   if (has(/^(participant|autonumber|activate|deactivate|alt|loop|return|ref\s+over)\b/) || has(/^(==.*==|\.\.\.|\|\|\d*\|\|)$/)) return 'sequence'
   if (has(/^(abstract|class|interface|enum|annotation|struct|protocol|object|map|json|usecase|component|node|cloud|package|namespace|folder|frame|rectangle|artifact|storage|card|file|agent|person|hexagon|together)\b/)) return 'description'
@@ -524,7 +531,7 @@ function description(lines: string[], dir?: 'LR' | 'TB') {
       const id = element(m[1])
       if (m[2]) {
         const n = b.get(id)!
-        b.node(m[2], { label: n.label, shape: n.shape }, cur())
+        b.node(unwrap(m[2]), { label: n.label, shape: n.shape }, cur())
         b.g.nodes.splice(b.g.nodes.indexOf(n), 1)
       }
       continue

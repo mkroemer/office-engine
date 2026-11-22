@@ -233,7 +233,48 @@ describe('P3-019 Markdown emphasis is linear', () => {
     expect(markdownToHtml('a **b** *c* _d_ ~~e~~ __f__ `g` [h](http://x) ![i](http://y)')).toBe(
       '<p>a <b>b</b> <i>c</i> <i>d</i> <s>e</s> <b>f</b> <code>g</code> <a href="http://x">h</a> i</p>',
     )
-    expect(markdownToHtml('**a __b** c__ and *x **y** z* snake_case_name 2*3*4')).toBe('<p><b>a <i>_b</b> c_</i> and <i>x <b>y</b> z</i> snake_case_name 2*3*4</p>')
+    expect(markdownToHtml('**a __b** c__ and *x **y** z* snake_case_name 2*3*4')).toBe('<p><b>a <b>b</b> c</b> and <i>x <b>y</b> z</i> snake_case_name 2*3*4</p>')
+    // underscores inside a word are text, at its edges they mark (also over a line break)
+    expect(markdownToHtml('snake__case__name __x__ a__b__ __b__c')).toBe('<p>snake__case__name <b>x</b> a__b__ __b__c</p>')
+    expect(markdownToHtml('__a\nb__ x__y__z')).toBe('<p><b>a b</b> x__y__z</p>')
     expect(markdownToHtml('## T ##  \n\n# #')).toBe('<h2>T</h2>\n<h1></h1>')
+  })
+})
+
+describe('diagram audit regressions', () => {
+  const rec = (label: string, extra = '') => parseDot(`digraph { ${extra} node [shape=record]; a [label="${label}"] }`)[0].nodes[0]
+  test('record: empty and port-only fields are cells', () => {
+    const n = rec('<f0> |<f1> mid|<f2> ')
+    expect(n.sections?.[0].rows).toEqual([['', 'mid', '']])
+    expect(n.label).toBe('mid')
+    expect(rec('<f0> 0x10ba8| <f1>').sections?.[0].rows).toEqual([['0x10ba8', '']])
+  })
+  test('record: nested groups flip direction, LR stacks the top level', () => {
+    expect(rec('a|{b|c}|d').sections?.[0].rows).toEqual([['a', 'b', 'd'], ['', 'c', '']])
+    expect(rec('a|{b|c}', 'rankdir=LR;').sections?.map((s) => s.rows)).toEqual([[['a']], [['b', 'c']]])
+  })
+  test('record: escapes and entities', () => {
+    expect(rec('\\{x\\}\\|y|&lt;&amp;&#38;&gt;&quot;').sections?.[0].rows).toEqual([['{x}|y', '<&&>"']])
+    expect(rec('mid&#92; dle|x').sections?.[0].rows).toEqual([['mid dle', 'x']])
+  })
+  test('plain labels decode entities', () => {
+    expect(parseDot('digraph { a [label="1 &lt; 2 &amp; 3"] }')[0].nodes[0].label).toBe('1 < 2 & 3')
+  })
+  test('PlantUML actor / use case shorthand with an alias', () => {
+    const g = graphOf(puml(':Main Admin: as Admin\n(Use the app) as UC1\nAdmin --> UC1'))
+    expect(g.nodes.map((n) => [n.id, n.label, n.shape])).toEqual([['Admin', 'Main Admin', 'actor'], ['UC1', 'Use the app', 'ellipse']])
+    expect(edgeList(g)).toEqual(['Admin>UC1'])
+    const h = graphOf(puml(':Main Admin: as Admin\n(Use the application) as (Use)\nAdmin ---> (Use)'))
+    expect(h.nodes.map((n) => n.id)).toEqual(['Admin', 'Use'])
+    expect(edgeList(h)).toEqual(['Admin>Use'])
+  })
+  test('PlantUML kinds that are not supported name the kind', () => {
+    for (const [src, kind] of [
+      ['@startgantt\n[A] lasts 2 days\n@endgantt', 'gantt'],
+      ['@startjson\n{"a":1}\n@endjson', 'json'],
+      ['@startsalt\n{\n[ok]\n}\n@endsalt', 'salt'],
+      ['@startuml\nrobust "Web" as WB\n@0\nWB is Idle\n@enduml', 'timing'],
+      ['@startuml\nnwdiag {\n network dmz {\n web01;\n }\n}\n@enduml', 'nwdiag'],
+    ]) failsWith('plantuml', src, new RegExp(`“${kind}” diagrams are not supported`))
   })
 })

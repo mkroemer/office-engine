@@ -63,6 +63,31 @@ export type ClientMsg =
   | { t: 'ops'; id: string; base: number; ops: unknown[] }
   | { t: 'presence'; data: unknown }
 
+const count = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0
+const optCount = (v: unknown): v is number | undefined => v === undefined || count(v)
+
+/**
+ * A message as a client may send it, or null: what arrives on a connection is whatever its sender wrote. A hub reads
+ * every message through this, so that one that is not of the protocol neither throws in the server nor reaches a room
+ * (a batch whose `ops` is not a list would stop every client of the room that applies it).
+ */
+export function checkClientMsg(raw: unknown): ClientMsg | null {
+  if (!raw || typeof raw !== 'object') return null
+  const m = raw as Record<string, unknown>
+  if (m.t === 'hello') {
+    const u = m.user as Record<string, unknown> | null | undefined
+    if (typeof m.room !== 'string' || !m.room || m.room.length > 1024 || !u || typeof u !== 'object') return null
+    if (!optCount(m.have) || !optCount(m.site) || !optCount(m.base)) return null
+    const user: UserInfo = { name: typeof u.name === 'string' ? u.name.slice(0, 200) : '' }
+    if (typeof u.id === 'string') user.id = u.id.slice(0, 200)
+    if (typeof u.color === 'string') user.color = u.color.slice(0, 64)
+    return { t: 'hello', room: m.room, user, ...(m.have !== undefined ? { have: m.have } : {}), ...(m.site !== undefined ? { site: m.site } : {}), ...(m.base !== undefined ? { base: m.base } : {}) }
+  }
+  if (m.t === 'ops') return typeof m.id === 'string' && m.id && m.id.length <= 200 && count(m.base) && Array.isArray(m.ops) ? { t: 'ops', id: m.id, base: m.base, ops: m.ops } : null
+  if (m.t === 'presence') return { t: 'presence', data: m.data }
+  return null
+}
+
 export type HubMsg =
   /**
    * `log` holds every batch with seq > `from`; `ctx` the joined snapshot's context (first join from a

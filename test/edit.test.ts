@@ -464,6 +464,8 @@ describe('pptx full editing', () => {
     expect(dup.hidden).toBeFalsy()
     const hid: any = await re.call('pptx.slide', [1])
     expect(hid.hidden).toBe(true)
+    // the list of a reopened deck knows its hidden slides at once (a show leaves them out), not only after an edit
+    expect(ri.pptx.slides.map((x: any) => x.hidden)).toEqual([false, true, false, false, false, false])
     const shapes: any = await re.call('pptx.slide', [4])
     expect(shapes.els.some((e: any) => e.text?.paras[0]?.runs[0]?.text === 'New text')).toBe(true)
     void info

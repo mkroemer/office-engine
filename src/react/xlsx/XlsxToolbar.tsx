@@ -127,6 +127,9 @@ export function XlsxToolbar(props: {
   painter: boolean
   onToggle: (k: 'b' | 'i' | 'u' | 'strike') => void
   onFormat: (p: FmtPatch) => void
+  /** there is an edit to undo / to redo (the list of sheets changing forgets them) */
+  canUndo: boolean
+  canRedo: boolean
   onUndo: () => void
   onRedo: () => void
   onPaint: () => void
@@ -152,8 +155,8 @@ export function XlsxToolbar(props: {
   const borderTitle = (k: BorderKind) => (k === 'none' ? t.xlsx.clearBorders : t.format.borders[k])
   return (
     <EditorBar>
-      <Btn icon="undo" title={kb(t.edit.undo, `${MOD}Z`)} onClick={props.onUndo} />
-      <Btn icon="redo" title={kb(t.edit.redo, `${MOD}Y`)} onClick={props.onRedo} />
+      <Btn icon="undo" title={kb(t.edit.undo, `${MOD}Z`)} disabled={!props.canUndo} onClick={props.onUndo} />
+      <Btn icon="redo" title={kb(t.edit.redo, `${MOD}Y`)} disabled={!props.canRedo} onClick={props.onRedo} />
       <Btn icon="paint" title={t.xlsx.paint} active={props.painter} onClick={props.onPaint} />
       <Sep />
       <Btn icon="currency" title={t.xlsx.currency} onClick={() => f({ numFmt: '"$"#,##0.00' })} />

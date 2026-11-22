@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useInsertionEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import type { DocSource } from '../core/source'
-import type { DocumentClient, OpenOptions } from '../core/worker/client'
+import { DocumentClient, type OpenOptions } from '../core/worker/client'
 import type { Zoom } from './common/ZoomControl'
 import { DocxView } from './docx/DocxView'
 import { ViewerContext, type FileOps, type ViewerApi } from './common/Slots'
@@ -378,25 +378,29 @@ function Viewer(props: DocViewerProps) {
 
   // a converted file (CSV → xlsx…) starts unsaved
   const openedDirty = useRef(false)
+  // The host is told of a change once, from where it happened (an effect, an event): not from inside a state updater,
+  // which React runs while rendering (twice in StrictMode), where a host that sets its own state is in the wrong.
+  const dirtyNow = useRef(false)
+  const onDirtyRef = useRef(onDirtyChange)
+  onDirtyRef.current = onDirtyChange
+  const changeDirty = useCallback((d: boolean) => {
+    if (dirtyNow.current === d) return
+    dirtyNow.current = d
+    setDirtyState(d)
+    onDirtyRef.current?.(d)
+  }, [])
   useEffect(() => {
-    const d = !!client && openedDirty.current
     // (the host is told too: a new document is not unsaved)
-    setDirtyState((prev) => {
-      if (prev !== d) onDirtyChange?.(d)
-      return d
-    })
+    changeDirty(!!client && openedDirty.current)
     if (client) openedDirty.current = false
-  }, [client]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [client, changeDirty])
   const setDirty = useCallback(
     (d: boolean) => {
       if (!saveSession.live) return
       if (d) saveSession.revision++
-      setDirtyState((prev) => {
-        if (prev !== d) onDirtyChange?.(d)
-        return d
-      })
+      changeDirty(d)
     },
-    [onDirtyChange, saveSession],
+    [changeDirty, saveSession],
   )
   const baseName = (renamed ?? (client?.name || docName || 'document')).replace(/\.[^.]+$/, '')
   // the Office file as it is saved: a workbook with macros stays an .xlsm, a template an .xltx (named otherwise, Excel refuses it)
@@ -586,7 +590,14 @@ function Viewer(props: DocViewerProps) {
       }),
     open: (file) =>
       replace(t.bar.replaceOpen(file.name), () => {
-        importFile(file, t.file.unsupported).then(show, (e: Error) => setToast(e.message))
+        importFile(file, t.file.unsupported)
+          .then(async (doc) => {
+            // Unsaved changes go with the document shown: not for a file that does not open (a damaged one, a
+            // protected one), of which the error would be all that is left. It is opened once to see, then shown.
+            if (dirty) (await DocumentClient.open(doc.src, { name: doc.name, worker })).destroy()
+            show(doc)
+          })
+          .catch((e: Error) => setToast(e.message))
       }),
     save,
     downloadOriginal: () => saveFile(true),
@@ -606,8 +617,9 @@ function Viewer(props: DocViewerProps) {
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.defaultPrevented || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return
     const k = e.key.toLowerCase()
-    // Ctrl/⌘+S in the source: the viewer's Save
-    if (k === 's' && (e.target as HTMLElement).closest?.('.de-src')) {
+    // Ctrl/⌘+S in the source: the viewer's Save. And anywhere else in the viewer while a document is edited, where the
+    // view did not take the key itself: on a sheet tab, a thumbnail, a button of the bar (never the browser's "save page").
+    if (k === 's' && ((e.target as HTMLElement).closest?.('.de-src') || (editing && canSave && !!client))) {
       e.preventDefault()
       void save()
       return
@@ -617,11 +629,13 @@ function Viewer(props: DocViewerProps) {
       if (isTextEntry(e.target) || !selectAll.current) return
       e.preventDefault()
       selectAll.current()
+    } else if (k === 'p' && !allowDownload) {
+      // with downloads disabled, the browser must not print (save) the page either: with or without the File menu
+      e.preventDefault()
     } else if (!fileMenu) return
     else if (k === 'p') {
-      // with downloads disabled, the browser must not print (save) the page either
       e.preventDefault()
-      if (allowDownload) fileActions.run('print')
+      fileActions.run('print')
     } else if (k === 'o' && canOpen) {
       e.preventDefault()
       fileActions.run('open')

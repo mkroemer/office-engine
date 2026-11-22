@@ -16,7 +16,7 @@ import { readTyped, type TypedNumber } from '../number-input'
 import { parseSheetStyles } from './styles'
 import type { BookOp, BorderKind, CellInput, ClipCell, ColInfo, FindOptions, FmtPatch, Merge, Range, RowAttrs, SetOptions, SheetOp, SheetProgress, XlsxClip, XlsxEditResult } from './types'
 import { expandShared, overflows, restore, setColStyle, setColWidth, setFormula, setMerge, setRowHeight, shiftSheet, snapshot, type Snapshot } from './structure'
-import { dropSheetInFormula, moveRefsInFormula, parseFormula, renameSheetInFormula, translateFormula, withFunctionPrefixes, type Ast, type MoveOp, type RefAddr } from './formula'
+import { dropSheetInFormula, FormulaSyntaxError, moveRefsInFormula, parseFormula, renameSheetInFormula, translateFormula, withFunctionPrefixes, type Ast, type MoveOp, type RefAddr } from './formula'
 import { loadDelimited, type DelimitedImport } from './import'
 import { tsvCell } from './clip'
 import { compare } from './formula/values'
@@ -212,6 +212,29 @@ function amountFormat(n: TypedNumber): string {
 }
 
 /** whether text reads as a formula that reads a cell or calls a function (what makes "+A1+B1" one, and not "-5" or "- item") */
+/**
+ * A formula as it is entered: with the parentheses it leaves open closed ("=SUM(A1:A3" → "=SUM(A1:A3)", as Excel
+ * does). Undefined when it ends where something must follow ("=1+", "=A1&", "=\"open text"): not a formula yet.
+ * Anything else the reader does not understand is kept as typed: it may be a formula of a kind it does not know.
+ */
+function typedFormula(f: string): string | undefined {
+  let text = f
+  for (let closed = 0; closed <= 64; closed++) {
+    try {
+      parseFormula(text)
+      return text
+    } catch (e) {
+      if (!(e instanceof FormulaSyntaxError)) return f
+      if (e.message === 'unterminated string') return undefined
+      // wrong before its end: as typed it is something the reader does not know; with parentheses closed, it was not finished
+      if (e.pos !== -1) return closed ? undefined : f
+      // (-1: the formula ended where more was expected: an argument list or a group left open, or an operator with nothing after it)
+      text += ')'
+    }
+  }
+  return undefined
+}
+
 function readsOrCalls(text: string): boolean {
   let ast: Ast
   try {
@@ -247,7 +270,11 @@ function parseInput(input: string, style: number, ctx: InputContext = { fmt: '',
   if (input === '') return { e: style ? [T_EMPTY, '', style] : null }
   // a cell formatted as Text holds what is typed as it is typed: a phone number keeps its zeros, a formula is its text
   if (ctx.fmt === '@') return { e: [T_STR, input, style] }
-  if (input.startsWith('=') && input.length > 1) return { e: [T_STR, input, style], f: input.slice(1) }
+  if (input.startsWith('=') && input.length > 1) {
+    const f = typedFormula(input.slice(1))
+    // not a formula yet ("=1+"): the text typed, which a file can hold (a formula that does not read cannot: Excel repairs the file)
+    return f === undefined ? { e: [T_STR, input, style] } : { e: [T_STR, '=' + f, style], f }
+  }
   const t = input.trim()
   const general = !ctx.fmt || /^general$/i.test(ctx.fmt)
   // "+A1+B1", "-A1", "@SUM(A1:A3)": a formula as a numeric keypad (or Lotus) starts one. Only what reads a cell or

@@ -15,7 +15,7 @@ import { useViewCommands, type TextFormat } from '../controller'
 import { cellFormat, cellPatch, marksAfter } from '../edit/format'
 import { Status } from '../common/Status'
 import { ContextMenu, MOD, type MenuItem } from '../common/ContextMenu'
-import { Toast } from '../common/Dialog'
+import { ConfirmDialog, Toast } from '../common/Dialog'
 import { FindBar } from '../docx/FindBar'
 import { XlsxToolbar, type MergeMode } from './XlsxToolbar'
 import { Icon } from '../edit/Toolbar'
@@ -40,12 +40,25 @@ const BLOCK = 128
 const HH = 22
 const MAX_SCROLL_PX = 12_000_000
 
+/** a cached block whose rows changed in the worker: to read again (see `stale`) */
+function outdate(b: CachedBlock | undefined) {
+  if (!b) return
+  b.complete = false
+  b.stale = true
+}
+
 interface CachedBlock {
   rows: Map<number, CellOut[]>
   /** the format (style index) of the rows that have one of their own */
   own: Map<number, number>
   complete: boolean
   rowsAt: number
+  /**
+   * edited since it was read: its rows are read again, and shown as they were until they are back. Not as nothing:
+   * the cells would blink, and the format of the cell in hand would be that of an empty place for a moment (in the
+   * toolbar, and in a host's controls).
+   */
+  stale?: boolean
 }
 
 class SheetState {
@@ -63,6 +76,12 @@ class SheetState {
   gridLines = true
   blocks = new Map<number, CachedBlock>()
   inflight = new Set<number>()
+  /** how many edits changed rows here: a block asked for before one holds the rows of before it */
+  edits = 0
+  /** the rows the view asked for since the last edit (what it shows, and a margin) */
+  asked?: [number, number]
+  /** the widths (px) columns were given to show the numbers typed in them: still theirs to grow, until the user sets one */
+  autoW = new Map<number, number>()
   /** view state kept while another sheet is shown */
   sel?: Selection
   scrollPos?: { x: number; y: number }
@@ -197,14 +216,16 @@ class XlsxStore {
 
   ensure(sheet: number, r0: number, r1: number) {
     const s = this.sheet(sheet)
+    s.asked = [Math.min(r0, s.asked?.[0] ?? r0), Math.max(r1, s.asked?.[1] ?? r1)]
     if (!s.header && !s.done) return
     for (let b = Math.floor(r0 / BLOCK); b <= Math.floor(r1 / BLOCK); b++) {
       const cached = s.blocks.get(b)
       if (s.inflight.has(b)) continue
-      if (cached && (cached.complete || (cached.rowsAt === s.rows && !s.done))) continue
-      if (b * BLOCK > s.rows && !s.done && cached) continue
+      if (cached && !cached.stale && (cached.complete || (cached.rowsAt === s.rows && !s.done))) continue
+      if (b * BLOCK > s.rows && !s.done && cached && !cached.stale) continue
       s.inflight.add(b)
       const rowsAt = s.rows
+      const edits = s.edits
       this.client
         .call('xlsx.block', sheet, b * BLOCK, (b + 1) * BLOCK)
         .then((res) => {
@@ -214,7 +235,9 @@ class XlsxStore {
             rows.set(r.r, r.cells)
             if (r.s) own.set(r.r, r.s)
           }
-          s.blocks.set(b, { rows, own, complete: res.complete, rowsAt })
+          // (asked before an edit that came meanwhile: these are the rows of before it, to read once more)
+          const old = edits !== s.edits
+          s.blocks.set(b, { rows, own, complete: res.complete && !old, rowsAt, ...(old ? { stale: true } : {}) })
           if (s.blocks.size > 400) {
             const firstKey = s.blocks.keys().next().value as number
             s.blocks.delete(firstKey)
@@ -231,8 +254,13 @@ class XlsxStore {
   /** drop cached rows so they are fetched again (after edits) */
   invalidate(sheet: number, r0: number, r1: number) {
     const s = this.sheet(sheet)
-    for (let b = Math.floor(r0 / BLOCK); b <= Math.floor(r1 / BLOCK); b++) s.blocks.delete(b)
+    s.edits++
+    for (let b = Math.floor(r0 / BLOCK); b <= Math.floor(r1 / BLOCK); b++) outdate(s.blocks.get(b))
     s.rows = Math.max(s.rows, r1 + 1)
+    // the rows the view asked for are read again now, not after it has drawn once more with the old ones
+    const asked = s.asked
+    s.asked = undefined
+    if (asked && asked[0] <= r1 && asked[1] >= r0) this.ensure(sheet, Math.max(r0, asked[0]), Math.min(r1, asked[1]))
     this.emit()
   }
 
@@ -243,7 +271,12 @@ class XlsxStore {
       meta.styles[st.index] = st.css
       meta.formats[st.index] = st.format
     }
-    for (const i of res.recalc ?? []) this.sheets.get(i)?.blocks.clear()
+    for (const i of res.recalc ?? []) {
+      const x = this.sheets.get(i)
+      if (!x) continue
+      x.edits++
+      for (const b of x.blocks.values()) outdate(b)
+    }
     if (res.sheets) {
       meta.sheets = res.sheets
       this.sheets.clear()
@@ -330,7 +363,8 @@ export interface XlsxViewProps {
 export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
   const meta = client.info.xlsx as WorkbookMeta
   const visible = meta.sheets.filter((s) => !s.hidden)
-  const [active, setActive] = useState(initialSheet ?? visible[0]?.index ?? 0)
+  // (where the host says, else the sheet the file was saved on, else the first one shown)
+  const [active, setActive] = useState(initialSheet ?? (meta.active !== undefined && meta.sheets[meta.active] && !meta.sheets[meta.active].hidden ? meta.active : undefined) ?? visible[0]?.index ?? 0)
   const store = useMemo(() => storeFor(client), [client])
   const [, bump] = useForceUpdate()
   useEffect(() => store.subscribe(bump), [store, bump])
@@ -406,6 +440,8 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
   /** a message about a sheet action (a name refused or changed) */
   const [note, setNote] = useState<string | null>(null)
   const [tabMenu, setTabMenu] = useState<{ index: number; x: number; y: number } | null>(null)
+  /** the sheet about to be deleted: asked first, a deleted sheet does not come back with Undo */
+  const [deleting, setDeleting] = useState<number | null>(null)
   const bookOp = async (op: BookOp, goTo?: number) => {
     try {
       const res = await client.call('xlsx.bookOp', op)
@@ -581,8 +617,17 @@ export function XlsxView({ client, onStatus, initialSheet }: XlsxViewProps) {
             { label: str.xlsx.duplicateSheet, run: () => void bookOp({ op: 'duplicate', index: tabMenu.index }, tabMenu.index + 1) },
             { label: str.xlsx.moveLeft, disabled: tabMenu.index === 0, run: () => void bookOp({ op: 'move', from: tabMenu.index, to: tabMenu.index - 1 }, tabMenu.index - 1) },
             { label: str.xlsx.moveRight, disabled: tabMenu.index >= meta.sheets.length - 1, run: () => void bookOp({ op: 'move', from: tabMenu.index, to: tabMenu.index + 1 }, tabMenu.index + 1) },
-            { label: str.xlsx.deleteSheet, disabled: meta.sheets.length <= 1, run: () => void bookOp({ op: 'delete', index: tabMenu.index }, Math.max(0, tabMenu.index - 1)) },
+            { label: str.xlsx.deleteSheet, disabled: meta.sheets.length <= 1, run: () => setDeleting(tabMenu.index) },
           ]}
+        />
+      )}
+      {deleting !== null && meta.sheets[deleting] && (
+        <ConfirmDialog
+          title={str.xlsx.deleteSheetTitle(meta.sheets[deleting].name)}
+          message={str.xlsx.deleteSheetNote}
+          ok={str.xlsx.deleteSheetOk}
+          onOk={() => void bookOp({ op: 'delete', index: deleting }, Math.max(0, deleting - 1))}
+          onClose={() => setDeleting(null)}
         />
       )}
       {note && <Toast text={note} onDone={() => setNote(null)} />}
@@ -726,8 +771,12 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
   const scroll = useScroll(scrollRef)
   const [sel, setSelState] = useState<Selection>(() => s.sel ?? { ar: 0, ac: 0, fr: 0, fc: 0 })
   s.sel = sel
+  // The active cell: the selection's first cell. Whole columns / rows keep the corner they were picked at, which a
+  // merged title may cover: the merged cell is the active one then (it is typed in, shown in the formula bar).
+  const actM = s.merges.find((m) => sel.ar >= m.r0 && sel.ar <= m.r1 && sel.ac >= m.c0 && sel.ac <= m.c1)
+  const act = actM ? { r: actM.r0, c: actM.c0 } : { r: sel.ar, c: sel.ac }
   const [detailState, setDetail] = useState<{ r: number; c: number; d?: CellDetail } | null>(null)
-  const detail = detailState && detailState.r === sel.ar && detailState.c === sel.ac ? detailState.d : undefined
+  const detail = detailState && detailState.r === act.r && detailState.c === act.c ? detailState.d : undefined
   const [detailTick, setDetailTick] = useState(0)
   const dragging = useRef(false)
   const editRef = useRef<HTMLTextAreaElement>(null)
@@ -806,12 +855,12 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
 
   useEffect(() => {
     let live = true
-    const { ar, ac } = sel
+    const { r: ar, c: ac } = act
     client.call('xlsx.cell', sheet, ar, ac).then((d) => live && setDetail({ r: ar, c: ac, d }), () => {})
     return () => {
       live = false
     }
-  }, [client, sheet, sel.ar, sel.ac, s.done, detailTick])
+  }, [client, sheet, act.r, act.c, s.done, detailTick]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const styles = meta.styles
   const basePx = fontPx(meta.baseFont.fontSize, 14.67)
@@ -851,7 +900,8 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
     }
     if (grew) store.emit()
   })
-  const rect = withMerges(rectOf(sel), s.merges)
+  // (whole columns / rows are the ones picked: a merged title across them does not widen the selection to all it spans)
+  const rect = sel.whole === 'col' || sel.whole === 'row' ? rectOf(sel) : withMerges(rectOf(sel), s.merges)
   /** one cell, or exactly one merged cell */
   const oneCell = (rect.r0 === rect.r1 && rect.c0 === rect.c1) || s.merges.some((m) => m.r0 === rect.r0 && m.c0 === rect.c0 && m.r1 === rect.r1 && m.c1 === rect.c1)
   const selRef = useRef(rect)
@@ -887,7 +937,8 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const setSel = (next: Selection) => {
-    const m = mergeAt(next.ar, next.ac)
+    // (whole columns / rows keep their corner: moved to the first cell of a merged title, it would take the title's other columns in)
+    const m = next.whole === 'col' || next.whole === 'row' ? undefined : mergeAt(next.ar, next.ac)
     if (m) next = { ...next, ar: m.r0, ac: m.c0 }
     setSelState(next)
   }
@@ -1029,11 +1080,11 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
         />,
       )
     }
-    if (sel.ar >= rr0 - 1 && sel.ar <= rr1 && sel.ac >= cc0 - 1 && sel.ac <= cc1) {
-      const m = mergeAt(sel.ar, sel.ac)
-      const sw = m ? colAxis.pos(m.c1 + 1) - colAxis.pos(m.c0) : colAxis.size(sel.ac)
-      const sh = m ? rowAxis.pos(m.r1 + 1) - rowAxis.pos(m.r0) : rowAxis.size(sel.ar)
-      out.push(<div key="sel" className="de-sel" style={{ left: colAxis.pos(sel.ac) - ox - 1, top: rowAxis.pos(sel.ar) - oy - 1, width: sw + 1, height: sh + 1 }} />)
+    if (act.r >= rr0 - 1 && act.r <= rr1 && act.c >= cc0 - 1 && act.c <= cc1) {
+      const m = actM
+      const sw = m ? colAxis.pos(m.c1 + 1) - colAxis.pos(m.c0) : colAxis.size(act.c)
+      const sh = m ? rowAxis.pos(m.r1 + 1) - rowAxis.pos(m.r0) : rowAxis.size(act.r)
+      out.push(<div key="sel" className="de-sel" style={{ left: colAxis.pos(act.c) - ox - 1, top: rowAxis.pos(act.r) - oy - 1, width: sw + 1, height: sh + 1 }} />)
     }
     // cells with comments: a mark in the top right corner
     for (const [k, id] of cmCells) {
@@ -1241,8 +1292,10 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
   }
 
   const startEdit = async (initial?: string, bar = false) => {
+    // (a sheet still being read cannot be typed in yet: said, where the keys would otherwise go nowhere without a word)
+    if (editable && !s.done && !edit) setToast(str.xlsx.sheetLoading)
     if (!editable || !s.done || edit) return
-    const { ar, ac } = sel
+    const { r: ar, c: ac } = act
     const begin = (value: string, initialText: string, mode: EditState['mode']) =>
       setEdit({ sheet, r: ar, c: ac, value, initial: initialText, bar, mode, caret: value.length, caretEnd: value.length, sync: bar ? 0 : 1 })
     // typing replaces the content: no need to know the current value
@@ -1309,9 +1362,14 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
   /** text arrived in the hidden field of the selected cell (an IME, a virtual keyboard, an emoji picker, a key): the edit starts with it */
   const sinkStart = (el: HTMLTextAreaElement) => {
     const v = el.value
+    if (v && editable && !s.done) {
+      // not kept for later: it would be entered, unseen, with the first key after the sheet is ready
+      el.value = ''
+      setToast(str.xlsx.sheetLoading)
+    }
     if (!v || !editable || !s.done) return
-    scrollIntoView(sel.ar, sel.ac)
-    setEdit({ sheet, r: sel.ar, c: sel.ac, value: v, initial: '\u0000', bar: false, mode: 'enter', caret: el.selectionStart ?? v.length, caretEnd: el.selectionEnd ?? v.length, sync: 0 })
+    scrollIntoView(act.r, act.c)
+    setEdit({ sheet, r: act.r, c: act.c, value: v, initial: '\u0000', bar: false, mode: 'enter', caret: el.selectionStart ?? v.length, caretEnd: el.selectionEnd ?? v.length, sync: 0 })
   }
 
   /** F4: the reference at the caret goes relative → $A$1 → A$1 → $A1 → relative, both ends of a range alike */
@@ -1364,7 +1422,8 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
   }
 
   const word = fctx?.word && edit?.noSuggest !== fctx.word.s && edit?.caret === edit?.caretEnd ? fctx.word : undefined
-  const sugg: FnInfo[] = word ? suggestFunctions(word.text, 8) : []
+  // (TRUE and FALSE are values as they stand: no function is offered for them, Enter enters "=A1=TRUE")
+  const sugg: FnInfo[] = word && !/^(true|false)$/i.test(word.text) ? suggestFunctions(word.text, 8) : []
   const hint = !sugg.length && fctx?.call ? functionInfo(fctx.call.name) : undefined
   const sugKey = word ? `${word.s}:${word.text}` : ''
   useEffect(() => setSugIdx(0), [sugKey])
@@ -1562,7 +1621,9 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
     if (!rows) return
     for (const [, cells] of rows) {
       for (const [c, text, si, kind] of cells) {
-        if (c < range.c0 || c > range.c1 || kind !== 1 || !text || (meta.formats[si] ?? 'General') === 'General' || live.colAxis.size(c) !== live.colAxis.def) continue
+        // (a column widened here for an earlier number grows again for a longer one; a width from the file or the user stays)
+        const size = live.colAxis.size(c)
+        if (c < range.c0 || c > range.c1 || kind !== 1 || !text || (meta.formats[si] ?? 'General') === 'General' || (size !== live.colAxis.def && live.autoW.get(c) !== size)) continue
         const css = (styles[si] ?? {}) as Record<string, string | number>
         const px = fontPx(css.fontSize, basePx)
         const font = fontOf(css, meta.baseFont as Record<string, string>, basePx)
@@ -1576,6 +1637,8 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
     for (const [c, px] of need) {
       if (client.closed) return
       await sheetOp({ op: 'colWidth', c0: c, c1: c, px: Math.min(px, 400) })
+      const now = store.sheet(sheet)
+      now.autoW.set(c, now.colAxis.size(c))
     }
   }
 
@@ -1626,7 +1689,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
   // in the worker: every cell of the range, also those of rows not shown yet (a whole column, the whole sheet)
   const clearRange = () => void sheetOp({ op: 'clear', range: rect })
 
-  const activeCss = (styles[styleOf(sel.ar, sel.ac)] ?? {}) as Record<string, string | number>
+  const activeCss = (styles[styleOf(act.r, act.c)] ?? {}) as Record<string, string | number>
   // whole columns / rows / the sheet: the format goes to them, down to the last row, not only to the cells there are
   const fmtRange = (): Range =>
     sel.whole === 'all' ? { r0: 0, c0: 0, r1: MAX_ROW, c1: MAX_COL } : sel.whole === 'col' ? { ...rect, r0: 0, r1: MAX_ROW } : sel.whole === 'row' ? { ...rect, c0: 0, c1: MAX_COL } : rect
@@ -1841,9 +1904,9 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
   const stamp = (time: boolean) => {
     const d = new Date()
     const serial = time ? (d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds()) / 86400 : Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86400000) + 25569
-    const at = { r0: sel.ar, c0: sel.ac, r1: sel.ar, c1: sel.ac }
+    const at = { r0: act.r, c0: act.c, r1: act.r, c1: act.c }
     lastRun.current = (async () => {
-      await run(client.call('xlsx.set', sheet, [{ r: sel.ar, c: sel.ac, input: String(serial) }]))
+      await run(client.call('xlsx.set', sheet, [{ r: act.r, c: act.c, input: String(serial) }]))
       await run(client.call('xlsx.format', sheet, at, { numFmt: time ? 'hh:mm' : 'yyyy-mm-dd' }))
       await widen(at)
     })()
@@ -2169,7 +2232,10 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
       : cm?.canComment
         ? [{ label: str.edit.comment, icon: 'commentAdd', hint: COMMENT_KEYS, run: () => cm.start() }]
         : []
-    return [
+    // rows picked by their headers span every column, columns every row: their menu does not offer to insert or delete those
+    const forRows = sel.whole !== 'col'
+    const forCols = sel.whole !== 'row'
+    const items: (MenuItem | false)[] = [
       ...comment,
       { label: str.edit.cut, icon: 'cut', hint: `${MOD}X`, sep: comment.length > 0, run: () => document.execCommand('cut') },
       { label: str.edit.copy, icon: 'copy', hint: `${MOD}C`, run: () => document.execCommand('copy') },
@@ -2183,16 +2249,16 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
             .then(pasteText)
             .catch(() => setToast(str.edit.clipboardBlocked(`${MOD}V`))),
       },
-      { label: str.xlsx.rowsAbove(nr), icon: 'rowAbove', sep: true, run: () => rowsOp('rowAbove') },
-      { label: str.xlsx.rowsBelow(nr), icon: 'rowBelow', run: () => rowsOp('rowBelow') },
-      { label: str.xlsx.colsLeft(nc), icon: 'colLeft', run: () => rowsOp('colLeft') },
-      { label: str.xlsx.colsRight(nc), icon: 'colRight', run: () => rowsOp('colRight') },
-      { label: str.xlsx.deleteWhat(rows), icon: 'delRow', sep: true, run: () => rowsOp('delRow') },
-      { label: str.xlsx.deleteWhat(cols), icon: 'delCol', run: () => rowsOp('delCol') },
-      { label: str.xlsx.hideWhat(rows), icon: 'hide', sep: true, run: () => rowsOp('hideRows') },
-      { label: str.xlsx.hideWhat(cols), icon: 'hide', run: () => rowsOp('hideCols') },
-      { label: str.xlsx.unhideRows, icon: 'view', run: () => rowsOp('unhideRows') },
-      { label: str.xlsx.unhideCols, icon: 'view', run: () => rowsOp('unhideCols') },
+      forRows && { label: str.xlsx.rowsAbove(nr), icon: 'rowAbove', sep: true, run: () => rowsOp('rowAbove') },
+      forRows && { label: str.xlsx.rowsBelow(nr), icon: 'rowBelow', run: () => rowsOp('rowBelow') },
+      forCols && { label: str.xlsx.colsLeft(nc), icon: 'colLeft', sep: !forRows, run: () => rowsOp('colLeft') },
+      forCols && { label: str.xlsx.colsRight(nc), icon: 'colRight', run: () => rowsOp('colRight') },
+      forRows && { label: str.xlsx.deleteWhat(rows), icon: 'delRow', sep: true, run: () => rowsOp('delRow') },
+      forCols && { label: str.xlsx.deleteWhat(cols), icon: 'delCol', sep: !forRows, run: () => rowsOp('delCol') },
+      forRows && { label: str.xlsx.hideWhat(rows), icon: 'hide', sep: true, run: () => rowsOp('hideRows') },
+      forCols && { label: str.xlsx.hideWhat(cols), icon: 'hide', sep: !forRows, run: () => rowsOp('hideCols') },
+      forRows && { label: str.xlsx.unhideRows, icon: 'view', run: () => rowsOp('unhideRows') },
+      forCols && { label: str.xlsx.unhideCols, icon: 'view', run: () => rowsOp('unhideCols') },
       { label: merged ? str.table.unmerge : str.table.merge, icon: 'merge', sep: true, run: toggleMerge, disabled: single && !merged },
       { label: (single ? str.xlsx.sortSheetAsc : str.xlsx.sortRangeAsc)(colName(sel.ac)), icon: 'sortAZ', run: () => sortBy(false) },
       { label: (single ? str.xlsx.sortSheetDesc : str.xlsx.sortRangeDesc)(colName(sel.ac)), icon: 'sortZA', run: () => sortBy(true) },
@@ -2203,6 +2269,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
       { label: str.xlsx.freezeAt(`${colName(sel.ac)}${sel.ar + 1}`), icon: 'freeze', sep: true, run: () => freeze('sel') },
       { label: str.xlsx.unfreeze, run: () => freeze('none'), disabled: !s.frozen.rows && !s.frozen.cols },
     ]
+    return items.filter((x): x is MenuItem => !!x)
   }
 
   // ---------------------------------------------------------------- find & replace
@@ -2251,7 +2318,7 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
   }
 
   const box = edit && own ? cellBox(edit.r, edit.c) : null
-  const fx = edit ? edit.value : shown(detail, sel.ar, sel.ac)
+  const fx = edit ? edit.value : shown(detail, act.r, act.c)
   const editKeys = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (!edit || e.nativeEvent.isComposing || e.keyCode === 229) return
     const mod = e.metaKey || e.ctrlKey
@@ -2478,6 +2545,9 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
               e.preventDefault()
               const { r, c } = cellAt(e.clientX, e.clientY, e.currentTarget as HTMLElement)
               if (r >= 0 && c >= 0 && (r < rect.r0 || r > rect.r1 || c < rect.c0 || c > rect.c1)) setSel({ ar: r, ac: c, fr: r, fc: c })
+              // a header: the menu is that column's / row's, unless it is one of the columns / rows selected
+              else if (r < 0 && c >= 0 && !(sel.whole === 'col' && c >= rect.c0 && c <= rect.c1)) setSel({ ar: 0, ac: c, fr: Math.max(0, s.rows - 1), fc: c, whole: 'col' })
+              else if (c < 0 && r >= 0 && !(sel.whole === 'row' && r >= rect.r0 && r <= rect.r1)) setSel({ ar: r, ac: 0, fr: r, fc: Math.max(0, s.cols - 1), whole: 'row' })
               setCtx({ x: e.clientX, y: e.clientY })
             }}
             onDoubleClick={(e) => {
@@ -2546,17 +2616,19 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
         <XlsxToolbar
           css={activeCss}
           base={meta.baseFont as { fontFamily?: string; fontSize?: string | number }}
-          format={meta.formats[styleOf(sel.ar, sel.ac)] ?? 'General'}
+          format={meta.formats[styleOf(act.r, act.c)] ?? 'General'}
           merged={merged}
           frozen={!!(s.frozen.rows || s.frozen.cols)}
           gridlines={s.gridLines}
           painter={painter !== null}
           onToggle={toggle}
           onFormat={fmt}
+          canUndo={store.history.undo > 0}
+          canRedo={store.history.redo > 0}
           onUndo={undo}
           onRedo={redo}
           onPaint={() => {
-            setPainter((p) => (p === null ? styleOf(sel.ar, sel.ac) : null))
+            setPainter((p) => (p === null ? styleOf(act.r, act.c) : null))
             focusGrid()
           }}
           onMerge={merge}

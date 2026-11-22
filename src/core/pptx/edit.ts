@@ -9,7 +9,7 @@ import {
   escAttr, escText, type RChild, type RNode,
 } from '../raw'
 import { EMU_PER_PX } from '../units'
-import type { PartPatch, PptxPresentation } from './parser'
+import { slideHidden, type PartPatch, type PptxPresentation } from './parser'
 import { COMMENT_EXT_RE, isCommentRel } from './comments'
 import type { Box, PresentationMeta, ShapeOp, SlideModel, SlideOp } from './types'
 import { dict } from '../dict'
@@ -183,6 +183,7 @@ export async function undoShapes(pres: PptxPresentation, redo = false): Promise<
     return { index, model: await pres.slide(index), meta: { ...meta, slides: meta.slides.map((x) => ({ ...x })) } }
   }
   pres.pkg.setPart(e.path, redo ? e.after : e.before)
+  if (e.gen) pres.genRestore(e.path, e.gen[redo ? 1 : 0])
   const index = pres.meta.slides.findIndex((s) => s.path === e.path)
   if (index < 0) return null
   return { index, model: await pres.slide(index) }
@@ -332,10 +333,7 @@ async function refreshMeta(pres: PptxPresentation): Promise<PresentationMeta> {
     const rel = rels.get(getAttr(s, 'r:id') ?? getAttr(s, 'id', true) ?? '')
     if (rel && pres.pkg.has(rel.target)) slides.push({ index: slides.length, path: rel.target, hidden: false })
   }
-  for (const s of slides) {
-    const head = (await pres.pkg.text(s.path)).slice(0, 600)
-    s.hidden = /<[\w:]*sld\b[^>]*\sshow="0"/.test(head)
-  }
+  for (const s of slides) s.hidden = await slideHidden(pres.pkg, s.path)
   pres.meta.slides = slides
   pres.meta.count = slides.length
   return pres.meta

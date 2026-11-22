@@ -167,9 +167,21 @@ function htmlLabel(v: string): string {
     .join('\n')
 }
 
+const ENTITIES: Record<string, string> = { quot: '"', amp: '&', lt: '<', gt: '>', nbsp: '\u00a0', apos: "'" }
+
+/** Graphviz decodes HTML entities (&lt; &amp; &#38; &#x26; …) in every label before it looks at escapes or record syntax */
+function decodeEntities(v: string, record = false): string {
+  return v.replace(/&(?:#(\d+)|#[xX]([0-9a-fA-F]+)|([a-zA-Z]+));/g, (m, d?: string, h?: string, name?: string) => {
+    const cp = d ? Number(d) : h ? parseInt(h, 16) : NaN
+    const ch = !Number.isNaN(cp) ? (cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : m) : ENTITIES[name!] ?? m
+    // in a record an entity is text, never syntax: `&lt;` must not open a port
+    return record && '{}|<>'.includes(ch) ? `\\${ch}` : ch
+  })
+}
+
 /** text of a plain label: \n \l \r line breaks, \N the node name */
 function plainLabel(v: string, id: string, graph = ''): string {
-  return v
+  return decodeEntities(v)
     .replace(/\\[nlr]/g, '\n')
     .replace(/\\N/g, id)
     .replace(/\\G/g, graph)
@@ -177,13 +189,53 @@ function plainLabel(v: string, id: string, graph = ''): string {
     .replace(/\n$/, '')
 }
 
-/** record fields "{a|<p> b|{c|d}}" as rows */
-function recordRows(v: string, id: string): string[] {
-  return plainLabel(v, id)
-    .replace(/<[^>]*>/g, '')
-    .split(/[|{}]/)
-    .map((x) => x.trim())
-    .filter(Boolean)
+/** a record label's field tree: a string is a cell, an array a `{ }` group (which runs the other way) */
+type RecField = string | RecField[]
+
+/**
+ * "<f0> a|{b|<p> c}|": every `|` makes a field even when it is empty, `<port>` is dropped, `{ }` nests, and
+ * `\{ \} \| \< \>` and `\ ` escape. Entities are decoded first, as Graphviz does.
+ */
+function parseRecord(v: string, id: string): RecField[] {
+  const s = decodeEntities(v, true)
+  const SP = '\ue000' // an escaped space survives trimming
+  let i = 0
+  const level = (): RecField[] => {
+    const out: RecField[] = []
+    let text = ''
+    let group: RecField[] | null = null
+    const end = () => {
+      out.push(group ?? text.replace(/^[ \t]+|[ \t]+$/g, '').split(SP).join(' '))
+      text = ''
+      group = null
+    }
+    while (i < s.length) {
+      const c = s[i++]
+      if (c === '\\' && i < s.length) {
+        const e = s[i++]
+        text += e === 'n' || e === 'l' || e === 'r' ? '\n' : e === 'N' ? id : e === ' ' ? SP : e
+      } else if (c === '{') group = level()
+      else if (c === '}') break
+      else if (c === '|') end()
+      else if (c === '<') {
+        const close = s.indexOf('>', i)
+        i = close < 0 ? s.length : close + 1
+      } else if (!group) text += c
+    }
+    end()
+    return out
+  }
+  return level()
+}
+
+const recLines = (f: RecField): string[] => (typeof f === 'string' ? f.split('\n') : f.flatMap(recLines))
+
+/** fields side by side (a row of cells, taller cells spilling over several rows) or stacked (one section each) */
+function recordSections(fields: RecField[], across: boolean): Section[] {
+  if (!across) return fields.flatMap((f) => (typeof f === 'string' ? [{ rows: f.split('\n').map((t) => [t]), center: true }] : recordSections(f, true)))
+  const cols = fields.map(recLines)
+  const height = Math.max(...cols.map((c) => c.length))
+  return [{ rows: Array.from({ length: height }, (_, r) => cols.map((c) => c[r] ?? '')), grid: true }]
 }
 
 export function parseDot(src: string): Graph[] {
@@ -325,7 +377,7 @@ export function parseDot(src: string): Graph[] {
     const dir: Dir = ({ LR: 'LR', RL: 'RL', BT: 'BT', TB: 'TB' } as Record<string, Dir>)[(graphAttrs.rankdir ?? 'TB').toUpperCase()] ?? 'TB'
     b.g.dir = dir
     if (graphAttrs.label) b.g.title = graphAttrs.label.startsWith('<') ? htmlLabel(graphAttrs.label.slice(1, -1)) : plainLabel(graphAttrs.label, '', name)
-    for (const n of b.g.nodes) applyNode(n, nodeAttrs.get(n.id) ?? {})
+    for (const n of b.g.nodes) applyNode(n, nodeAttrs.get(n.id) ?? {}, dir)
     for (const c of b.g.clusters) {
       const a = clusterAttrs.get(c.id) ?? {}
       c.label = a.label ? (a.label.startsWith('<') ? htmlLabel(a.label.slice(1, -1)) : plainLabel(a.label, '', c.id)) : ''
@@ -366,16 +418,25 @@ export function parseDot(src: string): Graph[] {
   return graphs
 }
 
-function applyNode(n: GNode, a: Record<string, string>) {
+function applyNode(n: GNode, a: Record<string, string>, dir: Dir) {
   const shapeName = (a.shape ?? 'ellipse').toLowerCase()
   n.shape = SHAPES[shapeName] ?? 'ellipse'
   const lab = a.label
   if (lab !== undefined) {
-    if (lab.startsWith('<') && lab.endsWith('>')) n.label = htmlLabel(lab.slice(1, -1))
+    // a record label may start with a port and end with one ("<f0> a|<f1>"): it is never an HTML label
+    if (shapeName !== 'record' && shapeName !== 'mrecord' && lab.startsWith('<') && lab.endsWith('>')) n.label = htmlLabel(lab.slice(1, -1))
     else if (shapeName === 'record' || shapeName === 'mrecord') {
-      const rows = recordRows(lab, n.id)
-      n.label = rows.join('\n')
-      if (rows.length > 1) n.sections = rows.map((r) => ({ rows: [[r]], center: true }) as Section)
+      const fields = parseRecord(lab, n.id)
+      n.label = fields.flatMap(recLines).filter(Boolean).join('\n')
+      // TB / BT: the top-level fields sit side by side; LR / RL: they are stacked
+      let top = fields
+      let across = !(dir === 'LR' || dir === 'RL')
+      // a lone `{ }` group around everything just flips the direction
+      while (top.length === 1 && Array.isArray(top[0])) {
+        top = top[0]
+        across = !across
+      }
+      if (top.length > 1) n.sections = recordSections(top, across)
     } else n.label = plainLabel(lab, n.id)
   }
   if (n.shape === 'point') n.label = ''
