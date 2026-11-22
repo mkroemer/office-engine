@@ -571,7 +571,10 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
   // value axes and the groups on them
   const valIds = [...new Set(groups.map((g) => g.axIds[1]).filter(Boolean))]
   const plans = new Map<string, AxisPlan>()
-  const cats = groups.find((g) => !xValued(g))?.series[0]?.cats ?? []
+  // the category axis drawn: the first one shown (a combination's groups each have their own), else the first
+  const catGroups = groups.filter((g) => !xValued(g))
+  const catAxis = catGroups.map((g) => axis(g.axIds[0])).find((a) => a && !a.deleted) ?? axis(catGroups[0]?.axIds[0] ?? '')
+  const cats = catLabels(catGroups[0]?.series[0], catAxis, m.date1904)
   const n = Math.max(1, highest(groups.filter((g) => !xValued(g)).flatMap((g) => g.series.map((s) => s.values.length))))
   const valLen = horizontal ? area.w : area.h
   for (const id of valIds) {
@@ -611,7 +614,6 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
   }
   // the first group's X axis is the one drawn
   const xPlan = scatter ? (xPlans.get(scatter.axIds[0]) ?? null) : null
-  const catAxis = axis(groups.find((g) => !xValued(g))?.axIds[0] ?? '')
   const showCats = !!cats.length && !scatter && !(catAxis?.deleted ?? false) && (catAxis?.labels ?? true)
   const primary = valIds.find((id) => !['r', 't'].includes(plans.get(id)!.axis.pos)) ?? valIds[0]
   const secondary = valIds.find((id) => id !== primary)
@@ -822,6 +824,14 @@ function baseUnitOf(dates: number[], date1904: boolean): 'days' | 'months' | 'ye
 
 /** while a chart's series are drawn, the layer their data labels go on (unclipped, above them) */
 const labelLayers = new WeakMap<Svg, Svg>()
+
+/** a series' categories as an axis labels them: in the axis' own number format where it has one, else as their cells show them */
+export function catLabels(s: ChartSeries | undefined, a: ChartAxis | undefined, date1904: boolean): string[] {
+  if (!s) return []
+  const f = a?.format
+  if (!f || !s.catValues) return s.cats
+  return s.cats.map((c, k) => (s.catValues![k] !== null && s.catValues![k] !== undefined ? fmt(s.catValues![k]!, f, date1904) : c))
+}
 
 /** where the category axis crosses the value axis: as the file says (`crosses`, `crossesAt`), else zero or the bound nearest it */
 function crossing(s: Scale, cat: ChartAxis | undefined): number {

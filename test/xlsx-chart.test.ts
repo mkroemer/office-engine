@@ -685,6 +685,20 @@ describe('xlsx charts: as Excel draws them', () => {
     expect(Math.max(...widths(renderChart(model!, 480, 300)))).toBeLessThan(Math.min(...monthly) / 10)
   })
 
+  test("categories in the axis' own format; a combination's labels from the category axis it shows", async () => {
+    const { model } = await modelOf(await withChart(CLUSTERED))
+    const cat = model!.axes.find((a) => a.kind === 'cat')!
+    for (const s of model!.groups[0].series) s.catValues = [43831, 43862, 43891]
+    cat.format = 'mmm'
+    const svg = renderChart(model!, 480, 300)
+    for (const m of ['Jan', 'Feb', 'Mar']) expect(svg).toContain(`>${m}<`)
+    // the first group's axis deleted, a second group's shown: its labels are drawn
+    cat.deleted = true
+    model!.axes.push({ ...cat, id: '9', deleted: false })
+    model!.groups.push({ ...model!.groups[0], type: 'line', axIds: ['9', '2'], series: [model!.groups[0].series[1]] })
+    expect(renderChart(model!, 480, 300)).toContain('>Feb<')
+  })
+
   test("a horizontal bar chart's clusters run from the bottom up: the first series lowest", async () => {
     const { model } = await modelOf(await withChart(CLUSTERED.replace('<c:barDir val="col"/>', '<c:barDir val="bar"/>')))
     const [a, b] = model!.groups[0].series

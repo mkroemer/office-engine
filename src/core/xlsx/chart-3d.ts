@@ -11,7 +11,7 @@
 import { hexToRgb, rgbToHex } from '../color'
 import { lineHeight, textWidth, type Pt, type Svg } from '../diagram/svg'
 import { labelsAt, type ChartAxis, type ChartGroup, type ChartModel, type Fill, type LineLook, type View3D } from './chart'
-import { cumulative, extent, fillPaint, fmt, gridPaint, highest, intervals, isStacked, linePaint, niceScale, PX, surfaceBands, textOf, type Box } from './chart-svg'
+import { catLabels, cumulative, extent, fillPaint, fmt, gridPaint, highest, intervals, isStacked, linePaint, niceScale, PX, surfaceBands, textOf, type Box } from './chart-svg'
 
 type V3 = [number, number, number]
 
@@ -333,7 +333,7 @@ export function drawCartesian3D(svg: Svg, m: ChartModel, g: ChartGroup, area: Bo
   const deep = g.type === 'line' || surface || g.grouping === 'standard'
   const rows = deep ? g.series.length : 1
   const n = Math.max(1, highest(g.series.map((s) => s.values.length)))
-  const cats = g.series[0]?.cats ?? []
+  const cats = catLabels(g.series[0], catAxis, m.date1904)
   const valT = textOf(m, valAxis?.text)
   const catT = textOf(m, catAxis?.text)
   const serT = textOf(m, serAxis?.text)
