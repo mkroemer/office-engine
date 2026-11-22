@@ -11,7 +11,7 @@
 import { hexToRgb, rgbToHex } from '../color'
 import { lineHeight, textWidth, type Pt, type Svg } from '../diagram/svg'
 import { labelsAt, type ChartAxis, type ChartGroup, type ChartModel, type Fill, type LineLook, type View3D } from './chart'
-import { cumulative, extent, fillPaint, fmt, gridPaint, highest, intervals, isStacked, linePaint, lowest, niceScale, PX, surfaceBands, textOf, type Box } from './chart-svg'
+import { cumulative, extent, fillPaint, fmt, gridPaint, highest, intervals, isStacked, linePaint, niceScale, PX, surfaceBands, textOf, type Box } from './chart-svg'
 
 type V3 = [number, number, number]
 
@@ -299,16 +299,11 @@ const sidesOf = (shape: string) => (shape === 'box' || shape.startsWith('pyramid
 
 /** a value axis' scale, ticks and their labels */
 function valueScale(m: ChartModel, g: ChartGroup, a: ChartAxis | undefined, len: number, across: boolean) {
-  const [lo, hi] = g.type === 'surface' ? surfaceExtent(g) : extent(g, m.blanks)
+  const [lo, hi] = extent(g, m.blanks)
   const whole = g.grouping === 'percentStacked'
   const scale = niceScale(lo, hi, { min: a?.min ?? (whole ? lo : undefined), max: a?.max ?? (whole ? hi : undefined), major: a?.major, ticks: intervals(len, textOf(m, a?.text).size, across) })
   const f = a?.format ?? (whole ? '0%' : g.series.find((s) => s.format)?.format)
   return { scale, labels: scale.ticks.map((t) => fmt(t, f, m.date1904)) }
-}
-
-function surfaceExtent(g: ChartGroup): [number, number] {
-  const all = g.series.flatMap((s) => s.values).filter((v): v is number => v !== null)
-  return all.length ? [lowest(all), highest(all)] : [0, 1]
 }
 
 /** a wall or the floor: its fill and outline where the file gives them, the outline in the axis color where it gives none */
