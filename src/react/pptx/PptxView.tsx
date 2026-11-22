@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { Box, PresentationMeta, ShapeKind, ShapeOp, SlideModel, SlideOp } from '../../core/pptx/types'
 import type { DocumentClient } from '../../core/worker/client'
 import { claimFocus, useForceUpdate, useIsoLayoutEffect, useScroll, useSize } from '../common/hooks'
@@ -227,7 +227,14 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
   const [presenting, setPresenting] = useState<number | null>(null)
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
   /** shape edits that can be undone */
-  const [undoDepth, setUndoDepth] = useState(0)
+  // what Undo / Redo can take back and bring back outside a text: shape, text and slide list edits (the worker's count)
+  const [hist, setHist] = useState({ undo: 0, redo: 0 })
+  const syncHist = useCallback(() => {
+    client
+      .call('pptx.history')
+      .then((h) => !client.closed && setHist((was) => (was.undo === h.undo && was.redo === h.redo ? was : h)))
+      .catch(() => undefined)
+  }, [client])
 
   const fitW = size.w ? (size.w - PAD * 2) / meta.w : 1
   const fitH = size.h ? (size.h - PAD * 2) / meta.h : 1
@@ -263,7 +270,10 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
     editor.onChange = bump
     editor.onDirty = () => viewer.setDirty(true)
     editor.onCellMove = (d) => moveCell(d)
-    editor.onCommitted = (slide, m) => putSlide(client, slide, m)
+    editor.onCommitted = (slide, m) => {
+      putSlide(client, slide, m)
+      syncHist()
+    }
     editor.shortcut = (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
         void viewer.save()
@@ -303,17 +313,40 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
   // ---- collaboration (src/collab) ----
   const stopRef = useRef(stopEditing)
   stopRef.current = stopEditing
-  useEffect(() => registerHost(client, 'pptx', { endEditing: () => stopRef.current() }), [client])
+  // the slide whose text is edited is no longer drawn (scrolled away, another slide picked in the list): the editing
+  // ends, its text written. After the render, not in it: ending it updates the toolbar.
+  const editedGone = editor.active && (editor.slide < first || editor.slide > last)
+  useEffect(() => {
+    if (editedGone) stopRef.current()
+  }, [editedGone])
+  useEffect(() => registerHost(client, 'pptx', { endEditing: () => stopRef.current(), flushText: () => editor.flush() }), [client, editor])
+  // the slide whose text is being typed, by its part: where it is after the slide list changed in a room
+  const editPath = useRef<string | undefined>(undefined)
+  editPath.current = editor.active ? meta.slides[editor.slide]?.path : undefined
+  const pitchRef = useRef(pitch)
+  pitchRef.current = pitch
   useEffect(
     () =>
       client.on('collab:pptx', (r) => {
         if (r.meta) {
+          // the text being typed stays with its slide (a collaborator added or moved slides): it is not ended, and the
+          // slide keeps its place on the screen. Only when its slide is gone does the editing end.
+          const was = editor.slide
+          const to = editor.active && editPath.current ? meta.slides.findIndex((s) => s.path === editPath.current) : -1
           resetSlides(client)
           setSelected(null)
+          if (editor.active && to < 0) stopRef.current()
+          else if (editor.active) {
+            editor.moveSlide(to)
+            const el = scrollRef.current
+            if (el && to !== was) el.scrollTop += (to - was) * pitchRef.current
+          }
           setSlidesVer((v) => v + 1)
         } else if (r.slide !== undefined && r.model) putSlide(client, r.slide, r.model)
+        // (a change of the slide list by anyone empties what can be undone in a room)
+        syncHist()
       }),
-    [client],
+    [client, syncHist],
   )
   useEffect(() => publishLocal(client, { slide: selected?.slide ?? current, top: selected?.top }), [client, selected?.slide, selected?.top, current])
 
@@ -327,6 +360,8 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
             root: (el) => {
               textRoot.current = el
               if (el) editor.input.attach(el)
+              // drawn again on its own (its slide read again after the slide list changed): the caret is put back
+              if (el && editor.pendingSel) queueMicrotask(bump)
             },
           },
         }
@@ -417,7 +452,7 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
       const m = await client.call('pptx.shapes', slide, ops)
       putSlide(client, slide, m)
       viewer.setDirty(true)
-      setUndoDepth((d) => d + 1)
+      syncHist()
       if (selectNew) {
         const tops = m.els.map((x) => x.top ?? -1)
         setSelected({ slide, top: Math.max(...tops) })
@@ -477,6 +512,9 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
       const el = m.els[m.els.length - 1]
       if (el?.t === 'shape' && el.sid !== undefined && el.text) {
         editor.begin(slide, el.sid, el.text)
+        // the keyboard goes into the new box, its sample text selected: what is typed next replaces it
+        const k = editor.paras.length - 1
+        editor.pendingSel = { a: { pa: '0', o: 0 }, f: { pa: String(k), o: plen(editor.paras[k].runs) } }
         bump()
       }
     }
@@ -490,7 +528,7 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
     resetSlides(client)
     viewer.setDirty(true)
     // the slide list changes go through the same undo as shape edits
-    setUndoDepth((d) => d + 1)
+    syncHist()
     setSlidesVer((v) => v + 1)
     if (goTo !== undefined) requestAnimationFrame(() => go(goTo))
   }
@@ -499,6 +537,7 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
     // text typed a moment ago is written first: it is the newest edit
     await editor.flush().catch(() => undefined)
     const r = await client.call('pptx.undo', redo)
+    syncHist()
     if (!r) return
     if (r.meta) {
       // the slide list changed: every slide is read again
@@ -509,7 +548,6 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
     }
     putSlide(client, r.index, r.model)
     viewer.setDirty(true)
-    setUndoDepth((d) => Math.max(0, d + (redo ? 1 : -1)))
     setSelected(null)
     go(r.index)
   }
@@ -685,9 +723,9 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
       outline: { kind: 'slides', items: Array.from({ length: meta.count }, (_, i) => ({ id: String(i), title: titles[i] || `${str.pptx.slide} ${i + 1}`, level: 0, current: i === current })) },
     })
   }, [ctl, current, meta.count, titles, str])
-  // as the toolbar's buttons: undo while there is a shape edit or text is being edited; redo whenever editing (no redo depth is kept)
+  // as the toolbar's buttons: while there is an edit to take back / bring back, or text is being edited (which has its own steps)
   useEffect(() => {
-    ctl?.update({ canUndo: viewer.editable && (undoDepth > 0 || editor.active), canRedo: viewer.editable })
+    ctl?.update({ canUndo: viewer.editable && (hist.undo > 0 || editor.active), canRedo: viewer.editable && (hist.redo > 0 || editor.active) })
   })
   const publishedSelection = useRef<Sel | null>(null)
   const publishFormat = useViewCommands(ctl, {
@@ -876,7 +914,6 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
       </div>,
     )
   }
-  if (editor.active && (editor.slide < first || editor.slide > last)) stopEditing()
   const thumbs = []
   if (showThumbs) {
     for (let i = tFirst; i <= tLast; i++) {
@@ -886,7 +923,11 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
           className="de-thumb"
           style={{ top: 10 + i * tPitch }}
           aria-current={i === current}
-          onClick={() => go(i)}
+          onClick={() => {
+            go(i)
+            // the slides take the keyboard: the arrow keys, Delete and the viewer's shortcuts work on from here
+            scrollRef.current?.focus({ preventScroll: true })
+          }}
           onContextMenu={(e) => {
             if (!viewer.editable) return
             e.preventDefault()
@@ -935,7 +976,8 @@ export function PptxView({ client, onStatus, initialZoom = 'fit', thumbnails = t
                 : null
             }
             textAnchor={editor.body?.anchor}
-            canUndo={undoDepth > 0}
+            canUndo={hist.undo > 0}
+            canRedo={hist.redo > 0}
             onUndo={(redo) => void undoShapes(redo)}
             onInsert={(k) => void insert(k)}
             onFill={(color) => selected && void runShapes(selected.slide, [{ op: 'fill', top: selected.top, color }])}

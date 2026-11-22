@@ -364,6 +364,67 @@ describe('P3-035 / P3-036 list styles and legal numbering', () => {
   })
 })
 
+describe('QA 3: bookmarks inside a link', () => {
+  test('typing in the paragraph keeps the bookmark a link wraps (what a cross-reference points to), once', async () => {
+    const body =
+      '<w:p><w:bookmarkStart w:id="1" w:name="outer"/><w:r><w:t>See </w:t></w:r><w:hyperlink w:anchor="target"><w:bookmarkStart w:id="2" w:name="_Ref100"/><w:r><w:t>the section</w:t></w:r><w:bookmarkEnd w:id="2"/></w:hyperlink>' +
+      '<w:ins w:id="9" w:author="A" w:date="2026-01-01T00:00:00Z"><w:bookmarkStart w:id="3" w:name="inIns"/><w:r><w:t> added</w:t></w:r><w:bookmarkEnd w:id="3"/></w:ins><w:bookmarkEnd w:id="1"/></w:p>'
+    const { engine, blocks } = await openDocx(await mkDocx(body))
+    const p = paras(blocks)[0]
+    const runs = p.runs.map((r, i) => (i === 0 && r.t === 'text' ? { ...r, text: 'Look at ' } : r))
+    await editPara(engine, p, runs)
+    const xml = bodyOf(await partText((await engine.call('save', [])) as Blob, 'word/document.xml'))
+    expect(xml).toContain('Look at ')
+    for (const [id, name] of [['1', 'outer'], ['2', '_Ref100'], ['3', 'inIns']]) {
+      expect(xml.split(`<w:bookmarkStart w:id="${id}" w:name="${name}"/>`).length).toBe(2)
+      expect(xml.split(`<w:bookmarkEnd w:id="${id}"/>`).length).toBe(2)
+    }
+    // read again: nothing is said to be wrong with it, the text is whole
+    const again = await openDocx((await engine.call('save', [])) as Blob)
+    expect(shown(paras(again.blocks)[0])).toContain('Look at the section')
+  })
+})
+
+describe('QA 3: a level the list does not define', () => {
+  const li = (id: number, t: string) => `<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="${id}"/></w:numPr></w:pPr><w:r><w:t>${t}</w:t></w:r></w:p>`
+  const single = (id: number, fmt: string, text: string) =>
+    `<w:abstractNum w:abstractNumId="${id}"><w:multiLevelType w:val="singleLevel"/><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="${fmt}"/><w:lvlText w:val="${text}"/><w:pPr><w:ind w:left="360" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum>`
+  const numbering = `<?xml version="1.0"?><w:numbering ${WNS}>${single(0, 'bullet', '•')}${single(1, 'decimal', '%1.')}<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num><w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num></w:numbering>`
+  const indent = async (engine: Engine, p: Paragraph, ilvl: number) =>
+    (await engine.call('docx.edit', [{ anchor: p.pid, list: [paraSpec([{ ...p, pd: { ilvl }, edited: true }])], want: true }])) as EditResult
+
+  test('Tab on an item of a one-level list (as generators write them) keeps its marker: the levels missing are added', async () => {
+    const file = await mkDocx(li(1, 'one') + li(1, 'two') + li(2, 'first') + li(2, 'second') + li(2, 'third'), { 'word/numbering.xml': numbering })
+    const { engine, blocks } = await openDocx(file)
+    const ps = paras(blocks)
+    const a = await indent(engine, ps[1], 1)
+    expect(paras(a.blocks[ps[1].pid!])[0].marker?.text).toBe('◦')
+    const b = await indent(engine, ps[3], 1)
+    expect(paras(b.blocks[ps[3].pid!])[0].marker?.text).toBe('a.')
+    const saved = (await engine.call('save', [])) as Blob
+    const xml = await partText(saved, 'word/numbering.xml')
+    // nine levels each, in their order, further in by level; the first one is what it was
+    expect(xml.match(/<w:lvl /g)!.length).toBe(18)
+    expect([...xml.matchAll(/<w:lvl w:ilvl="(\d)"/g)].map((m) => m[1]).join('')).toBe('012345678012345678')
+    expect(xml).toContain('<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/><w:pPr><w:ind w:left="360" w:hanging="360"/></w:pPr></w:lvl>')
+    expect(xml).toContain('<w:lvl w:ilvl="1"><w:start w:val="1"/><w:numFmt w:val="lowerLetter"/><w:lvlText w:val="%2."/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="1080" w:hanging="360"/></w:pPr></w:lvl>')
+    expect(xml).not.toContain('singleLevel')
+    // opened again: the markers are there, the numbers go on around the item moved in
+    const again = await openDocx(saved)
+    expect(paras(again.blocks).map((p) => p.marker?.text)).toEqual(['•', '◦', '1.', 'a.', '2.'])
+    expect(paras(again.blocks).map((p) => p.ilvl ?? 0)).toEqual([0, 1, 0, 1, 0])
+  })
+
+  test('a level the list has is left alone', async () => {
+    const file = await mkDocx(li(1, 'one') + li(1, 'two'), { 'word/numbering.xml': numbering })
+    const { engine, blocks } = await openDocx(file)
+    await indent(engine, paras(blocks)[1], 1)
+    const once = await partText((await engine.call('save', [])) as Blob, 'word/numbering.xml')
+    await indent(engine, paras(blocks)[1], 2)
+    expect(await partText((await engine.call('save', [])) as Blob, 'word/numbering.xml')).toBe(once)
+  })
+})
+
 describe('P3-040 editing a header keeps the comment anchored in it', () => {
   test('range and reference are written again, around the text', async () => {
     const hdrXml = `<?xml version="1.0"?><w:hdr ${WNS}><w:p><w:commentRangeStart w:id="0"/><w:r><w:t>Company</w:t></w:r><w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r></w:p></w:hdr>`

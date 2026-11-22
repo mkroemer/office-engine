@@ -92,7 +92,9 @@ export class PptxEditor implements RichHost<EPara> {
   private pend: { s: Partial<RunStyle>; d: PRunSet; at: { pa: string; o: number } } | null = null
   private timer: ReturnType<typeof setTimeout> | undefined
   private changedSinceCommit = false
-  private commits: { slide: number; sid: number; cell?: [number, number]; specs: PParaSpec[]; failed?: number }[] = []
+  private commits: { slide: number; sid: number; cell?: [number, number]; specs: PParaSpec[]; failed?: number; step: boolean }[] = []
+  /** the next edit written begins an undo step of its own: the text was just entered */
+  private step = true
   private committing?: Promise<void>
   onChange?: () => void
   onCommitted?: (slide: number, model: SlideModel) => void
@@ -132,6 +134,14 @@ export class PptxEditor implements RichHost<EPara> {
     this.history = []
     this.future = []
     this.pend = null
+    this.step = true
+  }
+
+  /** the slide list changed under the text (a collaborator's edit): it goes on in its slide, now the one at `slide` */
+  moveSlide(slide: number) {
+    this.slide = slide
+    // the slides are drawn again: the caret returns to where it was
+    this.pendingSel = this.input.lastSel ?? this.pendingSel
   }
 
   end() {
@@ -274,7 +284,8 @@ export class PptxEditor implements RichHost<EPara> {
           r.t === 'fld' ? { text: '', src: r.src as [number, number], fld: true } : { text: r.text ?? '', src: r.src as [number, number] | undefined, set: r.d as PRunSet | undefined },
         ),
       }))
-      this.commits.push({ slide: this.slide, sid: this.sid, cell: this.cell, specs })
+      this.commits.push({ slide: this.slide, sid: this.sid, cell: this.cell, specs, step: this.step })
+      this.step = false
     }
     if (!this.committing) {
       this.committing = this.drainCommits().finally(() => {
@@ -289,7 +300,7 @@ export class PptxEditor implements RichHost<EPara> {
       const c = this.commits[0]
       let model: SlideModel
       try {
-        model = await this.client.call('pptx.setText', c.slide, c.sid, c.specs, c.cell)
+        model = await this.client.call('pptx.setText', c.slide, c.sid, c.specs, c.cell, c.step)
       } catch (e) {
         // Retain a failed snapshot for retry, including after the active shape changes: but not for ever. An edit the
         // worker refuses every time would fail every save from here on, the edits made after it never written.

@@ -21,6 +21,7 @@ import type {
   Block, CanonStyle, CellSpec, EditOp, EditResult, ParaDirty, ParaSpec, ParaStyle, Paragraph, RunSet, RunStyle, SpecRun, SrcRef, StyleInfo, StyleLook, StyleSetResult,
   TableOp, TableSpec, PageSet, PageSetResult, PageSetup, HFKind, HFLine, HFSet, HFSetResult, TrackMark,
 } from './types'
+import { RUN_OBJECTS, RUN_TEXT } from './types'
 import { dict } from '../dict'
 import { MC_NS, mathOmml, OE_NS } from '../math/omml'
 
@@ -152,7 +153,33 @@ function origRun(doc: DocxDocument, src: SrcRef | undefined): RNode | undefined 
   if (!p) return undefined
   let runs = runCache.get(p)
   if (!runs) runCache.set(p, (runs = collectRunsRaw(p)))
-  return runs[src[1]]
+  const run = runs[src[1]]
+  return run && src[2] !== undefined ? objectRun(run, src[2]) : run
+}
+
+/**
+ * A source run with one of its objects alone: the `k`-th (counted as the parser meets them), without the run's other
+ * objects and without its text, which the model holds as runs of their own.
+ */
+function objectRun(run: RNode, k: number): RNode {
+  const r = clone(run)
+  let n = 0
+  r.c = r.c.filter((c) => {
+    if (!isNode(c)) return true
+    const l = local(c.q)
+    if (RUN_TEXT.has(l)) return false
+    const first = n
+    if (RUN_OBJECTS.has(l)) n++
+    else if (l === 'AlternateContent')
+      walkOoxml(c, (x) => {
+        if (!RUN_OBJECTS.has(local(x.q))) return false
+        n++
+        return true
+      }, DOCX_UNDERSTOOD)
+    // no object in it (run properties, markup that is carried along): it stays
+    return n === first || (k >= first && k < n)
+  })
+  return r
 }
 
 // ---------------------------------------------------------------- generation
@@ -487,6 +514,54 @@ async function ensureList(doc: DocxDocument, kind: 'bullet' | 'number'): Promise
   return String(num)
 }
 
+const LEVEL_BULLETS = ['•', '◦', '▪']
+const LEVEL_FORMATS = ['decimal', 'lowerLetter', 'lowerRoman']
+
+/**
+ * A list of the file may define fewer levels than the nine a paragraph can be moved to (a single one, as generators
+ * write it): a paragraph moved to a level the list does not have would lose its marker. The levels missing are added
+ * to the list, in the manner of its first one: bullets or numbers, each half an inch further in.
+ */
+async function ensureLevel(doc: DocxDocument, numId: string, ilvl: number) {
+  if (doc.numbering.level(numId, ilvl)) return
+  const abstractId = doc.numbering.abstractOf(numId)
+  const path = relOfType(doc.rels, 'numbering')?.target
+  if (abstractId === undefined || !path || !doc.pkg.has(path)) return
+  const nodes = parseRaw(await doc.pkg.text(path))
+  const root = rootEl(nodes)
+  const W = root ? prefixOf(root.q) : ''
+  const abs = kidsOf(root, 'abstractNum').find((a) => getAttr(a, W + 'abstractNumId') === abstractId)
+  if (!abs) return
+  const levelOf = (n: RChild) => (isNode(n) && local(n.q) === 'lvl' ? Number(getAttr(n, W + 'ilvl') ?? 0) : -1)
+  const first = abs.c.find((c) => levelOf(c) === 0) as RNode | undefined
+  const bullet = kidOf(first, 'numFmt') ? getAttr(kidOf(first, 'numFmt')!, W + 'val') === 'bullet' : false
+  const ind = kidOf(kidOf(first, 'pPr'), 'ind')
+  const twips = (name: string, or: number) => {
+    const v = Number(ind && (getAttr(ind, W + name) ?? (name === 'left' ? getAttr(ind, W + 'start') : undefined)))
+    return Number.isFinite(v) && v >= 0 ? v : or
+  }
+  const left = twips('left', 720)
+  const hanging = twips('hanging', 360)
+  for (let l = 0; l < 9; l++) {
+    if (abs.c.some((c) => levelOf(c) === l)) continue
+    const node = parseRaw(
+      `<${W}lvl ${W}ilvl="${l}"><${W}start ${W}val="1"/><${W}numFmt ${W}val="${bullet ? 'bullet' : LEVEL_FORMATS[l % 3]}"/>` +
+        `<${W}lvlText ${W}val="${bullet ? LEVEL_BULLETS[l % 3] : `%${l + 1}.`}"/><${W}lvlJc ${W}val="left"/>` +
+        `<${W}pPr><${W}ind ${W}left="${left + 720 * l}" ${W}hanging="${hanging}"/></${W}pPr></${W}lvl>`,
+    )[0] as RNode
+    // the levels stay in their order, after what else the list holds
+    const deeper = abs.c.findIndex((c) => levelOf(c) > l)
+    const last = abs.c.reduce((at, c, i) => (levelOf(c) >= 0 ? i : at), -1)
+    abs.c.splice(deeper >= 0 ? deeper : last >= 0 ? last + 1 : abs.c.length, 0, node)
+  }
+  abs.self = false
+  const type = kidOf(abs, 'multiLevelType')
+  if (type && getAttr(type, W + 'val') === 'singleLevel') setAttr(type, W + 'val', 'hybridMultilevel')
+  const out = serialize(nodes)
+  doc.pkg.setPart(path, out)
+  doc.numbering = new Numbering(parseXml(out), doc.theme)
+}
+
 async function applyParaDirty(doc: DocxDocument, pPr: RNode, pd: ParaDirty, W: string) {
   const val = W + 'val'
   const put = (l: string, node: RNode | undefined) => setOrdered(pPr, node, l, PPR_ORDER)
@@ -508,7 +583,10 @@ async function applyParaDirty(doc: DocxDocument, pPr: RNode, pd: ParaDirty, W: s
   else if (pd.ilvl !== undefined) {
     const cur = kidOf(pPr, 'numPr')
     const numId = (cur && attrOf(kidOf(cur, 'numId'), val)) ?? styleNum?.numId
-    if (numId && numId !== '0') put('numPr', numPr(numId, pd.ilvl))
+    if (numId && numId !== '0') {
+      if (pd.ilvl > 0) await ensureLevel(doc, numId, pd.ilvl)
+      put('numPr', numPr(numId, pd.ilvl))
+    }
   }
 }
 
@@ -688,12 +766,15 @@ export async function genParagraph(doc: DocxDocument, spec: ParaSpec): Promise<{
   for (const pid of orig) {
     const op = origPara(doc, pid)
     if (!op) continue
-    for (const c of kidsOf(op)) {
+    // also those inside a link, a content control or a tracked insertion: what a cross-reference or a table of
+    // contents elsewhere points to must not go with the first key typed in the paragraph
+    walkOoxml(op, (c) => {
       const l = local(c.q)
-      if (l === 'commentRangeStart' || l === 'commentRangeEnd') continue
+      if (l === 'commentRangeStart' || l === 'commentRangeEnd') return true
       if (START_MARKS.has(l)) starts += serialize(c)
       else if (END_MARKS.has(l)) ends += serialize(c)
-    }
+      return RUN_STOP.has(l)
+    }, DOCX_UNDERSTOOD)
   }
 
   let attrs = tpl?.a ?? ''

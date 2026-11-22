@@ -245,7 +245,7 @@ export class Engine {
       case 'xlsx.text':
         return this.need(this.xlsx).text(args[0] as number, args[1] as string)
       case 'pptx.setText':
-        return this.need(this.pptx).setText(args[0] as number, args[1] as number, args[2] as PParaSpec[], args[3] as [number, number] | undefined)
+        return this.need(this.pptx).setText(args[0] as number, args[1] as number, args[2] as PParaSpec[], args[3] as [number, number] | undefined, !!args[4])
       case 'pptx.shapes':
         return shapeOps(this.need(this.pptx), args[0] as number, args[1] as ShapeOp[])
       case 'pptx.slides':
@@ -258,6 +258,10 @@ export class Engine {
         return this.need(this.pptx).titles()
       case 'pptx.undo':
         return undoShapes(this.need(this.pptx), !!args[0])
+      case 'pptx.history': {
+        const pres = this.need(this.pptx)
+        return { undo: pres.undoStack.length, redo: pres.redoStack.length }
+      }
     }
     throw new Error(`Unknown method ${String(method)}`)
   }

@@ -2,7 +2,7 @@
 import { expect, test } from 'bun:test'
 import { docxParas, paraText, runsOf, useBrowser, viewer } from './harness'
 
-import { builtModule, useBuiltPackage } from './built-package'
+import { builtModule, packageRoot, useBuiltPackage } from './built-package'
 
 useBuiltPackage()
 useBrowser()
@@ -46,4 +46,16 @@ test('built UI inherits German through formatting-only locales and defined compo
   expect(runsOf(p).find((r) => r.text.includes('document'))!.s.b).toBe(true)
   expect(await v.events('load')).toHaveLength(1)
   expect(v.errors).toEqual([])
+})
+
+test('built entries can be imported where there is no DOM (a server rendering the page): nothing throws, no element is registered', async () => {
+  // (this process has no DOM: what a server importing the package sees)
+  expect(typeof HTMLElement).toBe('undefined')
+  for (const entry of ['index.js', 'core.js', 'collab.js', 'locales/de.js', 'embed.js']) {
+    const m = await import(`${packageRoot}/dist/${entry}`)
+    expect([entry, Object.keys(m).length > 0]).toEqual([entry, true])
+  }
+  const embed = await import(`${packageRoot}/dist/embed.js`)
+  expect(typeof embed.OfficeViewerElement).toBe('function')
+  expect(() => embed.defineElement()).not.toThrow()
 })

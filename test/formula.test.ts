@@ -547,6 +547,11 @@ describe('dates', () => {
       ['DATE(2024,14,1)', 45689],
       ['DATE(2024,3,0)', 45351],
       ['DATE(1900,3,1)', 61],
+      ['DATE(1900,2,29)', 60],
+      ['DATE(1900,2,28)', 59],
+      ['DATE(1900,2,28)+1', 60],
+      ['DAY(60)', 29],
+      ['YEAR(60)', 1900],
       ['DATE(1900,1,1)', 1],
       ['DATE(124,1,15)', 45306],
       ['DATE(-1,1,1)', E('#NUM!')],
@@ -600,6 +605,36 @@ describe('dates', () => {
     expect(ev('WEEKDAY(0)', 'J1', p)).toBe(6)
     // restored after evaluation
     expect(ev('DATE(2024,1,15)')).toBe(45306)
+    // no 29 February 1900 in this system: it is 1 March
+    expect(ev('DATE(1900,2,29)', 'J1', p)).toBe(ev('DATE(1900,3,1)', 'J1', p))
+  })
+})
+
+describe('catastrophic regular expressions', () => {
+  const a40 = 'REPT("a",40)&"!"'
+  test('are refused as #VALUE! quickly', () => {
+    const t = Date.now()
+    checks([
+      [`REGEXTEST(${a40},"(a+)+$")`, E('#VALUE!')],
+      [`REGEXTEST(${a40},"(a|aa)+$")`, E('#VALUE!')],
+      [`REGEXTEST(${a40},"(.*a){20}")`, E('#VALUE!')],
+      [`REGEXMATCH(${a40},"(a+)+$")`, E('#VALUE!')],
+      [`REGEXREPLACE(${a40},"(a+)+$","x")`, E('#VALUE!')],
+      [`REGEXEXTRACT(${a40},"(a+)+$")`, E('#VALUE!')],
+    ])
+    expect(Date.now() - t).toBeLessThan(1500)
+  })
+  test('typical risky-shaped patterns still work', () => {
+    const long = (s: string, n: number) => `REPT("${s}",${n})`
+    checks([
+      ['REGEXTEST("hello big world","^(\\w+\\s?)+$")', true],
+      [`REGEXTEST(${long('hello big world ', 20)}&"end","^(\\w+\\s?)+$")`, true],
+      ['REGEXEXTRACT("555-123-4567","(\\d{3}-)*\\d{4}")', '555-123-4567'],
+      [`REGEXTEST(${long('555-123-', 40)}&"4567","(\\d{3}-)*\\d{4}")`, true],
+      ['REGEXEXTRACT("Hello World. Foo Bar baz","([A-Z][a-z]+ )+")', 'Hello '],
+      [`REGEXTEST(${long('Hello World ', 30)},"^([A-Z][a-z]+ )+$")`, true],
+      ['REGEXREPLACE("a b  c","(\\s+)+","_")', 'a_b_c'],
+    ])
   })
 })
 

@@ -702,7 +702,8 @@ export class Writer {
       case 0x05:
         if (st.kind === 'main') {
           const k = this.commentRefs.get(cp)
-          if (k !== undefined) runs.el(`<w:commentReference w:id="${k}"/>`, f)
+          // a run of its own, as Word writes it: the text around it stays out of the reference run
+          if (k !== undefined) runs.run(`<w:r>${f.rPr}<w:commentReference w:id="${k}"/></w:r>`, f)
         } else if (st.kind === 'atn') runs.el('<w:annotationRef/>', f)
         return
       case 0x08:

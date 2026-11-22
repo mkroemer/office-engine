@@ -21,6 +21,8 @@ function utc(y: number, m: number, d: number): number {
 
 /** Serial for y/m/d (m 1-based; month/day overflow normalized like DATE()). */
 export function ymdToSerial(y: number, m: number, d: number): number {
+  // Excel's fictitious 29 February 1900 is serial 60 (the 1904 system has no such day)
+  if (!date1904 && y === 1900 && m === 2 && d === 29) return 60
   const t = utc(y, m, d)
   if (date1904) return Math.round((t - EPOCH_1904) / MS_DAY)
   const s = Math.round((t - EPOCH_1900) / MS_DAY)

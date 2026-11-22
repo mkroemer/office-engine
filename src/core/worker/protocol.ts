@@ -119,12 +119,15 @@ export interface Methods {
   /** every slide's title placeholder text ('' where there is none), read without laying out the slides */
   'pptx.titles'(): string[]
   /** `cell`: [row, column] of a table cell (`sid` is then the table's graphic frame) */
-  'pptx.setText'(index: number, sid: number, paras: PParaSpec[], cell?: [number, number]): SlideModel
+  /** `step`: the edit is an undo step of its own (the text was just entered), not one with the edit before it of the same text */
+  'pptx.setText'(index: number, sid: number, paras: PParaSpec[], cell?: [number, number], step?: boolean): SlideModel
   'pptx.shapes'(index: number, ops: ShapeOp[]): SlideModel
   'pptx.slides'(op: SlideOp): PresentationMeta
   'pptx.image'(index: number, bytes: ArrayBuffer, ext: string): string
   /** undo (or redo) the last edit; `meta` when it changed the slide list */
   'pptx.undo'(redo?: boolean): { index: number; model: SlideModel; meta?: PresentationMeta } | null
+  /** how many edits `pptx.undo` can take back, and bring back */
+  'pptx.history'(): { undo: number; redo: number }
   /** collaboration (src/collab): a shared XLSX operation, outside the undo history; `rec` reverts it */
   'collab.xlsx.apply'(op: XOp): { res: XlsxEditResult | null; rec: number | null }
   'collab.xlsx.revert'(rec: number): XlsxEditResult | null

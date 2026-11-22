@@ -5,6 +5,8 @@ import { docxParas, fromB64, openFile, xlsxSheet, paraText, runsOf, useBrowser, 
 useBrowser()
 const state = (v: Viewer) => v.page.evaluate(() => window.__ctl.snapshot())
 const settle = (v: Viewer) => v.page.waitForTimeout(150)
+/** waits for the published size: after undo / redo it follows the cells read again, which takes more than a fixed wait on a slow machine */
+const sizeIs = (v: Viewer, want: number) => v.page.waitForFunction((w) => window.__ctl.snapshot().format?.size === w, want, { timeout: 10_000 })
 const formatting = (s: Awaited<ReturnType<typeof state>>) => ({ format: s.format, dirty: s.dirty, canUndo: s.canUndo, canRedo: s.canRedo })
 
 async function selectTarget(v: Viewer, kind: 'docx' | 'pptx', index = 0) {
@@ -212,13 +214,13 @@ test('xlsx: live host number input retains focus and saved cell value through ty
   await settle(v)
   expect(await input.evaluate((el) => el === document.activeElement)).toBe(true)
   await v.page.evaluate(() => window.__ctl.undo())
-  await settle(v)
+  await sizeIs(v, 14)
   expect((await state(v)).format?.size).toBe(14)
   await v.page.evaluate(() => window.__ctl.redo())
-  await settle(v)
+  await sizeIs(v, 18)
   expect((await state(v)).format?.size).toBe(18)
   await v.page.evaluate(() => window.__ctl.undo())
-  await settle(v)
+  await sizeIs(v, 14)
   await v.page.evaluate((data) => window.__setProps({ src: new Blob([new Uint8Array(data)]), name: 'reopened.xlsx' }), Array.from(bytes))
   await v.waitEvent('load', 2)
   await v.page.locator('.de-grid').waitFor()

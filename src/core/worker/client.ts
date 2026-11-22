@@ -10,6 +10,11 @@ export interface OpenOptions extends OpenParams {
   worker?: (() => Worker) | false
   /** Download / parse progress, including progress emitted while opening. */
   onProgress?: (p: Events['progress']) => void
+  /**
+   * Gives up an open that is under way: its worker is ended (and with it the download and the reading), the promise
+   * rejects. Nothing happens once the document is open: it is closed with `destroy()`.
+   */
+  signal?: AbortSignal
 }
 
 type Listener<K extends keyof Events> = (data: Events[K]) => void
@@ -60,17 +65,25 @@ export class DocumentClient {
 
   static async open(src: DocSource, opts: OpenOptions = {}): Promise<DocumentClient> {
     const client = new DocumentClient(opts)
-    const { worker: _w, onProgress, ...params } = opts
+    const { worker: _w, onProgress, signal, ...params } = opts
     if (onProgress) client.on('progress', onProgress)
     let payload: Blob | ArrayBuffer | string
     if (typeof src === 'string' || src instanceof URL) payload = new URL(String(src), globalThis.location?.href).href
     else if (src instanceof Uint8Array) payload = src.slice().buffer as ArrayBuffer
     else payload = src
+    // (ending the worker rejects the call below)
+    const abort = () => client.destroy()
+    if (signal?.aborted) abort()
+    else signal?.addEventListener('abort', abort, { once: true })
     try {
       client.info = await client.call('open', payload, params)
+      // (given up while an engine on this thread, which cannot be ended, went on reading)
+      if (client.destroyed) throw new Error('Document closed')
     } catch (e) {
       client.destroy()
       throw e
+    } finally {
+      signal?.removeEventListener('abort', abort)
     }
     client.kind = client.info.kind
     client.name = client.info.name

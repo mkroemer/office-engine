@@ -286,7 +286,13 @@ Bun.serve<WsData>({
       ws.data.conn = hub.connect((msg) => ws.send(encode(msg)))
     },
     message(ws, data) {
-      if (typeof data === 'string') ws.data.conn?.receive(decode<ClientMsg>(data))
+      if (typeof data !== 'string') return
+      // one connection's bad frame is that connection's: it must not end the process, and the rooms of everyone with it
+      try {
+        ws.data.conn?.receive(decode<ClientMsg>(data))
+      } catch {
+        ws.send(encode({ t: 'error', message: 'Malformed message' }))
+      }
     },
     close(ws) {
       ws.data.conn?.close()

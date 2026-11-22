@@ -34,8 +34,26 @@ function runsKey(parts: { key: string; text: string }[], heading: boolean): stri
       last.text += p.text
     } else out.push({ key: p.key, text: p.text })
   }
-  const sig = out.map((p) => `${heading ? '' : p.key}\u0001${p.text.replace(/\s+/g, ' ')}`).join('\u0002')
-  return sig.replace(/\u0001|\u0002/g, '').trim() ? sig : ''
+  // (white space alone is no text, whatever its look: a link around a picture that is not shown)
+  if (!out.some((p) => p.text.trim())) return ''
+  // white space between two runs belongs to the first, and none counts at the ends of the paragraph: a browser shows
+  // "<a>guide </a> text" and "<a>guide</a> text" alike, and the document holds either
+  for (let i = 1; i < out.length; i++) {
+    const lead = /^\s+/.exec(out[i].text)
+    if (!lead) continue
+    out[i - 1].text += lead[0]
+    out[i].text = out[i].text.slice(lead[0].length)
+  }
+  out[0].text = out[0].text.trimStart()
+  out[out.length - 1].text = out[out.length - 1].text.trimEnd()
+  return out.map((p) => `${heading ? '' : p.key}\u0001${p.text.replace(/\s+/g, ' ')}`).join('\u0002')
+}
+
+/** what a paragraph's signature reads, whatever it looks like */
+const sigText = (sig: string): string => {
+  if (sig === 'IMG' || sig.startsWith('CODE|')) return sig
+  const runs = sig.slice(sig.indexOf('|', sig.indexOf('|') + 1) + 1)
+  return runs.split('\u0002').map((x) => x.slice(x.indexOf('\u0001') + 1)).join('').replace(/\s+/g, ' ').trim()
 }
 
 const norm = (c: string | undefined) => (c ?? '').replace('#', '').toLowerCase()
@@ -215,7 +233,8 @@ function htmlChunks(src: string, descend: boolean): string[] {
       const k = stack.lastIndexOf(tag)
       if (k >= 0) {
         stack.length = k
-        if (!stack.length) cuts.add(tagEnd)
+        // (an inline element that ends inside a run of text does not end the run: "<a>Home</a> | <a>About</a>" is one paragraph)
+        if (!stack.length && run < 0) cuts.add(tagEnd)
       } else if (!stack.length && descend && wrap[wrap.length - 1] === tag) {
         wrap.pop()
         closeRun(i)
@@ -282,12 +301,22 @@ interface Chunk {
 function chunked(src: string, format: MergeFormat): Chunk[] | null {
   const parse = (t: string) => (format === 'markdown' ? markdownParas(t, false) : htmlParas(t, false))
   const sigsOf = (t: string) => parse(t).map(importSig).filter(Boolean)
-  const whole = sigsOf(src).join('\u0003')
+  const whole = sigsOf(src)
   const attempts = format === 'markdown' ? [withFrontMatter(markdownChunks(src, true)), withFrontMatter(markdownChunks(src, false))] : [htmlChunks(src, true), htmlChunks(src, false)]
   for (const texts of attempts) {
     if (texts.join('') !== src) continue
     const chunks = texts.map((text) => ({ text, sigs: sigsOf(text) }))
-    if (chunks.flatMap((c) => c.sigs).join('\u0003') === whole) return chunks
+    // the chunks hold the file's paragraphs, in order, each reading the same. Not looking the same: a chunk read alone
+    // is outside its containers, and has not the color or the font a <div style> gives its text
+    const alone = chunks.flatMap((c) => c.sigs)
+    if (alone.length !== whole.length || alone.some((x, i) => sigText(x) !== sigText(whole[i]))) continue
+    // so each chunk's paragraphs are taken as the whole file has them, which is how the document has them
+    let at = 0
+    for (const c of chunks) {
+      c.sigs = whole.slice(at, at + c.sigs.length)
+      at += c.sigs.length
+    }
+    return chunks
   }
   return null
 }
@@ -314,6 +343,31 @@ function align(a: string[], b: string[]): Int32Array | null {
     else y++
   }
   return m
+}
+
+/**
+ * A block quote chunk as its rows: each line with text is one paragraph (the importer makes one per `>` line), the `>`
+ * lines without text before it are its `pre`, the lines after the last one its `tail`. null when the chunk is not just
+ * such lines (a lazy continuation, a multi-line formula), then it is rewritten whole.
+ */
+function quoteRows(c: Chunk): { rows: { pre: string; line: string }[]; tail: string } | null {
+  if (!/^\s*>/.test(c.text)) return null
+  const rows: { pre: string; line: string }[] = []
+  let pre = ''
+  for (const l of lines(c.text)) {
+    if (/^\s*>/.test(l) && /\S/.test(l.replace(/^\s*>/, ''))) {
+      rows.push({ pre, line: l })
+      pre = ''
+    } else if (/^\s*>/.test(l) || !l.trim()) pre += l
+    else return null
+  }
+  return rows.length === c.sigs.length ? { rows, tail: pre } : null
+}
+
+/** a paragraph of the edited document as lines of a block quote: no italic (the importer gives a quote its own), `> ` before each line */
+function quoted(b: Block, write: (blocks: Block[]) => string, eol: string): string {
+  const plain = b.t === 'p' ? { ...b, runs: b.runs.map((r) => (r.t === 'text' ? { ...r, s: { ...r.s, i: undefined } } : r)) } : b
+  return write([plain as Block]).replace(/\s+$/, '').split(/\r?\n/).map((l) => (l ? `> ${l}` : '>')).join(eol) + eol
 }
 
 /**
@@ -355,6 +409,23 @@ export function mergeSource(source: string, format: MergeFormat, blocks: Block[]
     if (!c.sigs.length) before.set(seen, [...(before.get(seen) ?? []), k])
     seen += c.sigs.length
   })
+  const eol = /\r\n/.test(source) ? '\r\n' : /\r/.test(source) && !/\n/.test(source) ? '\r' : '\n'
+  // block quotes that were edited keep their lines (and so a `> [!NOTE]` line) that came back unchanged
+  const quote = chunks.map((c) => (format === 'markdown' ? quoteRows(c) : null))
+  const first = chunks.map((_, k) => owner.indexOf(k))
+  const rowDone = new Set<number>()
+  // the row of paragraph `i` of a quote chunk (its `>` lines before it first), `line`: what stands for it, null: it is gone
+  const row = (i: number, line: string | null) => {
+    if (rowDone.has(i)) return
+    rowDone.add(i)
+    const text = quote[owner[i]]!.rows[i - first[owner[i]]].pre + (line ?? '')
+    if (text) parts.push({ v: text })
+  }
+  // the quote's last paragraph is passed: what follows it in the chunk (blank lines before the next block)
+  const tail = (i: number) => {
+    const k = owner[i]
+    if (quote[k] && !keep[k] && i === first[k] + quote[k]!.rows.length - 1 && quote[k]!.tail) parts.push({ v: quote[k]!.tail })
+  }
   const parts: ({ v: string } | { b: Block[] })[] = []
   const done = new Set<number>()
   const glue = (i: number) => {
@@ -370,20 +441,30 @@ export function mergeSource(source: string, format: MergeFormat, blocks: Block[]
   let bj = 0
   glue(0)
   while (ai < a.length || bj < units.length) {
-    if (bj < units.length && m[bj] < 0) add(units[bj++].b)
-    else if (ai < a.length && !matched[ai]) glue(++ai)
-    else if (ai < a.length && bj < units.length) {
+    if (bj < units.length && m[bj] < 0) {
+      // an edited paragraph where one of a block quote was: still a line of it
+      if (ai < a.length && !matched[ai] && quote[owner[ai]] && !keep[owner[ai]]) row(ai, quoted(units[bj++].b, write, eol))
+      else add(units[bj++].b)
+    } else if (ai < a.length && !matched[ai]) {
+      if (quote[owner[ai]] && !keep[owner[ai]]) {
+        row(ai, null)
+        tail(ai)
+      }
+      glue(++ai)
+    } else if (ai < a.length && bj < units.length) {
       const k = owner[ai]
       if (keep[k]) {
         if (!done.has(k)) parts.push({ v: chunks[k].text })
         done.add(k)
+      } else if (quote[k]) {
+        row(ai, quote[k]!.rows[ai - first[k]].line)
+        tail(ai)
       } else add(units[bj].b)
       glue(++ai)
       bj++
     } else break
   }
   for (const i of [...before.keys()]) glue(i)
-  const eol = /\r\n/.test(source) ? '\r\n' : /\r/.test(source) && !/\n/.test(source) ? '\r' : '\n'
   let out = ''
   for (const p of parts) {
     let t = 'v' in p ? p.v : write(p.b).replace(/\r?\n/g, eol)

@@ -65,7 +65,8 @@ reset (`button { … }`) would restyle the viewer's controls. Importing it into 
 ## Your own root
 
 The views (`DocxView`, `XlsxView`, `PptxView`) can be mounted without `DocViewer` (see [API](api.md)); `useThemeRoot()`
-gives the class name and style their root needs:
+gives the class name and style their root needs. Only `DocViewer` loads the stylesheet by itself: import
+`@p10node/office-engine/styles.css` (or call `injectStyles()` once) when the views are mounted on their own.
 
 ```tsx
 const root = useThemeRoot(theme)

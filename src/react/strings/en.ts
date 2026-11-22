@@ -383,6 +383,10 @@ export const en = {
     moveLeft: 'Move left',
     moveRight: 'Move right',
     deleteSheet: 'Delete sheet',
+    /** the question before a sheet is deleted (there is no undo of it), its note and its confirming button */
+    deleteSheetTitle: (name: string) => `Delete “${name}”?`,
+    deleteSheetNote: 'The sheet and everything on it are removed. This cannot be undone.',
+    deleteSheetOk: 'Delete',
     rowsAbove: (n: number) => `Insert ${n} row${n > 1 ? 's' : ''} above`,
     rowsBelow: (n: number) => `Insert ${n} row${n > 1 ? 's' : ''} below`,
     colsLeft: (n: number) => `Insert ${n} column${n > 1 ? 's' : ''} left`,

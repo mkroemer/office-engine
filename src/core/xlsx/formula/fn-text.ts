@@ -1,6 +1,7 @@
 /** Text functions. */
 import { A, INF, lift, opt, S, visit, type Ev, type FnDef } from './fn'
 import { fixedDecimal, formatText, roundHalf } from './format'
+import { regexTooCostly } from './regex-guard'
 import { ERR, FormulaError, type Value } from './types'
 import { ArrayV, bool, num, parseNumberText, RangeV, str, wildcardRe, type Val } from './values'
 
@@ -205,11 +206,11 @@ export const TEXT: Record<string, FnDef> = {
     return str(ev.cell(v.sheet, v.r0, v.c0))
   }),
 
-  REGEXTEST: S(2, 3, (a) => regex(str(a[1]), opt(a, 2, 0) !== 0, false).test(str(a[0]))),
-  REGEXMATCH: S(2, 2, (a) => regex(str(a[1]), false, false).test(str(a[0]))),
+  REGEXTEST: S(2, 3, (a) => regex(str(a[1]), opt(a, 2, 0) !== 0, false, str(a[0])).test(str(a[0]))),
+  REGEXMATCH: S(2, 2, (a) => regex(str(a[1]), false, false, str(a[0])).test(str(a[0]))),
   REGEXREPLACE: S(3, 5, (a) => {
     const text = str(a[0])
-    const re = regex(str(a[1]), opt(a, 4, 0) !== 0, true)
+    const re = regex(str(a[1]), opt(a, 4, 0) !== 0, true, text)
     const by = str(a[2])
     const nth = Math.trunc(opt(a, 3, 0))
     if (nth === 0) return text.replace(re, by)
@@ -221,7 +222,7 @@ export const TEXT: Record<string, FnDef> = {
   REGEXEXTRACT: A(2, 4, (a, ev) => {
     const text = str(ev.scalar(a[0]))
     const mode = a.length > 2 ? Math.trunc(num(ev.scalar(a[2]))) : 0
-    const re = regex(str(ev.scalar(a[1])), a.length > 3 && num(ev.scalar(a[3])) !== 0, true)
+    const re = regex(str(ev.scalar(a[1])), a.length > 3 && num(ev.scalar(a[3])) !== 0, true, text)
     if (mode < 0 || mode > 2) throw ERR.VALUE
     const all = [...text.matchAll(re)]
     if (!all.length) throw ERR.NA
@@ -322,17 +323,21 @@ function numberValue(text: string, dec: string, grp: string): number {
 }
 
 /** a pattern as a RegExp: with the Unicode classes when it reads so, without when only so (`\-` outside a class) */
-function regex(pattern: string, ignoreCase: boolean, global: boolean): RegExp {
+function regex(pattern: string, ignoreCase: boolean, global: boolean, text: string): RegExp {
   const flags = (global ? 'g' : '') + (ignoreCase ? 'i' : '')
+  let re: RegExp
   try {
-    return new RegExp(pattern, flags + 'u')
+    re = new RegExp(pattern, flags + 'u')
   } catch {
     try {
-      return new RegExp(pattern, flags)
+      re = new RegExp(pattern, flags)
     } catch {
       throw ERR.VALUE
     }
   }
+  // a pattern that would backtrack without end on this text is an error: the worker cannot interrupt a running RegExp
+  if (regexTooCostly(re, text, global)) throw ERR.VALUE
+  return re
 }
 
 /** `text` with the match of `re` that starts at `at` replaced by `by` (`$1`… are its groups) */

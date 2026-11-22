@@ -182,17 +182,68 @@ describe('N2-024 slide list edits undo', () => {
     expect(b.model.els.some((e: SlideEl) => e.top === top)).toBe(true)
   })
 
-  test('a slide added, then typed into: its undo stays and redo brings the slide as typed', async () => {
+  test('a slide added, then typed into: undo takes the text back, then the slide; redo brings the slide, then the text', async () => {
     const { engine, slide } = await open(bytes('sample.pptx'))
     await engine.call('pptx.slides', [{ op: 'add', after: 0 }])
     const m = await slide(1)
     const ph = m.els.find((e) => e.t === 'shape' && e.sid !== undefined && e.text) as Extract<SlideEl, { t: 'shape' }>
     await engine.call('pptx.setText', [1, ph.sid, [{ runs: [{ text: 'Typed here' }] }]])
+    const t: any = await engine.call('pptx.undo', [])
+    expect(t.meta).toBeUndefined()
+    expect(JSON.stringify(t.model)).not.toContain('Typed here')
     const u: any = await engine.call('pptx.undo', [])
     expect(u.meta.count).toBe(5)
     const r: any = await engine.call('pptx.undo', [true])
     expect(r.meta.count).toBe(6)
-    expect(JSON.stringify(r.model)).toContain('Typed here')
+    expect(JSON.stringify(r.model)).not.toContain('Typed here')
+    const r2: any = await engine.call('pptx.undo', [true])
+    expect(JSON.stringify(r2.model)).toContain('Typed here')
+  })
+
+  test('QA 3: text typed in a shape is an undo step; a shape edit before it stays one too', async () => {
+    const { engine, slide } = await open(bytes('sample.pptx'))
+    const hist = () => engine.call('pptx.history', []) as Promise<{ undo: number; redo: number }>
+    const textOf = (m: SlideModel, sid: number) => {
+      const e = m.els.find((x) => x.t === 'shape' && x.sid === sid) as Extract<SlideEl, { t: 'shape' }>
+      return e.text!.paras.map((p) => p.runs.map((r) => r.text).join('')).join('|')
+    }
+    const m0 = await slide(0)
+    const title = m0.els.find((e) => e.t === 'shape' && e.sid !== undefined && e.text && e.top !== undefined) as Extract<SlideEl, { t: 'shape' }>
+    const was = textOf(m0, title.sid!)
+    expect(await hist()).toEqual({ undo: 0, redo: 0 })
+    // a shape edit, then text typed in two writes of one stay in the shape (the second goes on with the first)
+    await engine.call('pptx.shapes', [0, [{ op: 'xfrm', top: title.top!, box: { ...title.box, x: title.box.x + 10 } }]])
+    await engine.call('pptx.setText', [0, title.sid, [{ k: 0, runs: [{ text: 'One' }] }], undefined, true])
+    await engine.call('pptx.setText', [0, title.sid, [{ k: 0, runs: [{ text: 'One two' }] }]])
+    expect(await hist()).toEqual({ undo: 2, redo: 0 })
+    // the text entered again: a step of its own
+    await engine.call('pptx.setText', [0, title.sid, [{ k: 0, runs: [{ text: 'One two three' }] }], undefined, true])
+    expect(await hist()).toEqual({ undo: 3, redo: 0 })
+    const u1: any = await engine.call('pptx.undo', [])
+    expect(textOf(u1.model, title.sid!)).toBe('One two')
+    const u2: any = await engine.call('pptx.undo', [])
+    expect(textOf(u2.model, title.sid!)).toBe(was)
+    // the shape is still where it was moved to: only the text went back
+    const moved = (u2.model as SlideModel).els.find((e) => e.top === title.top)!
+    expect(Math.round(moved.box.x)).toBe(Math.round(title.box.x + 10))
+    expect(await hist()).toEqual({ undo: 1, redo: 2 })
+    // the text as the file had it is edited again from what undo gave: the runs are told from the file's again
+    const back = (u2.model as SlideModel).els.find((e) => e.t === 'shape' && e.sid === title.sid) as Extract<SlideEl, { t: 'shape' }>
+    const src = back.text!.paras[0].runs[0].src as [number, number]
+    const again: any = await engine.call('pptx.setText', [0, title.sid, [{ k: 0, runs: [{ text: 'Kept look', src }] }], undefined, true])
+    expect(textOf(again, title.sid!)).toBe('Kept look')
+    expect(await hist()).toEqual({ undo: 2, redo: 0 })
+    await engine.call('pptx.undo', [])
+    const u3: any = await engine.call('pptx.undo', [])
+    expect(Math.round((u3.model as SlideModel).els.find((e) => e.top === title.top)!.box.x)).toBe(Math.round(title.box.x))
+    expect(await hist()).toEqual({ undo: 0, redo: 2 })
+    const r1: any = await engine.call('pptx.undo', [true])
+    const r2: any = await engine.call('pptx.undo', [true])
+    expect(Math.round((r1.model as SlideModel).els.find((e) => e.top === title.top)!.box.x)).toBe(Math.round(title.box.x + 10))
+    expect(textOf(r2.model, title.sid!)).toBe('Kept look')
+    // and the file saved holds it
+    const re = await open(new Uint8Array(await (await saved(engine)).arrayBuffer()))
+    expect(textOf(await re.slide(0), title.sid!)).toBe('Kept look')
   })
 
   test('a slide list edit after undo drops what was undone', async () => {
@@ -281,5 +332,46 @@ describe('N2-026 table cell text', () => {
     const ts = r.els.filter((e: SlideEl) => e.t === 'table') as Table[]
     expect(cellText(ts[1], 0, 0)).toBe('copy cell')
     expect(cellText(ts[0], 0, 0)).toBe('Metric')
+  })
+})
+
+describe('embedded objects (OLE)', () => {
+  const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+  /** sample.pptx with an embedded worksheet on slide 1, the way PowerPoint 2007 writes one: its picture is the legacy drawing's */
+  function withObject(shapeAttrs: string): Uint8Array {
+    const z = unzipSync(bytes('sample.pptx'))
+    const frame =
+      '<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="900" name="Object 1"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="914400" y="914400"/><a:ext cx="1828800" cy="914400"/></p:xfrm>' +
+      '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/presentationml/2006/ole"><p:oleObj spid="_x0000_s1026" name="Worksheet" r:id="rId90" imgW="1828800" imgH="914400" progId="Excel.Sheet.8"><p:embed/></p:oleObj></a:graphicData></a:graphic></p:graphicFrame>'
+    z['ppt/slides/slide1.xml'] = strToU8(strFromU8(z['ppt/slides/slide1.xml']).replace('</p:spTree>', frame + '</p:spTree>'))
+    const rels = 'ppt/slides/_rels/slide1.xml.rels'
+    z[rels] = strToU8(
+      strFromU8(z[rels]).replace(
+        '</Relationships>',
+        `<Relationship Id="rId90" Type="${R}/oleObject" Target="../embeddings/oleObject1.bin"/><Relationship Id="rId91" Type="${R}/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/></Relationships>`,
+      ),
+    )
+    z['ppt/embeddings/oleObject1.bin'] = new Uint8Array([1, 2, 3])
+    z['ppt/drawings/vmlDrawing1.vml'] = strToU8(
+      `<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><v:shapetype id="_x0000_t75"/><v:shape ${shapeAttrs} type="#_x0000_t75" style='position:absolute'><v:imagedata o:relid="rId1" o:title=""/></v:shape></xml>`,
+    )
+    z['ppt/drawings/_rels/vmlDrawing1.vml.rels'] = strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${R}/image" Target="../media/object1.png"/></Relationships>`)
+    z['ppt/media/object1.png'] = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGP8z8DAwMDAxMDAwMDAAAANHQEDasKb6QAAAABJRU5ErkJggg=='), (c) => c.charCodeAt(0))
+    z['[Content_Types].xml'] = strToU8(strFromU8(z['[Content_Types].xml']).replace('</Types>', '<Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/><Default Extension="bin" ContentType="application/vnd.openxmlformats-officedocument.oleObject"/></Types>'))
+    return zipSync(z)
+  }
+
+  test('an object without a picture of its own shows the one of its legacy drawing shape, not a placeholder', async () => {
+    // the shape is the one the object names: by its id, or (a named shape) by o:spid
+    for (const attrs of ['id="_x0000_s1026"', 'id="Object_x0020_2" o:spid="_x0000_s1026"']) {
+      const { slide } = await open(withObject(attrs))
+      const els = (await slide(0)).els
+      expect(els.filter((e) => e.t === 'placeholder')).toEqual([])
+      const pic = els.find((e) => e.t === 'pic' && e.target === 'ppt/media/object1.png')
+      expect(pic && Math.round(pic.box.w)).toBe(192)
+    }
+    // a drawing that does not hold the shape: the placeholder, as before
+    const none = await open(withObject('id="_x0000_s2222"'))
+    expect((await none.slide(0)).els.filter((e) => e.t === 'placeholder').map((e) => e.t === 'placeholder' && e.label)).toEqual(['Embedded object'])
   })
 })

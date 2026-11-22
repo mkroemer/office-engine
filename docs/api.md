@@ -53,44 +53,44 @@ PDF goes through the browser print dialog ("Save as PDF"), so text stays selecta
 
 CSS is auto-injected, no import needed (or import `@p10node/office-engine/styles.css` with `injectStyles={false}`). Container must have a height. Colors, type and shape: [Theming](theming.md).
 
-| Prop               | Type                                           | Default   | Notes                                                                                                                    |
-|--------------------|------------------------------------------------|-----------|--------------------------------------------------------------------------------------------------------------------------|
-| `src`              | `File \| Blob \| ArrayBuffer \| string \| URL` | –         | Office (also 97-2003); OpenDocument; RTF; Pages/Keynote/Numbers; Visio; CSV/TSV, text, code, Markdown, HTML, diagrams    |
-| `name`             | `string`                                       | auto      | Display name; its extension also tells the format of a `Blob` / `ArrayBuffer`                                            |
-| `language`         | `string`                                       | –         | Source code in this language (`'typescript'`, `'ts'`, `'python'`, `'c++'`…): the code view, whatever the name says       |
-| `toolbar`          | `boolean`                                      | `true`    | Top bar (name, status, progress)                                                                                         |
-| `toolbarExtra`     | `ReactNode`                                    | –         | Extra buttons on the right of the toolbar                                                                                |
-| `zoom`             | `number \| 'fit'`                              | `'fit'`   | Initial zoom (docx/pptx)                                                                                                 |
-| `thumbnails`       | `boolean`                                      | `true`    | Thumbnail column for pptx                                                                                                |
-| `headers`          | `Record<string,string>`                        | –         | Headers for URL requests                                                                                                 |
-| `credentials`      | `RequestCredentials`                           | –         | Cross-origin cookies                                                                                                     |
-| `worker`           | `() => Worker \| false`                        | inline    | Custom worker (CSP), `false` = main thread                                                                               |
-| `styleTarget`      | `Document \| ShadowRoot`                       | document  | Where CSS is injected                                                                                                    |
-| `injectStyles`     | `boolean`                                      | `true`    | Inject the stylesheet; false when the page loads `@p10node/office-engine/styles.css` itself                              |
-| `theme`            | `'light' \| 'dark' \| 'auto' \| ThemeOptions`  | `'light'` | Color scheme of the chrome; `'auto'` follows `prefers-color-scheme`; an object adds token overrides ([Theming](theming.md)). Documents keep their own colors |
-| `locale`           | `string`                                       | inherited | BCP 47 tag for number/date display and numeric input. See [UI texts](#ui-texts) and [input](#numbers-typed-in-a-locale)  |
-| `strings`          | `StringsOverride`                              | –         | Texts merged over the enclosing provider or English, key by key; may include a formatting `locale`                       |
-| `editable`         | `boolean`                                      | `false`   | Open in edit mode (Pages, Keynote, Numbers and Visio files stay view only)                                               |
-| `allowEdit`        | `boolean`                                      | `true`    | Show Edit/View button                                                                                                    |
-| `allowSave`        | `boolean`                                      | `true`    | Show Save/Download button, enable Ctrl+S                                                                                 |
-| `allowDownload`    | `boolean`                                      | `true`    | Allow downloads to device (save without `onSave`, images)                                                                |
-| `fileMenu`         | `boolean`                                      | `true`    | File menu: open, download as PDF / HTML / text, print                                                                    |
-| `allowOpen`        | `boolean`                                      | `true`    | File → New / Open (off during collaboration)                                                                             |
-| `captureSelectAll` | `boolean`                                      | `true`    | Ctrl/⌘+A from anywhere on the page selects the document; `false`: from the viewer only                                   |
-| `fileMenuItems`    | `FileMenuItem[]`                               | –         | Extra File menu entries (`label`, `onClick`, `icon`, `hint`)                                                             |
-| `icons`            | `Icons`                                        | built-in  | Your own icons: a map by `IconName` or a resolver `(name, { size }) => node`; see [Icons](#icons)                        |
-| `components`       | `Partial<UIComponents>`                        | built-in  | Replacements for toolbar and dialog controls. See [Theming](theming.md#your-own-components).                             |
-| `fonts`            | `FontSource[]`                                 | –         | Font files for the documents' text (the library ships none), loaded when a document uses them; see [Fonts](#fonts)       |
-| `onRename`         | `(name) => void`                               | –         | File → Rename result (extension included)                                                                                |
-| `onClose`          | `() => void`                                   | –         | Adds File → Close                                                                                                        |
-| `onSave`           | `(blob, name) => void`                         | download  | Receives saved file (downloads by default): the Office file, or a Markdown / HTML / SVG / source file as itself          |
-| `onDirtyChange`    | `(dirty) => void`                              | –         | Whether there are unsaved changes                                                                                        |
-| `collab`           | `CollabOptions`                                | –         | Real-time collaboration, see [collaboration](collaboration.md)                                                           |
-| `comments`         | `CommentOptions \| false`                      | `{}`      | Comments (see below); `false` hides them                                                                                 |
-| `onLoad`           | `(client) => void`                             | –         | Once per opened document                                                                                                 |
-| `onError`          | `(error) => void`                              | –         |                                                                                                                          |
-| `controller`       | `ViewerController`                             | its own   | The viewer's state and commands for the host, see [headless mode](#headless-mode)                                        |
-| `headless`         | `boolean`                                      | `false`   | The document alone: no top bar, zoom control, outline panel, sheet tabs or slide list                                    |
+| Prop               | Type                                                         | Default   | Notes                                                                                                                                                        |
+|--------------------|--------------------------------------------------------------|-----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `src`              | `File \| Blob \| ArrayBuffer \| Uint8Array \| string \| URL` | –         | Office (also 97-2003); OpenDocument; RTF; Pages/Keynote/Numbers; Visio; CSV/TSV, text, code, Markdown, HTML, diagrams                                        |
+| `name`             | `string`                                                     | auto      | Display name; its extension also tells the format of a `Blob` / `ArrayBuffer`                                                                                |
+| `language`         | `string`                                                     | –         | Source code in this language (`'typescript'`, `'ts'`, `'python'`, `'c++'`…): the code view, whatever the name says                                           |
+| `toolbar`          | `boolean`                                                    | `true`    | Top bar (name, status, progress)                                                                                                                             |
+| `toolbarExtra`     | `ReactNode`                                                  | –         | Extra buttons on the right of the toolbar                                                                                                                    |
+| `zoom`             | `number \| 'fit'`                                            | `'fit'`   | Initial zoom (docx/pptx)                                                                                                                                     |
+| `thumbnails`       | `boolean`                                                    | `true`    | Thumbnail column for pptx                                                                                                                                    |
+| `headers`          | `Record<string,string>`                                      | –         | Headers for URL requests                                                                                                                                     |
+| `credentials`      | `RequestCredentials`                                         | –         | Cross-origin cookies                                                                                                                                         |
+| `worker`           | `() => Worker \| false`                                      | inline    | Custom worker (CSP), `false` = main thread                                                                                                                   |
+| `styleTarget`      | `Document \| ShadowRoot`                                     | document  | Where CSS is injected                                                                                                                                        |
+| `injectStyles`     | `boolean`                                                    | `true`    | Inject the stylesheet; false when the page loads `@p10node/office-engine/styles.css` itself                                                                  |
+| `theme`            | `'light' \| 'dark' \| 'auto' \| ThemeOptions`                | `'light'` | Color scheme of the chrome; `'auto'` follows `prefers-color-scheme`; an object adds token overrides ([Theming](theming.md)). Documents keep their own colors |
+| `locale`           | `string`                                                     | inherited | BCP 47 tag for number/date display and numeric input. See [UI texts](#ui-texts) and [input](#numbers-typed-in-a-locale)                                      |
+| `strings`          | `StringsOverride`                                            | –         | Texts merged over the enclosing provider or English, key by key; may include a formatting `locale`                                                           |
+| `editable`         | `boolean`                                                    | `false`   | Open in edit mode (Pages, Keynote, Numbers and Visio files stay view only)                                                                                   |
+| `allowEdit`        | `boolean`                                                    | `true`    | Show Edit/View button                                                                                                                                        |
+| `allowSave`        | `boolean`                                                    | `true`    | Show Save/Download button, enable Ctrl+S                                                                                                                     |
+| `allowDownload`    | `boolean`                                                    | `true`    | Allow downloads to device (save without `onSave`, images)                                                                                                    |
+| `fileMenu`         | `boolean`                                                    | `true`    | File menu: open, download as PDF / HTML / text, print                                                                                                        |
+| `allowOpen`        | `boolean`                                                    | `true`    | File → New / Open (off during collaboration)                                                                                                                 |
+| `captureSelectAll` | `boolean`                                                    | `true`    | Ctrl/⌘+A from anywhere on the page selects the document; `false`: from the viewer only                                                                       |
+| `fileMenuItems`    | `FileMenuItem[]`                                             | –         | Extra File menu entries (`label`, `onClick`, `icon`, `hint`)                                                                                                 |
+| `icons`            | `Icons`                                                      | built-in  | Your own icons: a map by `IconName` or a resolver `(name, { size }) => node`; see [Icons](#icons)                                                            |
+| `components`       | `Partial<UIComponents>`                                      | built-in  | Replacements for toolbar and dialog controls. See [Theming](theming.md#your-own-components).                                                                 |
+| `fonts`            | `FontSource[]`                                               | –         | Font files for the documents' text (the library ships none), loaded when a document uses them; see [Fonts](#fonts)                                           |
+| `onRename`         | `(name) => void`                                             | –         | File → Rename result (extension included)                                                                                                                    |
+| `onClose`          | `() => void`                                                 | –         | Adds File → Close                                                                                                                                            |
+| `onSave`           | `(blob, name) => void`                                       | download  | Receives saved file (downloads by default): the Office file, or a Markdown / HTML / SVG / source file as itself                                              |
+| `onDirtyChange`    | `(dirty) => void`                                            | –         | Whether there are unsaved changes                                                                                                                            |
+| `collab`           | `CollabOptions`                                              | –         | Real-time collaboration, see [collaboration](collaboration.md)                                                                                               |
+| `comments`         | `CommentOptions \| false`                                    | `{}`      | Comments (see below); `false` hides them                                                                                                                     |
+| `onLoad`           | `(client) => void`                                           | –         | Once per opened document                                                                                                                                     |
+| `onError`          | `(error) => void`                                            | –         |                                                                                                                                                              |
+| `controller`       | `ViewerController`                                           | its own   | The viewer's state and commands for the host, see [headless mode](#headless-mode)                                                                            |
+| `headless`         | `boolean`                                                    | `false`   | The document alone: no top bar, zoom control, outline panel, sheet tabs or slide list                                                                        |
 
 ### Headless mode
 
@@ -125,13 +125,13 @@ function Viewer({ file }: { file: File }) {
 ```
 
 | `ViewerState`        | Meaning                                                                                                                                                                                                           |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|----------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `rev`                | counts the changes (the state object is replaced on each)                                                                                                                                                         |
 | `kind`               | `'docx'`, `'xlsx'`, `'pptx'`, or `null` before a document is open                                                                                                                                                 |
 | `loading`            | loading or downloading                                                                                                                                                                                            |
 | `editing`, `canEdit` | in edit mode; whether editing is possible (allowed, not view only)                                                                                                                                                |
 | `dirty`, `saving`    | unsaved changes; a save running                                                                                                                                                                                   |
-| `canUndo`, `canRedo` | whether undo / redo can run (spreadsheets count the edits made here; presentations offer redo whenever editing)                                                                                                   |
+| `canUndo`, `canRedo` | whether undo / redo can run (spreadsheets and presentations count the edits made here; in a text of a slide both are offered while it is edited)                                                                  |
 | `zoom`               | `{ value: 'fit' \| number, effective }`, `null` for spreadsheets                                                                                                                                                  |
 | `page`               | `{ current, count }` from 1: the page (documents; `count` 0 while laid out) or slide in view; `null` for spreadsheets                                                                                             |
 | `outline`            | `{ kind, items: [{ id, title, level, current }] }`: a document's headings, a workbook's visible sheets, a presentation's slides (titled by their title placeholder, else "Slide n")                               |
@@ -279,13 +279,15 @@ A comment's author and mentions carry the `id` the host gave (stored in the file
 Use individual views / build your own UI:
 
 ```tsx
-import { useDocument, DocxView, XlsxView, PptxView } from '@p10node/office-engine'
+import { useDocument, useThemeRoot, DocxView, XlsxView, PptxView } from '@p10node/office-engine'
+import '@p10node/office-engine/styles.css' // or call injectStyles() once: only DocViewer loads the stylesheet by itself
 
 const { client, error, progress } = useDocument(src)
-if (client?.kind === 'xlsx') return <div className="de-root"><XlsxView client={client} /></div>
+const root = useThemeRoot()
+if (client?.kind === 'xlsx') return <div className={root.className} style={{ ...root.style, height: 600 }}><XlsxView client={client} /></div>
 ```
 
-The views style themselves from design tokens on their root: `useThemeRoot(theme)` gives its class name and style (see [Theming](theming.md)).
+The views style themselves from design tokens on their root: `useThemeRoot(theme)` gives its class name and style (see [Theming](theming.md)). Without the stylesheet and that root they render unstyled, and like `DocViewer` they need a container with a height.
 
 ### Icons
 
@@ -503,10 +505,11 @@ const fonts: FontSource[] = [
 
 <office-viewer src="/files/report.docx" style="height:600px"></office-viewer>
 
+<input id="pick" type="file">
 <div id="v" style="height:600px"></div>
 <script>
   const viewer = OfficeEngine.mount(document.getElementById('v'), { src: '/files/deck.pptx' })
-  input.onchange = (e) => viewer.update({ src: e.target.files[0] })
+  document.getElementById('pick').onchange = (e) => viewer.update({ src: e.target.files[0] })
   // viewer.destroy()
 </script>
 ```

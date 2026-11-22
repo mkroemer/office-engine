@@ -12,7 +12,7 @@ import type { PptxCollabResult } from './pptx-worker'
 import type { Adapter, ApplyResult } from './session'
 import { applyComment, revertComment, type CommentOp } from './comments'
 
-const CAPTURED = new Set<keyof Methods>(['pptx.setText', 'pptx.shapes', 'pptx.slides', 'pptx.image', 'pptx.undo'])
+const CAPTURED = new Set<keyof Methods>(['pptx.setText', 'pptx.shapes', 'pptx.slides', 'pptx.image', 'pptx.undo', 'pptx.history'])
 
 export interface PptxPresence {
   k: 'pptx'
@@ -31,6 +31,8 @@ export interface PptxLocalSel {
 /** PptxView registers this so remote slide-list changes can close its text editing first */
 export interface PptxHost {
   endEditing(): void
+  /** writes the text being typed (with the slide indexes as they are now); the text stays in editing */
+  flushText?(): Promise<void>
 }
 
 export class PptxCollab implements Adapter<POp> {
@@ -96,6 +98,9 @@ export class PptxCollab implements Adapter<POp> {
         return this.submit({ t: 'slides', id: this.id(), op: this.pslide(a[0]) }).then((r) => (r as PptxCollabResult | null)?.meta ?? this.meta)
       case 'pptx.undo':
         return this.history(a[0] ? this.redoStack : this.undoStack, a[0] ? this.undoStack : this.redoStack, a[0] ? 'next' : 'prev')
+      // (in a room the edits to take back are this participant's own, kept here)
+      case 'pptx.history':
+        return Promise.resolve({ undo: this.undoStack.length, redo: this.redoStack.length })
     }
     return undefined
   }
@@ -144,9 +149,13 @@ export class PptxCollab implements Adapter<POp> {
     return op.t === 'slides'
   }
 
-  prepare(ops: POp[]) {
-    // slide indexes are about to move: let the text editor commit with the current ones first
-    if (ops.some((o) => o.t === 'slides')) getHost<PptxHost>(this.client, 'pptx')?.endEditing()
+  async prepare(ops: POp[]) {
+    // slide indexes are about to move: the text being typed is written with the current ones first, also what waits
+    // behind an edit on its way. The text stays in editing: the view moves it with its slide (`collab:pptx`).
+    if (!ops.some((o) => o.t === 'slides')) return
+    const host = getHost<PptxHost>(this.client, 'pptx')
+    if (host?.flushText) await host.flushText()
+    else host?.endEditing()
   }
 
   async apply(op: POp, kind: 'local' | 'replay' | 'remote'): Promise<ApplyResult> {

@@ -31,7 +31,12 @@ export function docxToText(blocks: Block[]): string {
 }
 
 /** (a dollar sign is marked \u0003: escaped or not once the whole paragraph is known, see dollars) */
-const mdEsc = (s: string) => s.replace(/([\\`*_[\]<>~])/g, '\\$1').replace(/\$/g, '\u0003')
+const mdEsc = (s: string) =>
+  s
+    .replace(/([\\`*[\]<>~])/g, '\\$1')
+    // a lone underscore between two word characters is no emphasis mark (snake_case stays as typed); any other one is escaped
+    .replace(/_+/g, (run, at: number) => (run.length === 1 && /\w/.test(s[at - 1] ?? '') && /\w/.test(s[at + 1] ?? '') ? run : run.replace(/_/g, '\\_')))
+    .replace(/\$/g, '\u0003')
 
 /**
  * A paragraph's Markdown with its formulas put in (marked \u0004n\u0004) and its dollar signs (\u0003) escaped only when,
@@ -65,6 +70,19 @@ const MONO = /courier|mono|consolas|menlo|fira code|source code/i
 /** pictures of a document as data URLs, by part path (see pictureData) */
 export type Pictures = Map<string, string>
 
+/** a text run as Markdown: its look as marks around the words, the spaces around them outside the marks */
+function mdRun(r: { text: string; s: RunStyle }, heading: boolean): string {
+  const text = r.text.replace(/\t/g, ' ').replace(/\n/g, '  \n')
+  const core = text.trim()
+  if (!core) return text
+  const mark = (r.s.b && !heading ? '**' : '') + (r.s.i && !heading ? '*' : '')
+  const strike = r.s.strike ? '~~' : ''
+  const lead = text.slice(0, text.indexOf(core[0]))
+  const trail = text.slice(text.lastIndexOf(core[core.length - 1]) + 1)
+  const body = r.s.font && MONO.test(r.s.font) ? `\`${core.replace(/`/g, '``')}\`` : mdEsc(core)
+  return `${lead}${strike}${mark}${body}${[...mark].reverse().join('')}${strike}${trail}`
+}
+
 /** `heading`: bold is the heading's own look, not emphasis; `images`: pictures written as ![alt](data:…) */
 function mdInline(runs: Inline[], heading = false, images?: Pictures): string {
   let out = ''
@@ -89,30 +107,19 @@ function mdInline(runs: Inline[], heading = false, images?: Pictures): string {
     }
     // a script link is exported as its text
     if (r.t === 'text' && safeHref(r.href)) {
-      // a link spans the consecutive runs with the same target
+      // a link spans the consecutive runs with the same target, each keeping its look (bold, italic) inside the brackets
       let text = ''
       const href = r.href!
       while (i < runs.length && runs[i].t === 'text' && (runs[i] as { href?: string }).href === href) {
         const x = runs[i++] as Inline & { t: 'text' }
-        if (x.tc?.k !== 'del') text += x.text
+        if (x.tc?.k !== 'del' && !x.s.vanish) text += mdRun(x, heading)
       }
-      out += `[${mdEsc(text)}](${href.replace(/[()\s]/g, encodeURIComponent)})`
+      out += `[${text}](${href.replace(/[()\s]/g, encodeURIComponent)})`
       continue
     }
     i++
     if (r.s.vanish) continue
-    const text = r.text.replace(/\t/g, ' ').replace(/\n/g, '  \n')
-    const core = text.trim()
-    if (!core) {
-      out += text
-      continue
-    }
-    const mark = (r.s.b && !heading ? '**' : '') + (r.s.i && !heading ? '*' : '')
-    const strike = r.s.strike ? '~~' : ''
-    const lead = text.slice(0, text.indexOf(core[0]))
-    const trail = text.slice(text.lastIndexOf(core[core.length - 1]) + 1)
-    const body = r.s.font && MONO.test(r.s.font) ? `\`${core.replace(/`/g, '``')}\`` : mdEsc(core)
-    out += `${lead}${strike}${mark}${body}${[...mark].reverse().join('')}${strike}${trail}`
+    out += mdRun(r, heading)
   }
   return dollars(out.replace(/\*\*\*\*/g, ''), maths)
 }

@@ -307,7 +307,8 @@ export class CollabSession<Op = unknown> {
 
   /** batch ops transformed against the concurrent batches sequenced before it */
   private canonical(b: Batch): Op[] | null {
-    let ops = (b.ops as Op[]).map((o) => o as Op | null)
+    // (a batch of a hub that does not check what it relays: no list of ops is no ops)
+    let ops = (Array.isArray(b.ops) ? (b.ops as Op[]) : []).map((o) => o as Op | null)
     if (b.base < b.seq - 1 && (this.log[0]?.seq ?? Infinity) > b.base + 1 && this.rev > b.base) {
       this.fail('Operation is too old to merge; reopen the document')
       return null

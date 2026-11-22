@@ -14,7 +14,7 @@ import {
 import type {
   Block, CellBorders, DocxMeta, HeaderFooters, HFKind, Inline, ListMarker, PageSet, PageSetup, Paragraph, ParaStyle, RunSet, RunStyle, SrcRef, Table, TrackMark, TableCell, TableRow,
 } from './types'
-import { DEFAULT_PAGE } from './types'
+import { DEFAULT_PAGE, RUN_OBJECTS, RUN_TEXT } from './types'
 
 interface FieldState {
   instr: string
@@ -328,8 +328,20 @@ export class Converter {
     const savedField = this.inField
     this.inField = pageFieldRuns(this.cur.runs.keys())
     const parts: Paragraph[] = [cur]
+    // comments without a range whose reference stands before any text: they take the next character
+    let waiting: string[] = []
     const sink: Sink = {
       push: (x) => {
+        if (waiting.length && (x.t === 'img' || (x.t === 'text' && x.text))) {
+          const cm = [...new Set([...(x.cm ?? []), ...waiting])]
+          waiting = []
+          if (x.t === 'text' && x.text.length > 1) {
+            sink.push({ ...x, text: x.text.slice(0, 1), cm })
+            sink.push({ ...x, text: x.text.slice(1) })
+            return
+          }
+          x = { ...x, cm }
+        }
         this.made++
         // pictures, boxes, fields, note references inside w:ins / w:del belong to the change too
         if (this.tc && x.t !== 'text' && !x.tc) x = { ...x, tc: this.tc } as Inline
@@ -347,7 +359,11 @@ export class Converter {
         const runs = cur.runs
         const i = runs.length - 1
         const last = runs[i]
-        if (!last || (last.t !== 'text' && last.t !== 'img') || last.cm?.includes(id)) return
+        if (!last || (last.t !== 'text' && last.t !== 'img')) {
+          waiting.push(id)
+          return
+        }
+        if (last.cm?.includes(id)) return
         const cm = [...(last.cm ?? []), id]
         if (last.t === 'img' || last.text.length <= 1) runs[i] = { ...last, cm }
         else runs.splice(i, 1, { ...last, text: last.text.slice(0, -1) }, { ...last, text: last.text.slice(-1), cm })
@@ -455,6 +471,10 @@ export class Converter {
     const { src, d, cm } = this.srcOf(r)
     const tc = this.tc
     const made = this.made
+    // several objects in one run, or text next to one: each object is told which it is, or saving would write the whole run once per object
+    const objs = src && src.length === 2 && !this.cur?.forced ? r.c.filter((c) => RUN_OBJECTS.has(c.n)) : []
+    const shared = objs.length > 1 || (objs.length === 1 && r.c.some((c) => RUN_TEXT.has(c.n)))
+    const objSrc = (c: XEl): SrcRef | undefined => (shared && src ? [src[0], src[1], objs.indexOf(c)] : src)
     // what the run holds that is not read into text or an object is not lost: the run stays as an object that is written back as it is
     const keep = () => {
       if (this.made === made && src) sink.push({ t: 'shape', w: 0, h: 0, src, ...(tc ? { tc } : {}) })
@@ -528,7 +548,7 @@ export class Converter {
           break
         }
         case 'drawing':
-          this.drawing(c, href, sink, src, cm)
+          this.drawing(c, href, sink, objSrc(c), cm)
           break
         case 'commentReference': {
           // a comment without a range: it covers the character before it
@@ -541,11 +561,11 @@ export class Converter {
         }
         case 'pict':
         case 'object':
-          this.vml(c, href, sink, src)
+          this.vml(c, href, sink, objSrc(c))
           break
         case 'footnoteReference':
         case 'endnoteReference':
-          sink.push({ t: 'ref', text: this.hooks.note?.(c.n === 'footnoteReference' ? 'foot' : 'end', c.a.id) ?? c.a.id ?? '*', s: { ...s, va: 'sup' }, src })
+          sink.push({ t: 'ref', text: this.hooks.note?.(c.n === 'footnoteReference' ? 'foot' : 'end', c.a.id) ?? c.a.id ?? '*', s: { ...s, va: 'sup' }, src: objSrc(c) })
           break
       }
     }

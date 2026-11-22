@@ -42,6 +42,12 @@ export function mount(el: HTMLElement, options: MountOptions): MountedViewer {
 }
 
 /**
+ * Where there is no DOM (a server that imports the module to render the page it is used on) the class is still
+ * defined, on a stand-in: importing must not throw. It is never constructed there (`defineElement` registers nothing).
+ */
+const ElementBase: typeof HTMLElement = typeof HTMLElement === 'undefined' ? (class {} as unknown as typeof HTMLElement) : HTMLElement
+
+/**
  * `<office-viewer src="/file.xlsx" style="height:600px"></office-viewer>`
  * Rendered inside a shadow root so host page CSS cannot leak in.
  * Attributes: src, name, language (a source file's: "typescript", "py"…), editable, toolbar / thumbnails / save / download /
@@ -52,7 +58,7 @@ export function mount(el: HTMLElement, options: MountOptions): MountedViewer {
  * `fonts` (as DocViewer's `fonts`, bytes too; over the attribute); `strings` (texts replacing the optional enclosing table or English).
  * `controller` (ViewerController) for state and commands; `headless` displays the document alone.
  */
-export class OfficeViewerElement extends HTMLElement {
+export class OfficeViewerElement extends ElementBase {
   static observedAttributes = ['src', 'name', 'language', 'toolbar', 'thumbnails', 'editable', 'save', 'download', 'file-menu', 'open', 'capture-select-all', 'theme', 'collab', 'room', 'user', 'base', 'comments', 'locale', 'fonts', 'headless']
   private viewer?: MountedViewer
   private _file?: Blob | ArrayBuffer

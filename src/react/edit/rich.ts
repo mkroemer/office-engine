@@ -117,6 +117,37 @@ export function sliceRuns<R extends RRun>(runs: R[], a: number, b: number): R[] 
   return splitRuns(splitRuns(runs, b)[0], a)[1]
 }
 
+/** the one range of `a` replaced to give `b` (what both start and end with left out), null when they are the same */
+function textDiff(a: string, b: string): { at: number; del: number; ins: number } | null {
+  if (a === b) return null
+  let pre = 0
+  while (pre < a.length && pre < b.length && a[pre] === b[pre]) pre++
+  let suf = 0
+  while (suf < a.length - pre && suf < b.length - pre && a[a.length - 1 - suf] === b[b.length - 1 - suf]) suf++
+  return { at: pre, del: a.length - pre - suf, ins: b.length - pre - suf }
+}
+
+/**
+ * The change of text `from` → `to` made in `cur`, which is `from` with someone else's change in it: what `to` replaced
+ * is replaced in `cur` where it stands now, their text left as it is. `at`: where the replaced text ends in the result.
+ * Null when the two changes are of the same characters, or when `from` → `to` changed no text (a look only): the change
+ * cannot be told from theirs then.
+ */
+export function rebaseRuns<R extends RRun>(cur: R[], from: R[], to: R[]): { runs: R[]; at: number } | null {
+  const base = runsText(from)
+  const mine = textDiff(base, runsText(to))
+  if (!mine) return null
+  const theirs = textDiff(base, runsText(cur))
+  let at = mine.at
+  if (theirs) {
+    if (theirs.at + theirs.del <= mine.at) at = mine.at - theirs.del + theirs.ins
+    else if (theirs.at < mine.at + mine.del) return null
+  }
+  const [left, rest] = splitRuns(cur, at)
+  const [, right] = splitRuns(rest, mine.del)
+  return { runs: normalize([...left, ...sliceRuns(to, mine.at, mine.at + mine.ins), ...right]), at: at + mine.ins }
+}
+
 /** Text run whose style applies at offset o (left affinity). */
 export function runAt<R extends RRun>(runs: R[], o: number): R | undefined {
   const [l, r] = splitRuns(runs, o)

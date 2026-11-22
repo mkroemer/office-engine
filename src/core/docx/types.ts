@@ -50,8 +50,17 @@ export interface ParaStyle {
   contextual?: boolean
 }
 
-/** [paragraph id, run ordinal] of the source run in the original XML */
-export type SrcRef = [number, number]
+/**
+ * [paragraph id, run ordinal] of the source run in the original XML. A run that holds several objects (two pictures, a
+ * footnote and an endnote reference), or text next to an object, gives each object a third number: which of the run's
+ * objects it is, so that it is written back alone.
+ */
+export type SrcRef = [pid: number, run: number, obj?: number]
+
+/** run children that become an object of their own in the model (local names) */
+export const RUN_OBJECTS: ReadonlySet<string> = new Set(['drawing', 'pict', 'object', 'footnoteReference', 'endnoteReference'])
+/** run children that become text in the model (local names) */
+export const RUN_TEXT: ReadonlySet<string> = new Set(['t', 'delText', 'tab', 'br', 'cr', 'noBreakHyphen', 'softHyphen', 'sym'])
 
 /**
  * Direct formatting changed by the user (written back as explicit run properties).

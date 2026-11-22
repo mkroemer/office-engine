@@ -284,6 +284,12 @@ export class Numbering {
     return inst.levels[ilvl] ?? this.abstracts.get(inst.abstractId)?.[ilvl]
   }
 
+  /** the abstract list that holds the levels of a list (the one a list style defines, for a list that follows a style) */
+  abstractOf(numId: string): string | undefined {
+    const inst = this.nums.get(numId)
+    return inst && (this.linked.get(inst.abstractId) ?? inst.abstractId)
+  }
+
   /** Advances the counter for (numId, ilvl) and returns the marker text. */
   next(numId: string, ilvl: number): { text: string; level: Level } | undefined {
     const inst = this.nums.get(numId)

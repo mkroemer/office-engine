@@ -106,10 +106,12 @@ async function takeSnapshot(room: string) {
 
 ## Limitations
 
-- Undo / redo only touches your own changes: a cell someone else typed over since is left as they left it
+- Undo / redo only touches your own changes: a cell someone else typed over since is left as they left it. In a document, undo of typing in a paragraph someone else typed in since takes back your characters only; where the two changes are of the same characters, or yours was a change of formatting or of several paragraphs, that step is left out
+- A slide someone else adds, moves or deletes does not end the text you are typing in another slide: it goes on in its slide (the editing ends when that slide itself is deleted)
 - A formula typed while someone else inserts / deletes rows or columns, or renames a sheet, is rewritten with that operation (it reads the cells meant)
 - A cell edit carries the `locale` its numbers were typed in ([API](api.md#numbers-typed-in-a-locale)): every participant and `compact` read `1,5` typed with `de-DE` as 1.5, whatever their own `locale`. Each replica takes the locale's separators from its own `Intl` data; spaces and apostrophes are read in all their forms, so the usual differences between browser and server versions do not change a value. A participant running an older version reads such an edit with a decimal point
 - DOCX rooms are not snapshotted yet (their edits run in the view's editor): newcomers replay the whole history
+- In a document, text typed inside a range someone else makes bold (or gives any other look), deletes or types over at the same moment is kept. A change of whole paragraphs (Enter inside one, a paste of several lines, a list or style change) made at the same moment as someone else's typing in that paragraph still wins over the typing: the paragraph is sent as it was when the change was made
 - Deleting rows / columns can't be undone while collaborating
 - One hub process per room; batches not yet flushed (up to 250 ms on S3) are lost if it crashes, and clients ahead of the stored log must reopen
 - The reference server has no authentication — put it behind your own auth

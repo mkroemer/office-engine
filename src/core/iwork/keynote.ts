@@ -308,7 +308,9 @@ export class KeynoteConverter {
     this.media = new Media(pkg, 'ppt/media')
   }
 
-  private image(dataId: number): string {
+  /** the relationship of an image data file; undefined when the package does not hold the file (a Data/ folder left empty) */
+  private image(dataId: number): string | undefined {
+    if (!this.pkg.dataPath(dataId)) return undefined
     return this.part.rel('image', '../media/' + this.media.name(dataId))
   }
 
@@ -530,7 +532,7 @@ export class KeynoteConverter {
     const descr = m.msg(1)?.str(8)
     return (
       `<p:pic>${this.nv('Pic', posterField ? 'Movie' : 'Picture', '<p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr>', descr)}` +
-      `<p:blipFill><a:blip r:embed="${this.image(did)}"/>${crop}<a:stretch><a:fillRect/></a:stretch></p:blipFill>` +
+      `<p:blipFill><a:blip r:embed="${this.image(did)!}"/>${crop}<a:stretch><a:fillRect/></a:stretch></p:blipFill>` +
       `<p:spPr>${xfrm(box)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${ln ?? ''}</p:spPr></p:pic>`
     )
   }

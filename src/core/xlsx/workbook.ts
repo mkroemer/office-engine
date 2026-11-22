@@ -578,6 +578,8 @@ export class XlsxWorkbook {
   sst: string[] = []
   /** the shared strings that are rich text, by index: the parts with a font of their own */
   rich = new Map<number, TextRun[]>()
+  /** the sheet the file was saved on, when it is not the first */
+  active?: number
   /** `<workbookProtection lockStructure>`: sheets cannot be added, renamed, deleted or moved */
   lockStructure = false
   /** the defined names, by name in lower case: what each stands for, and the sheet it is local to (see `loadNames`) */
@@ -610,11 +612,16 @@ export class XlsxWorkbook {
     const root = await pkg.xml(mainPath)
     const rels = await pkg.rels(mainPath)
     const sheets: SheetInfo[] = []
-    for (const s of kids(kid(root, 'sheets'), 'sheet')) {
+    // (activeTab counts every <sheet>, chart sheets too, which are not read)
+    const tab = Number(kid(kid(root, 'bookViews'), 'workbookView')?.a.activeTab ?? 0)
+    let active: number | undefined
+    kids(kid(root, 'sheets'), 'sheet').forEach((s, at) => {
       const rel = rels.get(s.a['r:id'])
-      if (!rel || !rel.type.endsWith('/worksheet')) continue
-      sheets.push({ name: s.a.name ?? `Sheet${sheets.length + 1}`, index: sheets.length, path: rel.target, hidden: !!s.a.state && s.a.state !== 'visible' })
-    }
+      if (!rel || !rel.type.endsWith('/worksheet')) return
+      const hidden = !!s.a.state && s.a.state !== 'visible'
+      if (at === tab && !hidden) active = sheets.length
+      sheets.push({ name: s.a.name ?? `Sheet${sheets.length + 1}`, index: sheets.length, path: rel.target, hidden })
+    })
     const themeRel = relOfType(rels, 'theme')
     const theme = parseTheme(themeRel ? await pkg.xml(themeRel.target) : undefined)
     const stylesPath = stylesPartOf(pkg, rels)
@@ -625,6 +632,7 @@ export class XlsxWorkbook {
     const wb = new XlsxWorkbook(pkg, mainPath, rels, sheets, styles, date1904, theme, full === '1' || full === 'true')
     const lock = kid(root, 'workbookProtection')?.a.lockStructure
     wb.lockStructure = lock === '1' || lock === 'true'
+    wb.active = active
     await wb.loadNames().catch((e: Error) => console.warn('[office-engine] names and tables not read:', e.message))
     wb.dynamicCm = await readDynamicCm(pkg, rels).catch(() => new Set<number>())
     wb.comments = await readXlsxComments(pkg, mainPath, rels, sheets).catch((e: Error) => {
@@ -691,6 +699,7 @@ export class XlsxWorkbook {
       formats: this.styles.xfs.map((x) => x.numFmt),
       baseFont: this.styles.baseFont,
       date1904: this.date1904,
+      ...(this.active ? { active: this.active } : {}),
     }
   }
 

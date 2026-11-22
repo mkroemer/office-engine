@@ -361,3 +361,37 @@ describe('P2-042: a format given to whole columns, rows or the sheet', () => {
     expect(ch.restyle.keys.length).toBe(9000)
   })
 })
+
+describe('the sheet a workbook was saved on', () => {
+  const sheets = [{ name: 'One' }, { name: 'Chart', kind: 'chartsheet' as const }, { name: 'Two' }, { name: 'Gone', state: 'hidden' }]
+
+  test('activeTab counts every sheet of the file; the view opens on the worksheet it names', async () => {
+    // tab 2 is the third <sheet>: the second worksheet read (the chart sheet is not one)
+    expect((await openBook(await book({ sheets, view: 'activeTab="2"' }))).info.xlsx.active).toBe(1)
+    // the first sheet, no view at all, a hidden sheet, a chart sheet, a number past the end: the first sheet shown, as before
+    for (const view of ['activeTab="0"', undefined, 'activeTab="3"', 'activeTab="1"', 'activeTab="9"']) {
+      expect([view, (await openBook(await book({ sheets, view }))).info.xlsx.active]).toEqual([view, undefined])
+    }
+  })
+})
+
+describe('a formula that is not finished when it is entered', () => {
+  test('one that ends where something must follow is kept as the text typed; open parentheses are closed', async () => {
+    const o = await openBook(await book({ sheets: [{ name: 'S', rows: rows([[1, 2, 3]]) }] }))
+    await o.set(0, 'A2', '=1+')
+    await o.set(0, 'B2', '=A1&')
+    await o.set(0, 'C2', '="open text')
+    await o.set(0, 'D2', '=SUM(A1:C1')
+    await o.set(0, 'E2', '=IF(A1>0,SUM(A1:C1')
+    await o.set(0, 'F2', '=SUM(A1:C1)*')
+    expect([await o.shown(0, 1, 0), await o.shown(0, 1, 1), await o.shown(0, 1, 2), await o.shown(0, 1, 5)]).toEqual(['=1+', '=A1&', '="open text', '=SUM(A1:C1)*'])
+    expect([await o.shown(0, 1, 3), await o.shown(0, 1, 4)]).toEqual(['6', '6'])
+    const xml = await (await o.save()).text('xl/worksheets/sheet1.xml')
+    // the file holds two formulas, both ones Excel reads; the rest is text
+    expect([...xml.matchAll(/<f>([^<]*)<\/f>/g)].map((m) => m[1])).toEqual(['SUM(A1:C1)', 'IF(A1&gt;0,SUM(A1:C1))'])
+    expect(xml).not.toContain('#NAME?')
+    // a formula of a kind the reader does not know is still a formula
+    await o.set(0, 'G2', '=NOSUCHFN(1)')
+    expect(await o.shown(0, 1, 6)).toBe('#NAME?')
+  })
+})

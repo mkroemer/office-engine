@@ -16,6 +16,8 @@ export interface WorkbookMeta {
   /** CSS for font 0 (grid default) */
   baseFont: CellCss
   date1904: boolean
+  /** the sheet the file was saved on (`activeTab`), when it is one that is shown: the view opens there */
+  active?: number
 }
 
 export interface ColInfo {

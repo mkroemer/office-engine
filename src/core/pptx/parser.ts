@@ -2,10 +2,10 @@ import { colorOf, officeHex, type ColorCtx } from '../color'
 import type { DocComment } from '../comments'
 import { readPptxComments, PptxComments, writePptxComments } from './comments'
 import { cssFont } from '../fonts'
-import { OpcPackage, relOfType, type Rels } from '../opc'
+import { OpcPackage, relOfType, relsOfType, type Rels } from '../opc'
 import { parseTheme, type Theme } from '../theme'
 import { emuToPx } from '../units'
-import { kid, kids, num, path, textOf, type XEl } from '../xml'
+import { decodeXml, kid, kids, num, path, textOf, type XEl } from '../xml'
 import type { Box, Fill, PParaSpec, PresentationMeta, PRunSet, SlideEl, SlideModel, Stroke, TCell, TextBody, TPara, TRun } from './types'
 import {
   clone, el, escText, getAttr, isNode, kidOf, kidsOf, local, parseRaw, prefixOf, removeKids, serialize, setAttr, setOrdered, walkOoxml,
@@ -148,6 +148,8 @@ interface Part {
   path: string
   root: XEl
   rels: Rels
+  /** the pictures of the part's legacy drawing (VML) by shape id: what an embedded object shows */
+  vml?: Map<string, string>
   spTree?: XEl
   byIdx: Map<string, XEl>
   byType: Map<string, XEl>
@@ -258,21 +260,38 @@ export interface UndoEntry {
   parts?: PartPatch[]
   gone?: DocComment[]
   focus?: [number, number]
+  /** a text edit: the text it is of (slide, shape, cell), so that typing going on in it stays one step */
+  text?: string
+  /** a text edit: what tells the runs of the slide's edited texts from those of the file, before and after it */
+  gen?: [before: GenSnap, after: GenSnap]
 }
 
-/**
- * The stack without what a text edit of slide `p` (now `text`) makes stale: its shape entries go (their XML no longer
- * matches); a slide list entry that created the slide keeps its place and re-creates the slide as it is now.
- */
-export function dropUndo(stack: UndoEntry[], p: string, text: string): UndoEntry[] {
-  return stack.filter((e) => {
-    if (e.path === p) return false
-    const at = e.parts?.find((x) => x.path === p)
-    if (!at) return true
-    if (at.before !== null) return false
-    if (at.after !== null) at.after = text
-    return true
-  })
+/** the run maps of the edited texts of one slide (see `genMaps`) */
+export type GenSnap = [key: string, map: GenPara[]][]
+
+/** whether a slide part is hidden from the show (`show="0"` on its root) */
+export async function slideHidden(pkg: OpcPackage, path: string): Promise<boolean> {
+  // the root's attributes open the part: its first bytes are read, not the whole slide (every slide is asked when a deck opens)
+  const reader = (await pkg.stream(path)).getReader()
+  const chunks: Uint8Array[] = []
+  let n = 0
+  try {
+    while (n < 2048) {
+      const { done, value } = await reader.read()
+      if (done) break
+      chunks.push(value)
+      n += value.length
+    }
+  } finally {
+    void reader.cancel().catch(() => {})
+  }
+  const head = new Uint8Array(n)
+  let at = 0
+  for (const c of chunks) {
+    head.set(c, at)
+    at += c.length
+  }
+  return /<[\w:]*sld\b[^>]*\sshow="(?:0|false)"/.test(decodeXml(head.subarray(0, 4096)))
 }
 
 export class PptxPresentation {
@@ -302,6 +321,8 @@ export class PptxPresentation {
       const rel = rels.get(s.a['r:id'])
       if (rel && pkg.has(rel.target)) slides.push({ index: slides.length, path: rel.target, hidden: false })
     }
+    // hidden slides say so on their own root: a show leaves them out, the list dims them
+    await Promise.all(slides.map(async (s) => void (s.hidden = await slideHidden(pkg, s.path))))
     const meta: PresentationMeta = {
       w: emuToPx(num(sz?.a.cx, 9144000)),
       h: emuToPx(num(sz?.a.cy, 6858000)),
@@ -320,7 +341,32 @@ export class PptxPresentation {
     const root = await this.pkg.xml(p, false)
     if (!root) throw new Error(`Missing part ${p}`)
     const spTree = path(root, 'cSld', 'spTree')
-    return { path: p, root, rels: await this.pkg.rels(p), spTree, ...indexPlaceholders(spTree) }
+    const rels = await this.pkg.rels(p)
+    return { path: p, root, rels, vml: await this.vmlPictures(rels), spTree, ...indexPlaceholders(spTree) }
+  }
+
+  /**
+   * An embedded object (a worksheet, a chart of Microsoft Graph, a slide) names the shape of the part's legacy
+   * drawing that shows it (`spid`); PowerPoint 2007 files have its picture nowhere else, and newer ones keep the
+   * picture of their own in an mc:Fallback, which is not read. The shapes' pictures, by shape id.
+   */
+  private async vmlPictures(rels: Rels): Promise<Map<string, string> | undefined> {
+    let out: Map<string, string> | undefined
+    for (const rel of relsOfType(rels, 'vmlDrawing')) {
+      if (rel.external || !this.pkg.has(rel.target)) continue
+      const [vml, vrels] = await Promise.all([this.pkg.xml(rel.target), this.pkg.rels(rel.target)])
+      const walk = (el: XEl | undefined) => {
+        if (!el) return
+        const img = el.n === 'shape' ? kid(el, 'imagedata') : undefined
+        // (o:relid, read without its prefix; r:id in what other writers make)
+        const target = img ? vrels.get(img.a.relid ?? img.a['r:id'] ?? '') : undefined
+        // a named shape keeps the id objects point at in o:spid
+        if (target && !target.external) for (const id of [el.a.spid, el.a.id]) if (id) (out ??= new Map()).set(id, target.target)
+        for (const c of el.c) walk(c)
+      }
+      walk(vml)
+    }
+    return out
   }
 
   private master(p: string): Promise<Master> {
@@ -388,7 +434,7 @@ export class PptxPresentation {
       h: this.meta.h,
       bg: r.background(),
       els,
-      hidden: slide.root.a.show === '0',
+      hidden: slide.root.a.show === '0' || slide.root.a.show === 'false',
       title: r.title,
       notes: await this.notesOf(slide.rels),
     }
@@ -422,7 +468,7 @@ export class PptxPresentation {
   private genMaps = new Map<string, GenPara[]>()
   /** structural edits (shapes, slides) */
   touched = false
-  /** shape edits (slide XML before / after) for undo; text edits drop the entries of their slide */
+  /** edits of a slide (its XML before / after: shapes, text) and of the slide list, for undo */
   undoStack: UndoEntry[] = []
   redoStack: UndoEntry[] = []
   private originals = new Map<string, string>()
@@ -440,17 +486,34 @@ export class PptxPresentation {
     return this.genMaps.get(tkey(path, sid, cell))
   }
 
+  /** the run maps of a slide's edited texts, as they are now */
+  genSnap(path: string): GenSnap {
+    return [...this.genMaps].filter(([k]) => k.startsWith(path + '#'))
+  }
+
+  /** puts back the run maps of a slide (undo / redo of a text edit: they go with the slide's XML) */
+  genRestore(path: string, snap: GenSnap) {
+    for (const k of [...this.genMaps.keys()]) if (k.startsWith(path + '#')) this.genMaps.delete(k)
+    for (const [k, v] of snap) this.genMaps.set(k, v)
+  }
+
   get dirty() {
     return this.genMaps.size > 0 || this.touched || this.comments.dirty
   }
 
   /** Rewrites the paragraphs of shape `sid` on slide `index` and returns the re-rendered slide. */
-  async setText(index: number, sid: number, paras: PParaSpec[], cell?: [number, number]): Promise<SlideModel> {
+  /**
+   * `step`: the edit begins a step of its own for undo (the text was just entered). Without it, typing that goes on in
+   * the text the last edit was of is one step with it.
+   */
+  async setText(index: number, sid: number, paras: PParaSpec[], cell?: [number, number], step = false): Promise<SlideModel> {
     const info = this.meta.slides[index]
     if (!info) throw new Error(`No slide #${index}`)
     const p = info.path
     await this.keepOriginal(p)
-    const curNodes = parseRaw(await this.pkg.text(p))
+    const before = await this.pkg.text(p)
+    const genBefore = this.genSnap(p)
+    const curNodes = parseRaw(before)
     // a table cell (`a:tc`) holds its text like a shape (`p:sp`) does: an `txBody` of `a:p`
     const find = (nodes: RChild[]) => (cell ? findCell(nodes, sid, cell) : findShape(nodes, sid))
     const shape = find(curNodes)
@@ -523,8 +586,17 @@ export class PptxPresentation {
     const text = serialize(curNodes)
     this.pkg.setPart(p, text)
     this.genMaps.set(key, map)
-    this.undoStack = dropUndo(this.undoStack, p, text)
-    this.redoStack = dropUndo(this.redoStack, p, text)
+    if (text !== before) {
+      const top = this.undoStack[this.undoStack.length - 1]
+      if (!step && top?.text === key && top.after === before && top.gen) {
+        top.after = text
+        top.gen[1] = this.genSnap(p)
+      } else {
+        this.undoStack.push({ path: p, before, after: text, text: key, gen: [genBefore, this.genSnap(p)] })
+        if (this.undoStack.length > 200) this.undoStack.shift()
+      }
+      this.redoStack = []
+    }
     return this.slide(index)
   }
 
@@ -1045,6 +1117,9 @@ class SlideRenderer {
       const rel = id ? part.rels.get(id) : undefined
       return void out.push({ t: 'pic', box, target: rel?.target })
     }
+    // no picture of its own: the one its shape of the legacy drawing shows
+    const shown = ole?.a.spid ? part.vml?.get(ole.a.spid) : undefined
+    if (shown) return void out.push({ t: 'pic', box, target: shown })
     const uri = gd.a.uri ?? ''
     const label = uri.includes('chart') ? 'Chart' : uri.includes('diagram') ? 'SmartArt' : uri.includes('ole') ? 'Embedded object' : 'Object'
     out.push({ t: 'placeholder', box, label })

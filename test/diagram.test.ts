@@ -317,7 +317,8 @@ describe('Graphviz', () => {
     expect(n.g.cluster).toBe('cluster_one')
     expect(g.clusters[0]).toMatchObject({ label: 'One', style: { fill: '#eeeeee' } })
     expect(g.sameRank).toEqual([['b', 'f']])
-    expect(n.i.sections!.map((s) => s.rows[0][0])).toEqual(['A', 'B', 'C'])
+    // rankdir=LR stacks the top-level fields, so the braces turn them into a row
+    expect(n.i.sections!.map((s) => s.rows)).toEqual([[['A', 'B', 'C']]])
     expect(n.j.label).toBe('bold\ntwo')
     expect(n.k.label).toBe('k line\nnext')
     expect(n.l.style?.hidden).toBe(true)
