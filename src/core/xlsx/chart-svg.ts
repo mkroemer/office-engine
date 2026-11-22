@@ -14,7 +14,7 @@ import { lineHeight, pathData, Svg, textWidth, wrap, type Paint, type Pt } from 
 import type { ChartAxis, ChartGroup, ChartModel, ChartSeries, ChartText, FillLook, LineLook, TextLook } from './chart'
 import { labelsAt, SURFACE_BANDS } from './chart'
 import { drawCartesian3D, drawPie3D } from './chart-3d'
-import { formatValue } from './numfmt'
+import { formatValue, serialToDate } from './numfmt'
 
 export const PX = 96 / 72
 const PAD = 8
@@ -677,17 +677,25 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
   }
   const catReverse = catAxis?.reverse ?? false
   const catLen = horizontal ? inner.h : inner.w
-  // a date axis places each point at its date, a day to a band: dates a week apart are seven bands apart
+  // a date axis places each point at its date, a band to its base unit (a day, a month or a year): days a week
+  // apart are seven bands apart, the firsts of months a band
   const dates = catAxis?.kind === 'date' ? groups.find((g) => !xValued(g))?.series[0]?.catValues : undefined
   const known = dates?.filter((v): v is number => v !== null) ?? []
+  const unit = catAxis?.baseUnit ?? (known.length ? baseUnitOf(known, m.date1904) : 'days')
+  const unitOf = (d: number) => {
+    if (unit === 'days') return Math.floor(d)
+    const t = serialToDate(d, m.date1904)
+    return unit === 'years' ? t.getUTCFullYear() : t.getUTCFullYear() * 12 + t.getUTCMonth()
+  }
   const d0 = catAxis?.min ?? (known.length ? lowest(known) : 0)
   const d1 = catAxis?.max ?? (known.length ? highest(known) : 0)
-  const byDate = known.length > 0 && d1 >= d0
-  const units = byDate ? Math.min(100_000, Math.floor(d1 - d0) + 1) : n
+  const byDate = known.length > 0 && d1 >= d0 && Number.isFinite(d0) && Number.isFinite(d1)
+  const u0 = byDate ? unitOf(d0) : 0
+  const units = byDate ? Math.max(1, Math.min(100_000, unitOf(d1) - u0 + 1)) : n
   const band = catLen / units
   const catMid = (k: number) => {
     const d = byDate ? dates![k] : null
-    let i = d !== null && d !== undefined ? d - d0 : k
+    let i = d !== null && d !== undefined ? unitOf(d) - u0 : k
     // horizontal bars run from the bottom up, as Excel draws them
     if (horizontal !== catReverse) i = units - 1 - i
     return (horizontal ? inner.y : inner.x) + (i + 0.5) * band
@@ -801,6 +809,16 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
 }
 
 const CLIP_MARGIN = 6
+
+/** the base unit Excel picks for dates left to it: years where they all fall on one day of the year, months where they
+ *  all fall on one day of the month, else days */
+function baseUnitOf(dates: number[], date1904: boolean): 'days' | 'months' | 'years' {
+  const ds = dates.slice(0, 1000).map((d) => serialToDate(d, date1904))
+  if (ds.some((d) => !Number.isFinite(d.getTime()))) return 'days'
+  const day = ds[0].getUTCDate()
+  if (ds.length < 2 || ds.some((d) => d.getUTCDate() !== day)) return 'days'
+  return ds.every((d) => d.getUTCMonth() === ds[0].getUTCMonth()) ? 'years' : 'months'
+}
 
 /** while a chart's series are drawn, the layer their data labels go on (unclipped, above them) */
 const labelLayers = new WeakMap<Svg, Svg>()

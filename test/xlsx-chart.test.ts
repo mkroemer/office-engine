@@ -671,6 +671,20 @@ describe('xlsx charts: as Excel draws them', () => {
     expect(textY('20')).toBeGreaterThan(Number(bars[1][1]))
   })
 
+  test('a date axis gives each month (or year) a band where the dates fall on the firsts, as its base unit says', async () => {
+    const { model } = await modelOf(await withChart(CLUSTERED))
+    const cat = model!.axes.find((a) => a.kind === 'cat')!
+    cat.kind = 'date'
+    // 1 Jan, 1 Feb and 1 Mar 2020: a month apart, a band each, not 31 and 29 days apart
+    for (const s of model!.groups[0].series) s.catValues = [43831, 43862, 43891]
+    const widths = (svg: string) => [...svg.split('clip-path="url(#de-plot)"')[1].matchAll(/<rect [^>]*width="([\d.]+)"/g)].map((m) => Number(m[1]))
+    const monthly = widths(renderChart(model!, 480, 300))
+    expect(Math.min(...monthly)).toBeGreaterThan(30)
+    // told to count days, they are days apart: much narrower bars
+    cat.baseUnit = 'days'
+    expect(Math.max(...widths(renderChart(model!, 480, 300)))).toBeLessThan(Math.min(...monthly) / 10)
+  })
+
   test("a horizontal bar chart's clusters run from the bottom up: the first series lowest", async () => {
     const { model } = await modelOf(await withChart(CLUSTERED.replace('<c:barDir val="col"/>', '<c:barDir val="bar"/>')))
     const [a, b] = model!.groups[0].series

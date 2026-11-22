@@ -179,6 +179,8 @@ export interface ChartAxis {
   text?: TextLook
   /** the tick labels' angle the file fixes, degrees clockwise; undefined: Excel's own choice */
   rot?: number
+  /** a date axis' band: a day, a month or a year (`c:baseTimeUnit`); undefined: as the dates' spacing suggests */
+  baseUnit?: 'days' | 'months' | 'years'
   title?: ChartText
   crossAx: string
   crosses: 'autoZero' | 'min' | 'max'
@@ -703,8 +705,10 @@ function axisOf(el: XEl, ctx: ColorCtx, defSize: number): ChartAxis {
   // -60000000 is the file's word for "as Excel sees fit"
   const rotRaw = num(kid(kid(el, 'txPr'), 'bodyPr')?.a.rot)
   const rot = rotRaw !== undefined && rotRaw !== -60000000 && Number.isFinite(rotRaw) ? Math.max(-90, Math.min(90, rotRaw / 60000)) : undefined
+  const base = val(kid(el, 'baseTimeUnit'))
   return {
     ...(rot !== undefined ? { rot } : {}),
+    ...(base === 'days' || base === 'months' || base === 'years' ? { baseUnit: base } : {}),
     ...(gridLine !== undefined ? { grid: gridLine } : {}),
     ...(axLine !== undefined ? { line: axLine } : {}),
     ...(text ? { text } : {}),
