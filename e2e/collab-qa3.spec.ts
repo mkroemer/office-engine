@@ -28,8 +28,8 @@ async function room(sample: string) {
   await fetch(`${HTTP}/rooms/${id}/file`, { method: 'PUT', body: readFileSync(`${SAMPLES}/${sample}`), headers: { 'X-File-Name': sample } })
   return id
 }
-const join = (id: string, user: string) =>
-  viewer({ src: `${HTTP}/rooms/${id}/file?seq=0`, name: 'shared.pptx', collab: `ws://localhost:${PORT}/collab`, room: id, user, editable: true })
+const join = (id: string, user: string, name = 'shared.pptx') =>
+  viewer({ src: `${HTTP}/rooms/${id}/file?seq=0`, name, collab: `ws://localhost:${PORT}/collab`, room: id, user, editable: true })
 const count = (v: Viewer, n: number) => v.page.waitForFunction((k) => new RegExp(`of ${k}$`).test(document.querySelector('.de-bar .de-status')?.textContent ?? ''), n, { timeout: 20_000 })
 const slideText = (v: Viewer, n: number) => v.page.evaluate((k) => document.querySelector(`.de-slide-frame[data-slide="${k}"]`)?.textContent ?? '', n)
 
@@ -62,6 +62,37 @@ describe('QA 3: a presentation shared in a room', () => {
     await b.page.locator('.de-thumb').nth(3).click()
     await b.page.waitForFunction(() => (document.querySelector('.de-slide-frame[data-slide="4"]')?.textContent ?? '').includes('Ann one two'), null, { timeout: 20_000 })
     expect(await slideText(b, 3)).not.toContain('two')
+    expect(a.errors).toEqual([])
+    expect(b.errors).toEqual([])
+  })
+})
+
+describe('QA 3: a spreadsheet shared in a room', () => {
+  test('a row inserted above by a collaborator: the cell being typed in and the selection go down with their row', async () => {
+    const id = await room('sample.xlsx')
+    const a = await join(id, 'Ann', 'shared.xlsx')
+    const b = await join(id, 'Bob', 'shared.xlsx')
+    for (const v of [a, b]) await v.page.locator('.de-collab-live').waitFor({ timeout: 20_000 })
+    await a.typeCell('J12', 'mark')
+    await b.page.waitForFunction(() => document.body.innerText.includes('mark'), null, { timeout: 20_000 })
+    // Ann starts typing under her mark, and has not pressed Enter yet
+    await a.clickCell('J13')
+    await a.page.keyboard.type('typed by Ann')
+    // Bob inserts two rows above
+    await b.clickCell('A3')
+    await b.pick('Insert, delete or hide rows & columns', 'Insert row above')
+    await b.clickCell('A3')
+    await b.pick('Insert, delete or hide rows & columns', 'Insert row above')
+    await a.page.waitForFunction(() => [...document.querySelectorAll('.de-cell')].filter((c) => (c as HTMLElement).innerText === 'mark').length === 1, null, { timeout: 20_000 })
+    await a.page.waitForTimeout(500)
+    expect(await a.shown('J14')).toBe('mark')
+    await a.page.keyboard.press('Enter')
+    await a.page.waitForTimeout(400)
+    // her text is under her mark, two rows down; the place she began typing at holds nothing of it
+    expect(await a.shown('J15')).toBe('typed by Ann')
+    expect(await a.shown('J13')).toBe('')
+    await b.page.waitForFunction(() => document.body.innerText.includes('typed by Ann'), null, { timeout: 20_000 })
+    expect(await b.shown('J15')).toBe('typed by Ann')
     expect(a.errors).toEqual([])
     expect(b.errors).toEqual([])
   })

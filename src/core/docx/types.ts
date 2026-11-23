@@ -25,8 +25,30 @@ export interface Border {
   color: string
 }
 
+/** what fills the gap of a tab */
+export type TabLeader = 'dot' | 'hyphen' | 'underscore' | 'middleDot'
+
+/**
+ * A tab stop: where it is (pt from the text margin) and how the text after the tab stands to it. `clear` (while the
+ * styles of a paragraph are put together): the stop of a style it is based on is taken away.
+ */
+export interface TabStop {
+  pos: number
+  a: 'left' | 'center' | 'right' | 'decimal' | 'clear'
+  ld?: TabLeader
+}
+
+/** an absolute position tab (w:ptab): to the left, the middle or the right of the text margins (`indent`: of the paragraph's indents) */
+export interface PTab {
+  a: 'left' | 'center' | 'right'
+  ld?: TabLeader
+  indent?: boolean
+}
+
 export interface ParaStyle {
   align?: 'left' | 'center' | 'right' | 'justify'
+  /** the tab stops set (w:tabs), by position; past the last one, and without any, a tab goes to the next half inch */
+  tabs?: TabStop[]
   indL?: number
   indR?: number
   /** positive: first line indent; negative: hanging */
@@ -136,7 +158,7 @@ export type Inline =
    * kept whole and written back as it is (an equation, a field result, ruby…); `text` is what it reads as.
    * `math`: a TeX formula (Markdown `$…$` / `$$…$$`), drawn from its TeX and saved back as it was written
    */
-  | { t: 'ref'; text: string; s: RunStyle; src?: SrcRef; tc?: TrackMark; math?: TexMath }
+  | { t: 'ref'; text: string; s: RunStyle; src?: SrcRef; tc?: TrackMark; math?: TexMath; ptab?: PTab }
 
 /** a TeX formula and the delimiters it was written with */
 export interface TexMath {

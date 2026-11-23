@@ -1258,7 +1258,7 @@ export class XlsxEditor {
         return this.fill(sheet, d, op.range, op.dir)
       case 'sort':
         await this.wb.ensure(d, op.range.r0, op.range.r1)
-        return this.sort(sheet, d, op.range, op.col, !!op.desc)
+        return this.sort(sheet, d, op.range, op.col, !!op.desc, op.order)
     }
   }
 
@@ -1510,7 +1510,7 @@ export class XlsxEditor {
    * anything last, in either direction. The cells are moved (see `Change.sort`), formulas reading their own row
    * with them, comments with their cells.
    */
-  private sort(sheet: number, d: SheetData, range: Range, col: number, desc: boolean): XlsxEditResult {
+  private sort(sheet: number, d: SheetData, range: Range, col: number, desc: boolean, given?: number[]): XlsxEditResult {
     expandShared(d)
     // (Excel refuses too: "all the merged cells need to be the same size")
     if (d.merges.some((m) => m.r1 >= range.r0 && m.r0 <= range.r1 && m.c1 >= range.c0 && m.c0 <= range.c1)) {
@@ -1528,7 +1528,9 @@ export class XlsxEditor {
     const n = range.r1 - range.r0 + 1
     const rank = new Uint8Array(n)
     const vals: Value[] = new Array(n)
-    for (let i = 0; i < n; i++) {
+    // (an order given is the sort already made, elsewhere: the rows are moved as it says)
+    const fixed = given && isOrder(given, n) ? given.slice() : undefined
+    for (let i = 0; i < n && !fixed; i++) {
       const e = getEntry(d, range.r0 + i, col)
       const t = e ? e[0] : T_EMPTY
       const v = e ? e[1] : ''
@@ -1539,16 +1541,18 @@ export class XlsxEditor {
       else [rank[i], vals[i]] = [1, t === T_SST ? (this.wb.sst[v as number] ?? '') : String(v)]
       if (rank[i] === 1 && vals[i] === '') rank[i] = 4
     }
-    const order = Array.from({ length: n }, (_, i) => i)
-    order.sort((x, y) => {
-      const a = rank[x]
-      const b = rank[y]
-      if (a !== b) return a === 4 ? 1 : b === 4 ? -1 : desc ? b - a : a - b
-      if (a >= 3) return 0
-      const k = compare(vals[x], vals[y])
-      return desc ? -k : k
-    })
-    if (order.every((x, i) => x === i)) return { sheet, range }
+    const order = fixed ?? Array.from({ length: n }, (_, i) => i)
+    if (!fixed)
+      order.sort((x, y) => {
+        const a = rank[x]
+        const b = rank[y]
+        if (a !== b) return a === 4 ? 1 : b === 4 ? -1 : desc ? b - a : a - b
+        if (a >= 3) return 0
+        const k = compare(vals[x], vals[y])
+        return desc ? -k : k
+      })
+    const sorted = n <= SORT_ORDER_MAX ? { sorted: order } : {}
+    if (order.every((x, i) => x === i)) return { sheet, range, ...sorted }
     // the formulas of the range as they are, and as they are in the rows they go to
     const before: [number, string][] = []
     const after: [number, string][] = []
@@ -1571,7 +1575,7 @@ export class XlsxEditor {
     if (this.undoStack.length > 200) this.undoStack.shift()
     this.redoStack = []
     if (before.length) this.formulaTouched = true
-    return { sheet, range, recalc: this.recalcAll() }
+    return { sheet, range, recalc: this.recalcAll(), ...sorted }
   }
 
   /**
@@ -2125,6 +2129,20 @@ function needsWrite(d: SheetData): boolean {
 }
 
 /** the order that puts back what `order` moved */
+/** rows past which a sort does not say the order it made (the operation that carries it to a room would be megabytes) */
+const SORT_ORDER_MAX = 20_000
+
+/** whether `order` names each of `n` rows once */
+function isOrder(order: unknown, n: number): order is number[] {
+  if (!Array.isArray(order) || order.length !== n) return false
+  const seen = new Uint8Array(n)
+  for (const x of order) {
+    if (!Number.isInteger(x) || x < 0 || x >= n || seen[x]) return false
+    seen[x] = 1
+  }
+  return true
+}
+
 function inverse(order: number[]): number[] {
   const out = new Array<number>(order.length)
   for (let i = 0; i < order.length; i++) out[order[i]] = i

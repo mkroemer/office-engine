@@ -201,20 +201,35 @@ export class HttpRangeSource implements ByteSource {
     if (length > 2 * this.blockSize) {
       const { url, opts } = this
       let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+      let got = 0
+      // where the answer was last asked for again: asked twice from one place, it does not go on
+      let resumed = -1
+      const ask = async () => {
+        const res = await fetch(url, {
+          headers: { ...opts.headers, Range: `bytes=${offset + got}-${offset + length - 1}` },
+          credentials: opts.credentials,
+          signal: opts.signal,
+        })
+        if (res.status !== 206) throw new Error(`Range request not honoured (HTTP ${res.status})`)
+        reader = res.body!.getReader()
+      }
       return new ReadableStream<Uint8Array>({
-        async start() {
-          const res = await fetch(url, {
-            headers: { ...opts.headers, Range: `bytes=${offset}-${offset + length - 1}` },
-            credentials: opts.credentials,
-            signal: opts.signal,
-          })
-          if (res.status !== 206) throw new Error(`Range request not honoured (HTTP ${res.status})`)
-          reader = res.body!.getReader()
-        },
+        start: ask,
         async pull(ctrl) {
-          const { done, value } = await reader!.read()
-          if (done) ctrl.close()
-          else ctrl.enqueue(value)
+          for (;;) {
+            const { done, value } = await reader!.read()
+            if (!done) {
+              got += value.length
+              ctrl.enqueue(value)
+              return
+            }
+            if (got >= length) return ctrl.close()
+            // The answer ended before the range did: a browser stops one answer at 2 GiB, a proxy may cut a long one.
+            // The rest is asked for from there: what was read as "the end of the file" would be a file cut short.
+            if (resumed === got) throw new Error(`The download ended early: ${got.toLocaleString('en-US')} of ${length.toLocaleString('en-US')} bytes`)
+            resumed = got
+            await ask()
+          }
         },
         cancel() {
           return reader?.cancel()

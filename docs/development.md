@@ -49,53 +49,56 @@ src/collab   real-time collaboration (hub, session, per-format adapters)
 `e2e/*.spec.ts` drive a fixture app (`e2e/app`, served by Vite with `vite.e2e.config.ts`) in headless Chromium through `playwright-core`, one browser and server per file (`e2e/harness.ts`).
 The app reads `DocViewer` props from the query string (`?src=samples/sample.docx&editable=1&allowDownload=0&onSave=1…`) and records callbacks in `window.__events`; saved files are re-opened with the engine to check what was written.
 
-| Spec                       | Covers                                                                                                                     |
-|----------------------------|----------------------------------------------------------------------------------------------------------------------------|
-| `viewer.spec.ts`           | rendering of the 3 formats, outline, zoom, sheet tabs, thumbnails, slideshow, props, errors                                |
-| `legacy.spec.ts`           | .doc / .xls / .ppt / .rtf / OpenDocument samples: converted, shown, edited, saved as OOXML                                 |
-| `docx.spec.ts`             | typing, formatting, styles, lists, colors, fonts, links, tables, images, find & replace, undo                              |
-| `docx-page.spec.ts`        | page setup: size, orientation, margins, columns; refused values; numbers typed in a locale                                 |
-| `docx-split.spec.ts`       | paragraphs and tables split across pages: layout, caret, editing, header rows                                              |
-| `docx-hf.spec.ts`          | headers and footers: page numbers, text, different first page, saved and undone                                            |
-| `docx-table.spec.ts`       | table editing: cell selection, merges, colors, borders, alignment, column widths                                           |
-| `docx-track.spec.ts`       | tracked changes: shown, accepted, rejected, typed while tracking                                                           |
-| `docx-qa2.spec.ts`         | Word editor regressions (QA 2): typing across pages, lists, links, clipboard, tables, find, print                          |
-| `docx-qa3.spec.ts`         | Word editor regressions (QA 3): text boxes anchored in a paragraph, Tab in a list that defines one level                   |
-| `xlsx.spec.ts`             | values, formulas, merges (all / across / down / unmerge), formats, rows / columns, sheets, freeze                          |
-| `xlsx-qa3.spec.ts`         | spreadsheet regressions (QA 3): whole columns / rows next to merged cells, header menus, Undo state, deleting a sheet      |
-| `pptx.spec.ts`             | text, shapes (insert, move, fill, arrange, rotate, duplicate, delete), images, slides, present                             |
-| `pptx-save.spec.ts`        | saving while slide text is being typed or committed: nothing pending is left out                                           |
-| `pptx-qa2.spec.ts`         | presentation regressions (QA 2): Tab levels, undo of slide list edits, table cell text, notes export                       |
-| `pptx-qa3.spec.ts`         | presentation regressions (QA 3): undo / redo of text typed in a shape, the state of the buttons, typing and the slide list |
-| `focus-qa3.spec.ts`        | the keyboard after a dialog, a thumbnail or a sheet tab: focus trap, focus return, Ctrl+S                                  |
-| `file-menu.spec.ts`        | every File entry: New, Open (conversions), Import, Save, Rename, Download as, Details, Print                               |
-| `permissions.spec.ts`      | `allowSave` / `allowDownload` combinations, image download, Ctrl+S / Ctrl+P                                                |
-| `color.spec.ts`            | custom colors (system picker, recent list, persistence) in the 3 formats                                                   |
-| `code.spec.ts`             | code blocks in Markdown and source files: syntax colors, editing, bytes and line breaks kept                               |
-| `markdown-math.spec.ts`    | TeX math in Markdown: drawn as MathML, edited around, saved as written, printed and exported                               |
-| `comments.spec.ts`         | comments in the 3 formats: on a selection / cell / slide, replies, mentions, resolve, undo, saved                          |
-| `comments-collab.spec.ts`  | comments in a shared room                                                                                                  |
-| `collab.spec.ts`           | two editors on `scripts/collab-server.ts`: live edits, presence, File menu in a room                                       |
-| `collab-qa3.spec.ts`       | two editors of a presentation: a slide added by one does not end the text the other is typing                              |
-| `security.spec.ts`         | crafted files: nothing is requested from another host, no script runs, SVG is not a same-origin document                   |
-| `embed.spec.ts`            | `<office-viewer>` (shadow DOM, attributes, `file`, `fonts`) and `mount()`                                                  |
-| `sdk.spec.ts`              | the standalone packages (diagram, mermaid, plantuml, graphviz, markdown) in a page                                         |
-| `fonts.spec.ts`            | host fonts (a generated test font): loaded before measuring, timeout, failure, late web fonts                              |
-| `icons.spec.ts`            | host icons in the 3 formats; the built-in ones without `icons`                                                             |
-| `components.spec.ts`       | host UI components: Button, More, Dialog (prompts) in place of the engine's                                                |
-| `ui-layout.spec.ts`        | toolbar overflow (More), host dialogs: focus, submit once                                                                  |
-| `controller.spec.ts`       | the controller and headless mode: state, commands, file actions, replaced documents                                        |
-| `chrome.spec.ts`           | host-placed controls (`ZoomBar`, `FormatBar`, `OutlineList`, `SheetTabs`…) around a headless viewer                        |
-| `format-controls.spec.ts`  | host formatting controls: focus kept while typing a size, the logical target of commands                                   |
-| `locale.spec.ts`           | UI texts: German, partial overrides, switching, unknown locales                                                            |
-| `locale-docx.spec.ts`      | documents in German: status, toolbar, page setup                                                                           |
-| `locale-xlsx.spec.ts`      | spreadsheets in a locale: sheet menu texts, numbers typed with a decimal comma, the size box                               |
-| `controller-built.spec.ts` | the built package: the controller across locale / UI updates, a replaced document, save                                    |
-| `format-built.spec.ts`     | the built package: host formatting through the real worker, saved and reopened                                             |
-| `locale-built.spec.ts`     | the built package: browser default formatting, opt-in German, plural forms, clipboard and Visio texts                      |
-| `ui-built.spec.ts`         | the built package: nested providers; every entry imported without a DOM                                                    |
+| Spec                       | Covers                                                                                                                                   |
+|----------------------------|------------------------------------------------------------------------------------------------------------------------------------------|
+| `viewer.spec.ts`           | rendering of the 3 formats, outline, zoom, sheet tabs, thumbnails, slideshow, props, errors                                              |
+| `legacy.spec.ts`           | .doc / .xls / .ppt / .rtf / OpenDocument samples: converted, shown, edited, saved as OOXML                                               |
+| `docx.spec.ts`             | typing, formatting, styles, lists, colors, fonts, links, tables, images, find & replace, undo                                            |
+| `docx-page.spec.ts`        | page setup: size, orientation, margins, columns; refused values; numbers typed in a locale                                               |
+| `docx-split.spec.ts`       | paragraphs and tables split across pages: layout, caret, editing, header rows                                                            |
+| `docx-hf.spec.ts`          | headers and footers: page numbers, text, different first page, saved and undone                                                          |
+| `docx-table.spec.ts`       | table editing: cell selection, merges, colors, borders, alignment, column widths                                                         |
+| `docx-tabs.spec.ts`        | tab stops: left / center / right / decimal, leaders, stops of a style, absolute position tabs, typing, HTML export                       |
+| `docx-track.spec.ts`       | tracked changes: shown, accepted, rejected, typed while tracking                                                                         |
+| `docx-qa2.spec.ts`         | Word editor regressions (QA 2): typing across pages, lists, links, clipboard, tables, find, print                                        |
+| `docx-qa3.spec.ts`         | Word editor regressions (QA 3): text boxes anchored in a paragraph, Tab in a list that defines one level                                 |
+| `xlsx.spec.ts`             | values, formulas, merges (all / across / down / unmerge), formats, rows / columns, sheets, freeze                                        |
+| `xlsx-qa3.spec.ts`         | spreadsheet regressions (QA 3): whole columns / rows next to merged cells, header menus, Undo state, deleting a sheet                    |
+| `pptx.spec.ts`             | text, shapes (insert, move, fill, arrange, rotate, duplicate, delete), images, slides, present                                           |
+| `pptx-save.spec.ts`        | saving while slide text is being typed or committed: nothing pending is left out                                                         |
+| `pptx-qa2.spec.ts`         | presentation regressions (QA 2): Tab levels, undo of slide list edits, table cell text, notes export                                     |
+| `pptx-qa3.spec.ts`         | presentation regressions (QA 3): undo / redo of text typed in a shape, the state of the buttons, typing and the slide list               |
+| `focus-qa3.spec.ts`        | the keyboard after a dialog, a thumbnail or a sheet tab: focus trap, focus return, Ctrl+S                                                |
+| `file-menu.spec.ts`        | every File entry: New, Open (conversions), Import, Save, Rename, Download as, Details, Print                                             |
+| `permissions.spec.ts`      | `allowSave` / `allowDownload` combinations, image download, Ctrl+S / Ctrl+P                                                              |
+| `color.spec.ts`            | custom colors (system picker, recent list, persistence) in the 3 formats                                                                 |
+| `code.spec.ts`             | code blocks in Markdown and source files: syntax colors, editing, bytes and line breaks kept                                             |
+| `markdown-math.spec.ts`    | TeX math in Markdown: drawn as MathML, edited around, saved as written, printed and exported                                             |
+| `comments.spec.ts`         | comments in the 3 formats: on a selection / cell / slide, replies, mentions, resolve, undo, saved                                        |
+| `comments-collab.spec.ts`  | comments in a shared room                                                                                                                |
+| `collab.spec.ts`           | two editors on `scripts/collab-server.ts`: live edits, presence, File menu in a room                                                     |
+| `collab-qa3.spec.ts`       | two editors in a room: a slide added by one does not end the text the other types; rows inserted by one move the cell the other types in |
+| `security.spec.ts`         | crafted files: nothing is requested from another host, no script runs, SVG is not a same-origin document                                 |
+| `embed.spec.ts`            | `<office-viewer>` (shadow DOM, attributes, `file`, `fonts`) and `mount()`                                                                |
+| `sdk.spec.ts`              | the standalone packages (diagram, mermaid, plantuml, graphviz, markdown) in a page                                                       |
+| `fonts.spec.ts`            | host fonts (a generated test font): loaded before measuring, timeout, failure, late web fonts                                            |
+| `icons.spec.ts`            | host icons in the 3 formats; the built-in ones without `icons`                                                                           |
+| `components.spec.ts`       | host UI components: Button, More, Dialog (prompts) in place of the engine's                                                              |
+| `ui-layout.spec.ts`        | toolbar overflow (More), host dialogs: focus, submit once                                                                                |
+| `controller.spec.ts`       | the controller and headless mode: state, commands, file actions, replaced documents                                                      |
+| `chrome.spec.ts`           | host-placed controls (`ZoomBar`, `FormatBar`, `OutlineList`, `SheetTabs`…) around a headless viewer                                      |
+| `format-controls.spec.ts`  | host formatting controls: focus kept while typing a size, the logical target of commands                                                 |
+| `locale.spec.ts`           | UI texts: German, partial overrides, switching, unknown locales                                                                          |
+| `locale-docx.spec.ts`      | documents in German: status, toolbar, page setup                                                                                         |
+| `locale-xlsx.spec.ts`      | spreadsheets in a locale: sheet menu texts, numbers typed with a decimal comma, the size box                                             |
+| `controller-built.spec.ts` | the built package: the controller across locale / UI updates, a replaced document, save                                                  |
+| `format-built.spec.ts`     | the built package: host formatting through the real worker, saved and reopened                                                           |
+| `locale-built.spec.ts`     | the built package: browser default formatting, opt-in German, plural forms, clipboard and Visio texts                                    |
+| `ui-built.spec.ts`         | the built package: nested providers; every entry imported without a DOM                                                                  |
 
 The `*-built.spec.ts` files run against `dist/`: `bun run build` first (they refuse a stale build).
+
+`E2E_BROWSER=firefox bun run test:e2e` (or `webkit`) runs the suite in Playwright's Firefox / WebKit (`bunx playwright install firefox`): a look at another engine. The suite is kept green in Chromium; what differs elsewhere is listed in [Features](features.md#browsers).
 
 `bun test` only runs `test/` (`bunfig.toml`); `bun run test:e2e` runs `e2e/`.
 

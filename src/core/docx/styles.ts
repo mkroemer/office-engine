@@ -1,7 +1,7 @@
 import { cssFont } from '../fonts'
 import type { Theme } from '../theme'
 import { kid, kids, num, onOff, path, type XEl } from '../xml'
-import type { Border, CanonStyle, ParaStyle, RunStyle, StyleInfo } from './types'
+import type { Border, CanonStyle, ParaStyle, RunStyle, StyleInfo, TabLeader, TabStop } from './types'
 import { dict } from '../dict'
 
 export const HIGHLIGHT: Record<string, string> = dict({
@@ -99,6 +99,20 @@ export function readPPr(pPr: XEl | undefined): PPrResult {
         ps.align = v === 'center' ? 'center' : v === 'right' || v === 'end' ? 'right' : v === 'both' || v === 'distribute' ? 'justify' : 'left'
         break
       }
+      case 'tabs': {
+        const tabs: TabStop[] = []
+        for (const t of kids(c, 'tab')) {
+          const pos = num(t.a.pos)
+          const v = t.a.val
+          // (a bar tab draws a line and stops no tab: left out)
+          if (pos === undefined || v === 'bar' || tabs.length >= 200) continue
+          const a = v === 'clear' ? 'clear' : v === 'center' ? 'center' : v === 'right' || v === 'end' ? 'right' : v === 'decimal' ? 'decimal' : 'left'
+          const ld = tabLeader(t.a.leader)
+          tabs.push(ld ? { pos: pos / 20, a, ld } : { pos: pos / 20, a })
+        }
+        if (tabs.length) ps.tabs = tabs.sort((x, y) => x.pos - y.pos)
+        break
+      }
       case 'ind': {
         const l = num(c.a.left ?? c.a.start)
         const r = num(c.a.right ?? c.a.end)
@@ -150,6 +164,24 @@ export function readPPr(pPr: XEl | undefined): PPrResult {
 }
 
 export const merge = <T extends object>(...parts: (T | undefined)[]): T => Object.assign({}, ...parts.filter(Boolean)) as T
+
+/**
+ * Paragraph properties put together, the later over the earlier. Tab stops add up (a style's stops stay under the
+ * paragraph's own); a stop at the place of an earlier one replaces it, `clear` takes it away.
+ */
+export function mergePs(...parts: (ParaStyle | undefined)[]): ParaStyle {
+  const out = merge<ParaStyle>(...parts)
+  const lists = parts.flatMap((p) => (p?.tabs ? [p.tabs] : []))
+  if (lists.length > 1) {
+    const at = new Map<number, TabStop>()
+    for (const list of lists) for (const t of list) at.set(Math.round(t.pos * 20), t)
+    out.tabs = [...at.values()].sort((a, b) => a.pos - b.pos)
+  }
+  return out
+}
+
+const TAB_LEADERS: Record<string, TabLeader> = dict({ dot: 'dot', hyphen: 'hyphen', underscore: 'underscore', heavy: 'underscore', middleDot: 'middleDot' })
+export const tabLeader = (v: string | undefined): TabLeader | undefined => (v ? TAB_LEADERS[v] : undefined)
 
 // ---------------------------------------------------------------------------
 
@@ -347,7 +379,7 @@ export class StyleSheet {
     r = { ps: {}, rs: {} }
     for (const d of this.chain(key)) {
       const p = readPPr(kid(d.el, 'pPr'))
-      r.ps = merge(r.ps, p.ps)
+      r.ps = mergePs(r.ps, p.ps)
       if (p.numPr) r.numPr = p.numPr
       r.rs = merge(r.rs, readRPr(kid(d.el, 'rPr'), this.theme))
     }

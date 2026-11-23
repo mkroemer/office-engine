@@ -28,6 +28,7 @@ import { docxBodyHtml, docxToHtml, docxToMarkdown, docxToText, pictureData } fro
 import { BlockView, contextual, type RenderCtx } from './render'
 import { columnsOf, headOf, pageAt, pageHF, pagesOf, paginate, pieceOf, type Lines, type PageSlice } from './paginate'
 import { lineStarts, paraLines, tableLines } from './measure'
+import { layoutTabs } from './tabs'
 import { formatCount, formatNumber, useStrings } from '../strings'
 import { docxFonts, docxPageFonts } from '../../core/fonts'
 import { useDocFonts } from '../common/fonts'
@@ -338,9 +339,17 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   const renderStart = performance.now()
   const measureCtx = useMemo<RenderCtx>(() => ({ client, page: -1, pages: 0, measuring: true, editable: false }), [client])
 
+  // the tabs of the pages drawn go to their tab stops: after every render (typing before a tab moves it), and before
+  // the caret is put back
+  useIsoLayoutEffect(() => {
+    layoutTabs(pagesRef.current)
+  })
+
   useIsoLayoutEffect(() => {
     const el = measureRef.current
     if (!el || !queue.length || !meta || !fontsReady) return
+    // (tab stops change where the lines break: laid out before the lines are read)
+    layoutTabs(el)
     const res = queue.map((q, k) => {
       const c = el.children[k] as HTMLElement | undefined
       let l: Lines | undefined

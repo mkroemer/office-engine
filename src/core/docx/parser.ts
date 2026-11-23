@@ -9,10 +9,10 @@ import { ommlText } from './omml'
 import { mathOf } from '../math/omml'
 import { readDocxComments, type DocxComments } from './comments'
 import {
-  borderCss, merge, readMargins, readPPr, readRPr, readTableBorders, shading, StyleSheet, type NumPr,
+  borderCss, merge, mergePs, readMargins, readPPr, readRPr, readTableBorders, shading, StyleSheet, tabLeader, type NumPr,
 } from './styles'
 import type {
-  Block, CellBorders, DocxMeta, HeaderFooters, HFKind, Inline, ListMarker, PageSet, PageSetup, Paragraph, ParaStyle, RunSet, RunStyle, SrcRef, Table, TrackMark, TableCell, TableRow,
+  Block, CellBorders, DocxMeta, HeaderFooters, HFKind, Inline, ListMarker, PageSet, PageSetup, Paragraph, ParaStyle, PTab, RunSet, RunStyle, SrcRef, Table, TrackMark, TableCell, TableRow,
 } from './types'
 import { DEFAULT_PAGE, RUN_OBJECTS, RUN_TEXT } from './types'
 
@@ -287,7 +287,13 @@ export class Converter {
     const layer = forced ? forced.layer : this.tableLayer
     const numPr = d.numPr ?? st.numPr
     const level = numPr && numPr.numId !== '0' ? this.numbering.level(numPr.numId, numPr.ilvl) : undefined
-    const ps = merge<ParaStyle>(this.styles.docPs, layer?.ps, st.ps, level?.ps, d.ps)
+    const ps = mergePs(this.styles.docPs, layer?.ps, st.ps, level?.ps, d.ps)
+    // (the stops taken away are not stops of the paragraph)
+    if (ps.tabs) {
+      const tabs = ps.tabs.filter((t) => t.a !== 'clear')
+      if (tabs.length) ps.tabs = tabs
+      else delete ps.tabs
+    }
     const base = merge<RunStyle>(this.styles.docRs, layer?.rs, st.rs)
     const markRs = merge<RunStyle>(base, readRPr(kid(pPr, 'rPr'), this.theme))
     const sid = d.styleId ?? this.styles.defaultPara ?? ''
@@ -488,7 +494,11 @@ export class Converter {
     }
     // a column break, a break that clears a float, an absolute position tab: the run is kept whole (the text model has only '\n' and '\t')
     if (src && !this.fields.length && r.c.some((c) => c.n === 'ptab' || (c.n === 'br' && (c.a.type === 'column' || c.a.clear !== undefined)))) {
-      sink.push({ t: 'ref', text: textOfRuns(r), s, src, ...(tc ? { tc } : {}) })
+      const pt = r.c.find((c) => c.n === 'ptab')
+      const al = pt?.a.alignment
+      const ld = tabLeader(pt?.a.leader)
+      const ptab: PTab | undefined = pt ? { a: al === 'center' ? 'center' : al === 'right' ? 'right' : 'left', ...(ld ? { ld } : {}), ...(pt.a.relativeTo === 'indent' ? { indent: true } : {}) } : undefined
+      sink.push({ t: 'ref', text: textOfRuns(r), s, src, ...(tc ? { tc } : {}), ...(ptab ? { ptab } : {}) })
       return
     }
     const rp = (rprExtra(rPr) ?? '') + (this.wraps.length ? '|w' + this.wraps.join('.') : '') || undefined

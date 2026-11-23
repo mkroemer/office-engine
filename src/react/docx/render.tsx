@@ -1,6 +1,7 @@
 import { createElement, memo, useMemo, type CSSProperties, type PointerEvent as RPointerEvent, type ReactElement, type ReactNode } from 'react'
 import { cssColor } from '../../core/color'
-import type { Block, Inline, Paragraph, ParaStyle, RunStyle, Table, TableCell, TexMath, TrackMark } from '../../core/docx/types'
+import type { Block, Inline, Paragraph, ParaStyle, PTab, RunStyle, Table, TableCell, TexMath, TrackMark } from '../../core/docx/types'
+import { tabsAttr } from './tabs'
 import { texToMathml, type MNode } from '../../core/math/tex'
 import { safeHref } from '../../core/url'
 import type { DocumentClient } from '../../core/worker/client'
@@ -209,7 +210,25 @@ function codePieces(c: CodeTokens, a: number, b: number): ReactNode[] {
   return out
 }
 
-function InlineView({ x, ctx, o, pieces }: { x: Inline; ctx: RenderCtx; o: number; pieces?: ReactNode[] }): ReactNode {
+/** text with each of its tabs an element of its own: given its width by `layoutTabs` (the first one of an absolute position tab says where it goes) */
+function tabPieces(text: string, ptab?: PTab): ReactNode {
+  if (!text.includes('\t')) return text
+  const out: ReactNode[] = []
+  text.split('\t').forEach((part, i) => {
+    if (i > 0) {
+      const abs = i === 1 ? ptab : undefined
+      out.push(
+        <span key={i} className="de-tabchar" data-ptab={abs?.a} data-rel={abs?.indent ? 'indent' : undefined} data-ld={abs?.ld}>
+          {'\t'}
+        </span>,
+      )
+    }
+    if (part) out.push(part)
+  })
+  return out
+}
+
+function InlineView({ x, ctx, o, pieces, tabs }: { x: Inline; ctx: RenderCtx; o: number; pieces?: ReactNode[]; tabs?: boolean }): ReactNode {
   // an object inside a tracked change: outlined in the author's colour (dimmed when deleted)
   const objTc = x.t !== 'text' ? x.tc : undefined
   const obj = {
@@ -229,7 +248,7 @@ function InlineView({ x, ctx, o, pieces }: { x: Inline; ctx: RenderCtx; o: numbe
           data-tc={tc?.k}
           title={tc ? tcTitle(ctx, tc, true) : undefined}
         >
-          {pieces ?? x.text}
+          {pieces ?? (tabs ? tabPieces(x.text) : x.text)}
         </span>
       )
       const href = ctx.measuring || ctx.editable ? undefined : safeHref(x.href)
@@ -253,7 +272,7 @@ function InlineView({ x, ctx, o, pieces }: { x: Inline; ctx: RenderCtx; o: numbe
       if (x.math) return <MathView attrs={obj} math={x.math} sz={x.s.sz} />
       return (
         <span {...obj} style={runCss(x.s)}>
-          {x.text}
+          {tabs ? tabPieces(x.text, x.ptab) : x.text}
         </span>
       )
     case 'img': {
@@ -318,6 +337,8 @@ function ParaView({ p, ctx, pa, sp, from = 0, to, height }: { p: Paragraph; ctx:
   const editable = ctx.editable && pa !== undefined
   // a code block: its text colored by its language (not while measuring: colors do not change the layout)
   const code = p.code !== undefined && !ctx.measuring ? codeTokens(p) : null
+  // the paragraph sets tab stops, or holds a tab to a place of the page: its tabs are laid out (see tabs.ts)
+  const tabs = !!p.ps.tabs?.length || p.runs.some((x) => x.t === 'ref' && x.ptab)
   let o = 0
   const runs: ReactNode[] = []
   p.runs.forEach((x, i) => {
@@ -327,7 +348,7 @@ function ParaView({ p, ctx, pa, sp, from = 0, to, height }: { p: Paragraph; ctx:
     if (b > a || (n === 0 && first && last)) {
       // (a tracked change keeps its author's color)
       const pieces = code && x.t === 'text' && !x.tc ? codePieces(code, a, b) : undefined
-      runs.push(<InlineView key={i} x={x.t === 'text' && (a > o || b < o + n) ? { ...x, text: x.text.slice(a - o, b - o) } : x} ctx={ctx} o={a} pieces={pieces} />)
+      runs.push(<InlineView key={i} x={x.t === 'text' && (a > o || b < o + n) ? { ...x, text: x.text.slice(a - o, b - o) } : x} ctx={ctx} o={a} pieces={pieces} tabs={tabs} />)
     }
     o += n
   })
@@ -338,6 +359,7 @@ function ParaView({ p, ctx, pa, sp, from = 0, to, height }: { p: Paragraph; ctx:
       data-pa={pa}
       data-from={first ? undefined : from}
       data-to={to}
+      data-tabs={tabs ? tabsAttr(p.ps.tabs) : undefined}
       data-code={p.code}
       spellCheck={p.code !== undefined ? false : undefined}
       contentEditable={ctx.editable && !editable ? false : undefined}

@@ -118,7 +118,7 @@ export function sliceRuns<R extends RRun>(runs: R[], a: number, b: number): R[] 
 }
 
 /** the one range of `a` replaced to give `b` (what both start and end with left out), null when they are the same */
-function textDiff(a: string, b: string): { at: number; del: number; ins: number } | null {
+export function textDiff(a: string, b: string): { at: number; del: number; ins: number } | null {
   if (a === b) return null
   let pre = 0
   while (pre < a.length && pre < b.length && a[pre] === b[pre]) pre++

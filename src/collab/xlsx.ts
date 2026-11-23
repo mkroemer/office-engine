@@ -160,6 +160,14 @@ export class XlsxCollab implements Adapter<XOp> {
   async apply(op: XOp, kind: 'local' | 'replay' | 'remote'): Promise<ApplyResult> {
     if (op.t === 'comment') return applyComment(this.client, op)
     const { res, rec } = await this.client.direct('collab.xlsx.apply', op)
+    // a sort goes to the room with the order it made here: the same rows move for everyone (see `transformX`)
+    if (kind === 'local' && op.t === 'sheet' && op.op.op === 'sort' && !op.op.order && res?.sorted) op.op = { ...op.op, order: res.sorted }
+    // the view follows a collaborator's rows / columns with its selection and the cell being typed in
+    let seen = res
+    if (kind === 'remote' && res && op.t === 'sheet' && STRUCTURAL.has(op.op.op)) {
+      const o = op.op as { op: string; at: number; n: number }
+      seen = { ...res, moved: { axis: o.op.endsWith('Rows') ? 'row' : 'col', at: o.at, n: o.op.startsWith('insert') ? o.n : -o.n } }
+    } else if (kind !== 'remote' && res?.sorted) seen = { ...res, sorted: undefined }
     if (isStructural(op)) {
       // the worker dropped its records: older entries can't be reverted any more
       const keep = (e: UndoEntry) => e.kind === 'inverse' && kind === 'local'
@@ -167,7 +175,7 @@ export class XlsxCollab implements Adapter<XOp> {
       this.redoStack = this.redoStack.filter(keep)
       this.publishHistory()
     }
-    if (kind !== 'local' && res) this.client.notify('collab:xlsx', res)
+    if (kind !== 'local' && seen) this.client.notify('collab:xlsx', seen)
     return { result: res, undo: rec }
   }
 

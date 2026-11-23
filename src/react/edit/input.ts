@@ -317,6 +317,20 @@ export function paraRanges(root: HTMLElement, pa: string, a: number, b: number):
 export function posFromDom(root: HTMLElement, node: Node, offset: number): Pos | null {
   const start = node.nodeType === 1 ? (node as Element) : node.parentElement
   const pel = start?.closest('[data-pa]') as HTMLElement | null
+  if (!pel && node === root) {
+    // A point counted in the editing root itself, before or after its paragraphs: what Firefox gives for "select all"
+    // (Chromium puts the ends inside the text). The start of the paragraph it is before, the end of the last one.
+    let p: HTMLElement | null = null
+    for (let c: Node | null = root.childNodes[offset] ?? null; c && !p; c = c.nextSibling) {
+      if (c.nodeType === 1) p = (c as Element).matches('[data-pa]') ? (c as HTMLElement) : (c as Element).querySelector<HTMLElement>('[data-pa]')
+    }
+    if (p) return { pa: p.dataset.pa!, o: Number(p.dataset.from ?? 0) }
+    const all = root.querySelectorAll<HTMLElement>('[data-pa]')
+    const last = all[all.length - 1]
+    if (!last) return null
+    const spans = ownSpans(last)
+    return { pa: last.dataset.pa!, o: spans.length ? spanEnd(spans[spans.length - 1]) : Number(last.dataset.from ?? 0) }
+  }
   if (!pel || !root.contains(pel)) return null
   const pa = pel.dataset.pa!
   if (!runSpan(node, pel)) {
@@ -425,7 +439,26 @@ export function selPoints(root: HTMLElement): SelPoints | null {
     const r = gc?.call(s, { shadowRoots: [rn] })[0]
     if (r) return { anchorNode: r.startContainer, anchorOffset: r.startOffset, focusNode: r.endContainer, focusOffset: r.endOffset }
   }
+  // Firefox selects the cells of a table dragged over as cells: a range around each one, counted in its row. Read as
+  // the selection from the start of the first cell to the end of the last one.
+  const row = (n: Node | null) => n?.nodeType === 1 && (n as Element).tagName === 'TR'
+  if (s.rangeCount > 1 || row(s.anchorNode) || row(s.focusNode)) {
+    const first = s.getRangeAt(0)
+    const last = s.getRangeAt(s.rangeCount - 1)
+    const [anchorNode, anchorOffset] = intoCell(first.startContainer, first.startOffset, false)
+    const [focusNode, focusOffset] = intoCell(last.endContainer, last.endOffset, true)
+    return { anchorNode, anchorOffset, focusNode, focusOffset }
+  }
   return s
+}
+
+/** a point counted in a table row (before / after a cell of it): the start of the cell's first paragraph, the end of its last */
+function intoCell(node: Node, offset: number, end: boolean): [Node, number] {
+  if (node.nodeType !== 1 || (node as Element).tagName !== 'TR') return [node, offset]
+  const cell = node.childNodes[end ? offset - 1 : offset] as Element | undefined
+  const paras = cell?.querySelectorAll?.('[data-pa]')
+  const p = paras?.length ? paras[end ? paras.length - 1 : 0] : undefined
+  return p ? [p, end ? p.childNodes.length : 0] : [node, offset]
 }
 
 // ---------------------------------------------------------------- controller
