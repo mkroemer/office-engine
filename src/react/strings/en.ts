@@ -473,6 +473,7 @@ export const en = {
     showGridlines: 'Show gridlines',
     printOnlyFirst: (n: number, locale: string | undefined = undefined) => `Only the first ${n.toLocaleString(locale)} rows are included`,
     sheetLoading: 'The sheet is still loading — try again in a moment',
+    cellGone: 'The cell you were typing in was deleted by someone else',
     drawings: {
       chart: 'Chart',
       picture: 'Picture',

@@ -364,6 +364,30 @@ describe('P3-035 / P3-036 list styles and legal numbering', () => {
   })
 })
 
+describe('QA 3: tab stops', () => {
+  test('the stops of a style and of the paragraph add up, a stop cleared is gone, a bar stop is no stop; an absolute position tab says where it goes', async () => {
+    const tab = (pos: number, val: string, leader = '') => `<w:tab w:val="${val}" w:pos="${pos}"${leader ? ` w:leader="${leader}"` : ''}/>`
+    const styles = `<?xml version="1.0"?><w:styles ${WNS}><w:style w:type="paragraph" w:styleId="Base"><w:name w:val="Base"/><w:pPr><w:tabs>${tab(4680, 'center')}${tab(9360, 'right', 'dot')}</w:tabs></w:pPr></w:style><w:style w:type="paragraph" w:styleId="Child"><w:name w:val="Child"/><w:basedOn w:val="Base"/><w:pPr><w:tabs>${tab(2000, 'decimal')}${tab(3000, 'bar')}</w:tabs></w:pPr></w:style></w:styles>`
+    const body =
+      `<w:p><w:pPr><w:pStyle w:val="Child"/><w:tabs>${tab(4680, 'clear')}${tab(1000, 'start')}</w:tabs></w:pPr><w:r><w:t>a</w:t><w:tab/><w:t>b</w:t></w:r></w:p>` +
+      '<w:p><w:pPr><w:pStyle w:val="Child"/></w:pPr><w:r><w:t>c</w:t></w:r></w:p>' +
+      '<w:p><w:r><w:t>L</w:t></w:r><w:r><w:ptab w:relativeTo="margin" w:alignment="center" w:leader="dot"/><w:t>C</w:t></w:r><w:r><w:ptab w:relativeTo="indent" w:alignment="right" w:leader="none"/><w:t>R</w:t></w:r></w:p>'
+    const { blocks, engine } = await openDocx(await mkDocx(body, { 'word/styles.xml': styles }))
+    const [own, styled, abs] = paras(blocks)
+    expect(own.ps.tabs).toEqual([{ pos: 50, a: 'left' }, { pos: 100, a: 'decimal' }, { pos: 468, a: 'right', ld: 'dot' }])
+    expect(styled.ps.tabs).toEqual([{ pos: 100, a: 'decimal' }, { pos: 234, a: 'center' }, { pos: 468, a: 'right', ld: 'dot' }])
+    expect(abs.ps.tabs).toBeUndefined()
+    expect(abs.runs.map((r) => (r.t === 'ref' ? r.ptab : undefined))).toEqual([undefined, { a: 'center', ld: 'dot' }, { a: 'right', indent: true }])
+    // edited, the paragraph keeps its stops and its absolute position tabs
+    await editPara(engine, abs, abs.runs.map((r, i) => (i === 0 && r.t === 'text' ? { ...r, text: 'Left' } : r)))
+    await editPara(engine, own, own.runs.map((r) => (r.t === 'text' ? { ...r, text: 'x\ty' } : r)))
+    const xml = bodyOf(await partText((await engine.call('save', [])) as Blob, 'word/document.xml'))
+    expect(xml).toContain('<w:ptab w:relativeTo="margin" w:alignment="center" w:leader="dot"/>')
+    expect(xml).toContain('<w:ptab w:relativeTo="indent" w:alignment="right" w:leader="none"/>')
+    expect(xml).toContain(`<w:tabs>${tab(4680, 'clear')}${tab(1000, 'start')}</w:tabs>`)
+  })
+})
+
 describe('QA 3: bookmarks inside a link', () => {
   test('typing in the paragraph keeps the bookmark a link wraps (what a cross-reference points to), once', async () => {
     const body =

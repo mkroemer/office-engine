@@ -230,6 +230,7 @@ Diagram sources open as a document holding the drawing (an SVG picture, editable
 - **Across pages**: a paragraph cut by the end of a page is edited as one: click, type, select, delete, find and arrow keys go over the page end; typing that moves the page end keeps the caret where the typing is (also with an input method). In a table that goes on over pages every row is edited where it is; the header rows repeated on the following pages are copies, edited on the first page
 - **Headers & footers**: header, footer and first-page parts (double-click the page's header / footer area, or the toolbar), alignment, bold, size, page number / page count fields with presets ("Page 1 of 5", "Trang 1/5"), different first page
 - **Tracked changes**: insertions and deletions from Word shown in their author's color and kept on save; next / previous change, accept / reject (the change at the caret, the selection, or all); *Track changes* records your own edits as suggestions (typing, deleting, pasting, replacing)
+- **Tab stops**: the stops a paragraph or its style sets are followed: text after a tab stands left of the stop, centered on it, ending at it or with its decimal point on it, the gap filled with the stop's leader (dots, dashes, a line): the left / center / right parts of a header, the page numbers of a table of contents. Absolute position tabs (`w:ptab`) go to the left, middle or right of the margins. A tab typed goes to the next stop; without stops, to the next half inch
 - **Other**: select all (Ctrl/⌘+A), link (dialog), special characters, right-click context menu (clipboard, link, table, image, insert, styles), find & replace, word count, undo/redo
 
 ### XLSX
@@ -322,10 +323,10 @@ Comment text is plain (lines kept); formatting inside comments read from a file 
 
 | Operation                              | File                                  | Time           |
 |----------------------------------------|---------------------------------------|----------------|
-| Type 1 char (browser)                  | DOCX 2073 pages                       | ~7 ms          |
+| Type 1 char (browser)                  | DOCX 2012 pages                       | ~7 ms          |
 | Save after edit                        | DOCX 20k paragraphs                   | ~0.5 s         |
 | Save after editing 2 cells             | XLSX 300k rows (25 MB)                | ~3 s           |
-| Open (rows streamed in)                | CSV 1M rows × 10 cols (99 MB)         | ~2.4 s         |
+| Open (rows streamed in)                | CSV 1M rows × 10 cols (99 MB)         | ~2.7 s         |
 | Open (rows paged, ~1 GB of memory)     | CSV 25M rows × 10 cols (2.7 GB)       | ~14 s          |
 | Open (rows paged, ~1 GB of memory)     | CSV 100M rows × 10 cols (10.6 GB)     | ~50 s          |
 | Open (rows paged, <1 GB of memory)     | CSV 500M rows × 10 cols (55 GB)       | ~4.5 min       |
@@ -339,14 +340,22 @@ That means Chrome / Edge 103 or newer, Safari 16.4 or newer, Firefox 113 or newe
 files. Where the CSS Custom Highlight API is missing (Firefox before 140, Safari before 17.2), Find in a document still
 goes from match to match but does not mark them, nor the text a comment is being written on.
 
-The browser tests (`e2e/`) run in Chromium only: Firefox and Safari are not covered by automated tests. Editing is
-built for a mouse and a keyboard: on a touch screen a document can be read, scrolled and zoomed, but cells cannot be
+The browser tests (`e2e/`) are kept green in Chromium. The same tests run in Firefox with `E2E_BROWSER=firefox`
+(see [Development](development.md#browser-tests)): 342 of 375 pass there (November 2026). A third of the rest use what
+only Chromium's test driver has (clipboard permissions, its debugging protocol); of the others, these are differences
+seen in Firefox (the rest has not been looked into):
+
+- a formula being typed does not stay open when a sheet tab is clicked to point at a cell of another sheet
+- the arrow keys do not always step over the place where a page cuts a paragraph
+
+Safari is not covered by automated tests (Playwright's WebKit needs system libraries the test machine lacks). Editing
+is built for a mouse and a keyboard: on a touch screen a document can be read, scrolled and zoomed, but cells cannot be
 selected by dragging, nor shapes moved.
 
 ## Limitations
 
 - Formulas: no names or tables can be defined or edited (those of the file are read); a formula pointing at another workbook keeps its value; pivot tables are not computed (`GETPIVOTDATA` reads what the file shows); the limits of single functions are in [formula-coverage.md](formula-coverage.md)
-- DOCX: text boxes and nested tables are read-only; paragraphs with fields spanning multiple paragraphs (TOC) are read-only; headers / footers are edited as text lines (pictures, tables and shapes in them are replaced when edited, with a warning); a header taller than the top margin overlaps the text; tracked changes don't cover formatting changes, paragraph marks or pictures; page setup applies to the whole document (not per section); tab stops are not laid out (a tab goes to the next half inch): text set at a centered or right tab stop, or after an absolute position tab (the left / center / right parts of many headers and footers), follows the text before it, and a table of contents has no dot leaders
+- DOCX: text boxes and nested tables are read-only; paragraphs with fields spanning multiple paragraphs (TOC) are read-only; headers / footers are edited as text lines (pictures, tables and shapes in them are replaced when edited, with a warning); a header taller than the top margin overlaps the text; tracked changes don't cover formatting changes, paragraph marks or pictures; page setup applies to the whole document (not per section); tab stops cannot be set or moved in the editor (those of the file are kept and followed), and a bar tab is not drawn
 - XLSX: no chart/pivot/conditional format/data validation/filter editing; a table whose cells are all deleted stays in the file; cells cut and pasted do not take their merges, comments or conditional formats along; a sheet read by pages (a CSV past 12 million cells) takes no row / column insert or delete, and its formulas only the rows that fit in memory
 - PPTX: can't rotate shapes with the mouse yet, no table insert / row or column edit (Tab in the last cell adds no row), no animations/transitions, speaker notes are not editable; undo of slide list changes (add/delete/move) is not available in a shared (collaborative) session
 - Comments: plain text only; DOCX comments can't cover text in more than one table cell or across a table; comments in headers, footers and footnotes are kept but not shown; PPTX comments anchored to a shape are shown at the shape's position when the file is opened and keep that anchor until moved

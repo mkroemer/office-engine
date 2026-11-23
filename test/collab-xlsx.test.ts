@@ -216,4 +216,52 @@ describe('collab xlsx', () => {
     expect(JSON.parse(got)[1][2][1][5][1]).toBe('8.4%')
     expect(got).toBe(plain)
   })
+
+  test('QA 3: a cell typed while a collaborator sorts its rows goes with its row, a formula typed reading its row', async () => {
+    const hub = new CollabHub()
+    const mk = async (name: string) => {
+      const client = await DocumentClient.open(file('sample.xlsx'), { worker: false })
+      await client.call('xlsx.load', 0)
+      await sleep(50)
+      const transport = new MemoryTransport(hub, () => 0)
+      return { client, transport, collab: startCollab(client, { transport, room: 'sorted', user: { name } }) }
+    }
+    const a = await mk('Ann')
+    const b = await mk('Bob')
+    await settle([a.collab, b.collab])
+    const [J, K, L] = [30, 31, 32]
+    const R = 60
+    // number, name: 3 c / 1 a / 2 b / 4 d, away from the sample's own cells
+    const rows: [number, string][] = [[3, 'c'], [1, 'a'], [2, 'b'], [4, 'd']]
+    await a.client.call('xlsx.set', 0, rows.flatMap(([n, t], i) => [{ r: R + i, c: J, input: String(n) }, { r: R + i, c: K, input: t }]))
+    await settle([a.collab, b.collab])
+    const shown = async (x: typeof a) => {
+      const blk = await x.client.call('xlsx.block', 0, R, R + 4)
+      return blk.rows.filter((r) => r.r >= R && r.r < R + 4).map((r) => [J, K, L].map((c) => String(r.cells.find((cell) => cell[0] === c)?.[1] ?? '')).join(' ').trim())
+    }
+    expect(await shown(b)).toEqual(['3 c', '1 a', '2 b', '4 d'])
+    // offline, Bob writes next to "3 c" (its first row): a name, and a formula of its number
+    b.transport.drop()
+    await b.client.call('xlsx.set', 0, [{ r: R, c: K, input: 'C!' }, { r: R, c: L, input: `=AE${R + 1}*10` }])
+    // Ann's sort is sequenced first: "3 c" is the third row now
+    const res = await a.client.call('xlsx.sheetOp', 0, { op: 'sort', range: { r0: R, c0: J, r1: R + 3, c1: L }, col: J })
+    expect(res.sorted).toEqual([1, 2, 0, 3])
+    await settle([a.collab])
+    expect(await shown(a)).toEqual(['1 a', '2 b', '3 c', '4 d'])
+    b.transport.connect()
+    await settle([a.collab, b.collab])
+    expect(await shown(a)).toEqual(['1 a', '2 b', '3 C! 30', '4 d'])
+    expect(await shown(b)).toEqual(['1 a', '2 b', '3 C! 30', '4 d'])
+    // the other order: Bob's sort (descending), offline; Ann's edit of a row is sequenced first and moves with it
+    b.transport.drop()
+    await b.client.call('xlsx.sheetOp', 0, { op: 'sort', range: { r0: R, c0: J, r1: R + 3, c1: L }, col: J, desc: true })
+    await a.client.call('xlsx.set', 0, [{ r: R, c: K, input: 'A!' }])
+    await settle([a.collab])
+    b.transport.connect()
+    await settle([a.collab, b.collab])
+    expect(await shown(a)).toEqual(['4 d', '3 C! 30', '2 b', '1 A!'])
+    expect(await shown(b)).toEqual(['4 d', '3 C! 30', '2 b', '1 A!'])
+    for (const x of [a, b]) x.collab.close()
+    for (const x of [a, b]) x.client.destroy()
+  })
 })

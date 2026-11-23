@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { StringsProvider, type Strings } from '../strings'
 import { stylesText } from '../injectStyles'
 import { copyFonts } from '../common/fonts'
+import { layoutTabs } from '../docx/tabs'
 
 /** Content laid out for paper: PDF / print and standalone HTML. */
 export interface Printable {
@@ -197,6 +198,8 @@ async function mount(p: Printable, title: string, strings: Strings): Promise<Mou
     copyFonts(doc)
     await settle(doc, host)
     fitText(host)
+    // (the tab stops of a Word document: as on the screen)
+    layoutTabs(host)
   } catch (e) {
     dispose()
     throw e

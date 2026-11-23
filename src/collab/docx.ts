@@ -15,7 +15,7 @@ import type { DocumentClient } from '../core/worker/client'
 import type { Methods } from '../core/worker/protocol'
 import type { DocState, DocxCommit, DocxEditor } from '../react/docx/DocxEditor'
 import { domFromPos, paraRanges } from '../react/edit/input'
-import { normalize, plen, runsText, splitRuns, type Pos, type RRun, type Sel } from '../react/edit/rich'
+import { normalize, plen, runsText, splitRuns, textDiff, type Pos, type RRun, type Sel } from '../react/edit/rich'
 import { watchHost } from './hosts'
 import type { Adapter, ApplyResult } from './session'
 import { applyComment, revertComment, type CommentOp } from './comments'
@@ -31,7 +31,8 @@ export type BKey = { p: number } | { tid?: number; item?: number }
 
 export type DocxOp =
   | { t: 'text'; pid: number; at: number; del: number; ins: Inline[] }
-  | { t: 'paras'; before: number[]; next: Paragraph[] }
+  /** `base`: the text of each paragraph of `before` as the op found it, by which a concurrent edit of their text is carried into `next` */
+  | { t: 'paras'; before: number[]; next: Paragraph[]; base?: string[] }
   | { t: 'blocks'; before: BKey[]; prev: BKey | null; next: Block[] }
   | { t: 'image'; key: string; bytes: Uint8Array; ext: string }
   | { t: 'link'; key: string; url: string }
@@ -190,6 +191,97 @@ export function spliceRuns(runs: Inline[], at: number, del: number, ins: Inline[
   // alike neighbours join, as a local edit leaves them: a word typed by the other side arrives one character at a time,
   // and each run left apart would be written as a revision of its own
   return normalize([...(left as Inline[]), ...ins, ...(right as Inline[])] as RRun[]) as Inline[]
+}
+
+// ---------------------------------------------------------------- a change of paragraphs and a change of their text
+
+/** paragraphs as one text, one character between two of them: a place in it is a paragraph and an offset */
+const SEP = '\n'
+const startOf = (texts: string[], i: number) => texts.slice(0, i).reduce((n, t) => n + t.length + 1, 0)
+/** the paragraph and offset of a place (the one between two paragraphs is the end of the first) */
+function placeIn(texts: string[], g: number): { j: number; o: number } {
+  let s = 0
+  for (let j = 0; j < texts.length; j++) {
+    if (g <= s + texts[j].length || j === texts.length - 1) return { j, o: Math.max(0, Math.min(g - s, texts[j].length)) }
+    s += texts[j].length + 1
+  }
+  return { j: 0, o: 0 }
+}
+
+/**
+ * Where the range [gs, ge) of the paragraphs of `base` (as one text) is in `next`, the paragraphs a change made of
+ * them: the parts of it still there (what the change replaced itself is gone) and the place its replacement goes.
+ * A range inside what the change replaced has no part left: its replacement goes after what the change put.
+ */
+function through(base: string[], next: string[], gs: number, ge: number): { dels: [number, number][]; at: number } {
+  const mine = textDiff(base.join(SEP), next.join(SEP))
+  if (!mine || ge <= mine.at) return { dels: [[gs, ge]], at: gs }
+  const end = mine.at + mine.del
+  const shift = mine.ins - mine.del
+  if (gs >= end) return { dels: [[gs + shift, ge + shift]], at: gs + shift }
+  const dels: [number, number][] = []
+  if (gs < mine.at) dels.push([gs, mine.at])
+  if (ge > end) dels.push([mine.at + mine.ins, ge + shift])
+  return { dels, at: gs < mine.at ? gs : mine.at + mine.ins }
+}
+
+/**
+ * A change of paragraphs (Enter, a paste of lines, a style or list change) made while someone typed in one of them:
+ * `next` is the paragraphs as the change left them, without that typing. The typing (`prior`, sequenced first) is
+ * made in `next` too, where its place is now. Needs `base`; an op without it (an older version) wins over the typing.
+ */
+function parasOverText(op: Extract<DocxOp, { t: 'paras' }>, prior: Extract<DocxOp, { t: 'text' }>): DocxOp {
+  const i = op.before.indexOf(prior.pid)
+  if (!op.base || i < 0 || op.before.indexOf(prior.pid, i + 1) >= 0 || op.base.length !== op.before.length || !op.next.length) return op
+  const texts = op.next.map((p) => runsText(p.runs as RRun[]))
+  const len = op.base[i].length
+  const a = Math.min(prior.at, len)
+  const d = Math.min(prior.del, len - a)
+  const gs = startOf(op.base, i) + a
+  const { dels, at } = through(op.base, texts, gs, gs + d)
+  const next = op.next.slice()
+  const cut = (x: number, y: number) => {
+    let s = 0
+    for (let j = 0; j < next.length; j++) {
+      const n = plen(next[j].runs as RRun[])
+      const from = Math.max(x, s)
+      const to = Math.min(y, s + n)
+      if (from < to) next[j] = { ...next[j], runs: spliceRuns(next[j].runs, from - s, to - from, []), edited: true }
+      s += n + 1
+    }
+  }
+  // (from the end: the places before a part cut stay where they are)
+  for (const [x, y] of [...dels].sort((p, q) => q[0] - p[0])) cut(x, y)
+  if (prior.ins.length) {
+    const { j, o } = placeIn(next.map((p) => runsText(p.runs as RRun[])), at)
+    next[j] = { ...next[j], runs: spliceRuns(next[j].runs, o, 0, prior.ins), edited: true }
+  }
+  const base = op.base.slice()
+  base[i] = base[i].slice(0, a) + runsText(prior.ins as RRun[]) + base[i].slice(a + d)
+  return { ...op, next, base }
+}
+
+/**
+ * Text typed in a paragraph that a change of paragraphs sequenced first (`prior`) split, joined or wrote again: the
+ * typing goes to the paragraph of `prior.next` its place is in now (after an Enter before it: the new paragraph).
+ */
+function textOverParas(op: Extract<DocxOp, { t: 'text' }>, prior: Extract<DocxOp, { t: 'paras' }>): DocxOp | null {
+  const i = prior.before.indexOf(op.pid)
+  const kept = prior.next.some((p) => p.pid === op.pid)
+  if (!prior.base || i < 0 || prior.base.length !== prior.before.length || !prior.next.length) return kept ? op : null
+  const texts = prior.next.map((p) => runsText(p.runs as RRun[]))
+  const len = prior.base[i].length
+  const a = Math.min(op.at, len)
+  const d = Math.min(op.del, len - a)
+  const gs = startOf(prior.base, i) + a
+  const { dels, at } = through(prior.base, texts, gs, gs + d)
+  const { j, o } = placeIn(texts, at)
+  const pid = prior.next[j].pid
+  if (pid === undefined) return kept ? op : null
+  // one range of one paragraph: of what the op deleted, the part that starts where it types
+  const first = dels.find(([x]) => x === at)
+  const del = first ? Math.min(first[1] - first[0], texts[j].length - o) : 0
+  return { ...op, pid, at: o, del }
 }
 
 /** `x` (a position in the text before `prior` replaced [at, at+del) by `ins` chars) after it */
@@ -418,7 +510,7 @@ export class DocxCollab implements Adapter<DocxOp> {
         this.push({ t: 'text', pid: b[0].pid, at: d.at, del: d.del, ins: d.ins.map((r) => this.tag(r)) }, [{ t: 'paras', before: b, next: n }])
         return
       }
-      this.push({ t: 'paras', before: b.map((p) => p.pid!), next: n.map((p) => this.tag(p)) }, [{ t: 'paras', before: b, next: n }])
+      this.push({ t: 'paras', before: b.map((p) => p.pid!), next: n.map((p) => this.tag(p)), base: b.map((p) => runsText(p.runs as RRun[])) }, [{ t: 'paras', before: b, next: n }])
       return
     }
     const prev = c.bi > 0 ? bkey(this.st.blocks[c.bi - 1]) : null
@@ -431,6 +523,7 @@ export class DocxCollab implements Adapter<DocxOp> {
   // ---------------------------------------------------------------- adapter
 
   transform(op: DocxOp, prior: DocxOp): DocxOp | null {
+    if (op.t === 'paras' && prior.t === 'text') return parasOverText(op, prior)
     if (op.t !== 'text') return op
     if (prior.t === 'text' && prior.pid === op.pid) {
       const pins = plen(prior.ins as RRun[])
@@ -448,8 +541,8 @@ export class DocxCollab implements Adapter<DocxOp> {
       return at === op.at && end - at === op.del ? op : { ...op, at, del: end - at }
     }
     if (prior.t === 'paras' && (prior.before.includes(op.pid) || prior.next.some((p) => p.pid === op.pid))) {
-      // the paragraph was rewritten: keep the splice (clamped) while it still exists
-      return prior.next.some((p) => p.pid === op.pid) ? op : null
+      // the paragraph was rewritten: the splice goes where its place is now (without the text the paragraphs had: kept, clamped, while the paragraph still exists)
+      return textOverParas(op, prior)
     }
     if (prior.t === 'blocks' && prior.before.some((k) => 'p' in k && k.p === op.pid) && !pidsOf(prior.next).includes(op.pid)) return null
     return op

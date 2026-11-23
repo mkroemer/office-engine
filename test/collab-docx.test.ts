@@ -362,6 +362,84 @@ describe('collab docx', () => {
     for (const x of [a, b]) x.collab.close()
   })
 
+  test('QA 3: Enter in a paragraph keeps what a collaborator typed in it meanwhile, on the side of the split it was typed', async () => {
+    const hub = new CollabHub()
+    const a = await open(hub, 'Ann', () => 0)
+    const b = await open(hub, 'Bob', () => 0)
+    await settle([a.collab, b.collab])
+    const [title] = editable(a.st).map(([p]) => p.pid!)
+    const at = (st: DocState, pid: number, o: number) => {
+      const pa = String(st.blocks.findIndex((x) => x.t === 'p' && x.pid === pid))
+      return { a: { pa, o }, f: { pa, o } }
+    }
+    const top = (x: typeof a, n: number) => text(x.st.blocks).slice(0, n).map((t) => t.split('|').slice(2).join('|'))
+    // offline, Ann splits "Quarterly| Report"; Bob's letters on both sides of that place are sequenced first
+    a.transport.drop()
+    opEnter(a.editor, at(a.st, title, 9))
+    opInsert(b.editor, at(b.st, title, 3), 'X')
+    opInsert(b.editor, at(b.st, title, 13), 'Y')
+    await settle([b.collab])
+    expect(top(b, 1)).toEqual(['QuaXrterly ReYport'])
+    a.transport.connect()
+    await settle([a.collab, b.collab])
+    expect(top(a, 2)).toEqual(['QuaXrterly', ' ReYport'])
+    expect(top(b, 2)).toEqual(['QuaXrterly', ' ReYport'])
+    // the other order: Bob, offline, types after the place Ann splits at; her Enter is sequenced first
+    const second = (a.st.blocks[1] as Paragraph).pid!
+    b.transport.drop()
+    opInsert(b.editor, at(b.st, second, 8), '!')
+    opInsert(b.editor, at(b.st, second, 1), '-')
+    opEnter(a.editor, at(a.st, second, 3))
+    await settle([a.collab])
+    expect(top(a, 3)).toEqual(['QuaXrterly', ' Re', 'Yport'])
+    b.transport.connect()
+    await settle([a.collab, b.collab])
+    expect(top(a, 3)).toEqual(['QuaXrterly', ' -Re', 'Yport!'])
+    expect(top(b, 3)).toEqual(['QuaXrterly', ' -Re', 'Yport!'])
+    for (const x of [a, b]) x.client.destroy()
+    for (const x of [a, b]) x.collab.close()
+  })
+
+  test('QA 3: a list or a join made of a paragraph keeps what a collaborator typed in it meanwhile', async () => {
+    const hub = new CollabHub()
+    const a = await open(hub, 'Ann', () => 0)
+    const b = await open(hub, 'Bob', () => 0)
+    await settle([a.collab, b.collab])
+    const [title, intro] = editable(a.st).map(([p]) => p.pid!)
+    const INTRO = 'This document shows bold, italic, underlined red and large text. Visit example.com.'
+    const at = (st: DocState, pid: number, o: number) => {
+      const pa = String(st.blocks.findIndex((x) => x.t === 'p' && x.pid === pid))
+      return { a: { pa, o }, f: { pa, o } }
+    }
+    const para = (x: typeof a, pid: number) => x.st.blocks.find((p) => p.t === 'p' && p.pid === pid) as Paragraph
+    const top = (x: typeof a, n: number) => text(x.st.blocks).slice(0, n).map((t) => t.split('|').slice(2).join('|'))
+    // offline, Ann makes the paragraph a list item; Bob's word in it is sequenced first
+    a.transport.drop()
+    a.editor.input.lastSel = at(a.st, intro, 0)
+    a.editor.toggleList('bullet')
+    opInsert(b.editor, at(b.st, intro, 5), 'NEW ')
+    await settle([b.collab])
+    a.transport.connect()
+    await settle([a.collab, b.collab])
+    for (const x of [a, b]) {
+      expect(runsText(para(x, intro).runs as RRun[])).toBe(`This NEW ${INTRO.slice(5)}`)
+      expect(para(x, intro).pd?.list ?? para(x, intro).lst).toBe('bullet')
+    }
+    // offline, Ann joins the paragraph to the title (Backspace at its start); Bob types at its end first
+    a.transport.drop()
+    opBackspace(a.editor, at(a.st, intro, 0))
+    opBackspace(a.editor, at(a.st, intro, 0))
+    opInsert(b.editor, at(b.st, intro, 4 + INTRO.length), ' END')
+    opInsert(b.editor, at(b.st, title, 0), '> ')
+    await settle([b.collab])
+    a.transport.connect()
+    await settle([a.collab, b.collab])
+    expect(top(a, 1)).toEqual(top(b, 1))
+    expect(top(a, 1)[0]).toBe(`> Quarterly ReportThis NEW ${INTRO.slice(5)} END`)
+    for (const x of [a, b]) x.client.destroy()
+    for (const x of [a, b]) x.collab.close()
+  })
+
   test('undoing a table insert does not bring back the paragraph before it, joined to another one meanwhile', async () => {
     const hub = new CollabHub()
     const a = await open(hub, 'Ann', () => 0)

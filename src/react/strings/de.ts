@@ -459,6 +459,7 @@ export const de: Strings = {
     showGridlines: 'Gitternetzlinien einblenden',
     printOnlyFirst: (n: number, locale: string | undefined = undefined) => `Nur die ersten ${n.toLocaleString(locale)} Zeilen sind enthalten`,
     sheetLoading: 'Das Blatt wird noch geladen. Bitte gleich nochmals versuchen.',
+    cellGone: 'Die Zelle, in der Sie geschrieben haben, wurde von jemand anderem gelöscht',
     drawings: {
       chart: 'Diagramm',
       picture: 'Bild',

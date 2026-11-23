@@ -173,6 +173,10 @@ export interface XlsxEditResult {
    * none, so this, not a count of results, says what the history holds
    */
   history?: { undo: number; redo: number }
+  /** a sort: the rows of `range` in their new order (as `order` of the sort operation); left out past 20,000 rows */
+  sorted?: number[]
+  /** for the view, set by the collaboration layer: rows / columns a collaborator inserted (`n` > 0) or deleted (`n` < 0) at `at` */
+  moved?: { axis: 'row' | 'col'; at: number; n: number }
 }
 
 /** a copied cell: kind of value (as the workbook holds it: number, text, boolean, error…), value, format, formula (no "=") */
@@ -205,7 +209,12 @@ export type SheetOp =
    * they were copied; `moved`: they were cut (and cleared there): references to them follow them here.
    */
   | { op: 'paste'; range: Range; cells: ClipCell[][]; from: { sheet: string; r0: number; c0: number }; moved?: boolean }
-  | { op: 'sort'; range: Range; col: number; desc?: boolean }
+  /**
+   * `order`: the rows of the range in their new order (index i: the row, counted from the first, that goes to row i).
+   * Given, the rows are moved so, not sorted again: in a room the same rows move for everyone, also where someone
+   * typed in one of them at the same moment. An order that does not fit the range is left out.
+   */
+  | { op: 'sort'; range: Range; col: number; desc?: boolean; order?: number[] }
 
 export type BookOp =
   | { op: 'add'; name?: string; after?: number }

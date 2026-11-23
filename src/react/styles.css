@@ -401,6 +401,12 @@
   -moz-tab-size: 36pt;
 }
 .de-p > span { white-space: inherit; }
+/* a tab laid out to a tab stop (docx/tabs.ts): no width of its own, the gap to the stop before it, filled where the stop says */
+.de-tabchar[data-on] { tab-size: 0; -moz-tab-size: 0; }
+.de-tabchar[data-on][data-ld="dot"] { background: radial-gradient(circle, currentColor 0.55px, transparent 0.75px) left bottom 0.22em / 4px 2px repeat-x; }
+.de-tabchar[data-on][data-ld="middleDot"] { background: radial-gradient(circle, currentColor 0.55px, transparent 0.75px) left center / 4px 2px repeat-x; }
+.de-tabchar[data-on][data-ld="hyphen"] { background: linear-gradient(90deg, currentColor 60%, transparent 60%) left bottom 0.42em / 5px 1px repeat-x; }
+.de-tabchar[data-on][data-ld="underscore"] { background: linear-gradient(currentColor, currentColor) left bottom 0.12em / 100% 1px no-repeat; }
 /* a justified paragraph going on on the next page: its last line here is not its last, it is justified (an empty
    line after it takes the place of the last; the part's height is set, that line is outside it) */
 .de-p.de-just::after { content: ''; display: inline-block; width: 100%; }

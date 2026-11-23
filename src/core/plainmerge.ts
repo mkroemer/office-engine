@@ -350,18 +350,36 @@ function align(a: string[], b: string[]): Int32Array | null {
  * lines without text before it are its `pre`, the lines after the last one its `tail`. null when the chunk is not just
  * such lines (a lazy continuation, a multi-line formula), then it is rewritten whole.
  */
+/** a line that begins a block of its own: it does not go on with the quote above it */
+const BLOCK_START = /^\s{0,3}(#{1,6}(\s|$)|[-*+]\s|\d+[.)]\s|```|~~~|\||<|([-*_])(\s*\3){2,}\s*$|=+\s*$)/
+
 function quoteRows(c: Chunk): { rows: { pre: string; line: string }[]; tail: string } | null {
   if (!/^\s*>/.test(c.text)) return null
   const rows: { pre: string; line: string }[] = []
+  // a row with the row before it: lines of one paragraph (the second way of reading the quote, below)
+  const joined: boolean[] = []
   let pre = ''
   for (const l of lines(c.text)) {
-    if (/^\s*>/.test(l) && /\S/.test(l.replace(/^\s*>/, ''))) {
+    const marked = /^\s*>/.test(l)
+    if (marked && /\S/.test(l.replace(/^\s*>/, ''))) {
+      joined.push(rows.length > 0 && !pre)
       rows.push({ pre, line: l })
       pre = ''
-    } else if (/^\s*>/.test(l) || !l.trim()) pre += l
-    else return null
+    } else if (marked || !l.trim()) pre += l
+    // a line without its `>` right under a line of the quote goes on with it (a "lazy" line)
+    else if (rows.length && !pre && !BLOCK_START.test(l)) {
+      joined.push(true)
+      rows.push({ pre: '', line: l })
+    } else return null
   }
-  return rows.length === c.sigs.length ? { rows, tail: pre } : null
+  if (rows.length === c.sigs.length) return { rows, tail: pre }
+  // the lines read as one paragraph each did not give the quote's paragraphs: lines that follow each other as one
+  const paras: { pre: string; line: string }[] = []
+  rows.forEach((r, i) => {
+    if (joined[i]) paras[paras.length - 1].line += r.line
+    else paras.push({ ...r })
+  })
+  return paras.length === c.sigs.length ? { rows: paras, tail: pre } : null
 }
 
 /** a paragraph of the edited document as lines of a block quote: no italic (the importer gives a quote its own), `> ` before each line */

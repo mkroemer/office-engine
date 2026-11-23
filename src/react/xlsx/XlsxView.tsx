@@ -798,6 +798,54 @@ function SheetGrid({ store, sheet, meta, client, edit, setEdit, hold, onSheet, g
   const [findOpts, setFindOpts] = useState<FindOptions>({})
   const [matches, setMatches] = useState<FindMatch[]>([])
   const [toast, setToast] = useState<string | null>(null)
+  // A collaborator inserted or deleted rows / columns, or sorted rows: the selection and the cell being typed in stay
+  // with their cells (typed on in its old place, the text would go to another record).
+  const editNow = useRef(edit)
+  editNow.current = edit
+  const cellGone = str.xlsx.cellGone
+  useEffect(
+    () =>
+      client.on('collab:xlsx', (res) => {
+        const m = res.moved
+        const order = res.sorted
+        if (!m && !order) return
+        const shift = (x: number): number | null => {
+          if (!m) return x
+          if (m.n >= 0) return x >= m.at ? x + m.n : x
+          return x < m.at ? x : x < m.at - m.n ? null : x + m.n
+        }
+        // where a cell is now; null: its row or column is gone
+        const now = (r: number, c: number): [number, number] | null => {
+          if (m) {
+            const x = shift(m.axis === 'row' ? r : c)
+            return x === null ? null : m.axis === 'row' ? [x, c] : [r, x]
+          }
+          const g = res.range
+          if (r < g.r0 || r > g.r1 || c < g.c0 || c > g.c1) return [r, c]
+          const k = order!.indexOf(r - g.r0)
+          return [k < 0 ? r : g.r0 + k, c]
+        }
+        const e = editNow.current
+        if (e && e.sheet === res.sheet) {
+          const to = now(e.r, e.c)
+          if (!to) {
+            setEdit(null)
+            setToast(cellGone)
+          } else if (to[0] !== e.r || to[1] !== e.c) setEdit({ ...e, r: to[0], c: to[1] })
+        }
+        if (res.sheet !== sheet) return
+        setSelState((was) => {
+          const one = was.ar === was.fr && was.ac === was.fc
+          // (rows sorted: one cell follows its row; a range stays the place it is)
+          if (!m && !one) return was
+          const corner = (r: number, c: number): [number, number] => now(r, c) ?? (m!.axis === 'row' ? [Math.max(0, m!.at), c] : [r, Math.max(0, m!.at)])
+          const [ar, ac] = corner(was.ar, was.ac)
+          const [fr, fc] = one ? [ar, ac] : corner(was.fr, was.fc)
+          return ar === was.ar && ac === was.ac && fr === was.fr && fc === was.fc ? was : { ...was, ar, ac, fr, fc }
+        })
+      }),
+    [client, sheet, setEdit, cellGone],
+  )
   const cm = useCommentsCtl()
   const cmState = useCommentsState(cm)
   const cmCells = useMemo(() => commentCells(cm, meta.sheets[sheet]?.path, cmState.active), [cm, cmState, meta.sheets, sheet])

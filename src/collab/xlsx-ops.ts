@@ -1,5 +1,5 @@
 /** XLSX collaboration operations (shared by the main-thread adapter and the worker) + their transforms. */
-import { renameSheetInFormula, shiftFormula } from '../core/xlsx/formula'
+import { renameSheetInFormula, shiftFormula, translateFormula } from '../core/xlsx/formula'
 import type { CellInput, ClipCell, FindOptions, FmtPatch, Range, SheetOp } from '../core/xlsx/types'
 import { numberSyntax } from '../core/number-input'
 import type { CommentOp } from './comments'
@@ -91,7 +91,10 @@ function shiftSheetOp(op: SheetOp, axis: 'row' | 'col', at: number, n: number): 
       const range = shiftRange(op.range, axis, at, n)
       if (!range) return null
       const col = axis === 'col' ? shiftIdx(op.col, at, n) : op.col
-      return col === null ? null : { ...op, range, col }
+      if (col === null) return null
+      // the order it carries is of the rows it had: with rows added or taken inside the range it is sorted again
+      const order = op.order && range.r1 - range.r0 === op.range.r1 - op.range.r0 ? op.order : undefined
+      return { ...op, range, col, order }
     }
     case 'hideRows':
     case 'hideCols': {
@@ -143,9 +146,48 @@ function mapFormulas(op: XOp, fn: (f: string) => string): XOp {
   return op
 }
 
+/**
+ * `op` after a sort that moved the rows of `range` as `order` says (row i of the range now holds the row that was
+ * `order[i]`): what it writes to a cell of one of those rows goes where the row went, a formula it types reading the
+ * cells it read. Typed at the same moment as the sort, it was meant for the row, not for the place.
+ */
+function overSort(op: XOp, range: Range, order: number[]): XOp {
+  if (order.length !== range.r1 - range.r0 + 1) return op
+  let to: number[] | undefined
+  const row = (r: number, c0: number, c1 = c0) => {
+    if (r < range.r0 || r > range.r1 || c0 < range.c0 || c1 > range.c1) return r
+    if (!to) {
+      to = new Array<number>(order.length)
+      for (let i = 0; i < order.length; i++) to[order[i]] = i
+    }
+    return range.r0 + (to[r - range.r0] ?? r - range.r0)
+  }
+  if (op.t === 'set') {
+    let changed = false
+    const cells = op.cells.map((c) => {
+      const r = row(c.r, c.c)
+      if (r === c.r) return c
+      changed = true
+      const input = c.input.length > 1 && c.input[0] === '=' ? '=' + translateFormula(c.input.slice(1), r - c.r, 0) : c.input
+      return { ...c, r, input }
+    })
+    return changed ? { ...op, cells } : op
+  }
+  if (op.t === 'fmt' && op.range.r0 === op.range.r1) {
+    const r = row(op.range.r0, op.range.c0, op.range.c1)
+    return r === op.range.r0 ? op : { ...op, range: { ...op.range, r0: r, r1: r } }
+  }
+  if (op.t === 'replace' && op.at) {
+    const r = row(op.at.r, op.at.c)
+    return r === op.at.r ? op : { ...op, at: { ...op.at, r } }
+  }
+  return op
+}
+
 /** `op` adjusted to apply after `prior` (deterministic) */
 export function transformX(op: XOp, prior: XOp): XOp | null {
   if (op.t === 'comment') return transformComment(op, prior)
+  if (prior.t === 'sheet' && prior.op.op === 'sort' && prior.op.order && 'sheet' in op && op.sheet === prior.sheet) return overSort(op, prior.op.range, prior.op.order)
   if (prior.t === 'book') {
     if (prior.op.op === 'delete' && 'sheet' in op && op.sheet === prior.op.path) return null
     if (prior.op.op === 'rename' && prior.op.was !== undefined) {

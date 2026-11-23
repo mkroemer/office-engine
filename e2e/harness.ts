@@ -1,12 +1,14 @@
 /**
  * Browser test harness: the fixture app (e2e/app) on a Vite dev server, driven by Chromium (playwright-core).
  * Needs a Chromium for playwright-core: `bunx playwright install chromium`.
+ * E2E_BROWSER=firefox / webkit runs the same tests in Playwright's Firefox / WebKit (`bunx playwright install firefox`):
+ * for a look at another engine, the suite is kept green in Chromium only.
  */
 import { afterAll, afterEach, beforeAll, expect, setDefaultTimeout } from 'bun:test'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { chromium, type Browser, type BrowserContext, type Download, type Locator, type Page } from 'playwright-core'
+import { chromium, firefox, webkit, type Browser, type BrowserContext, type Download, type Locator, type Page } from 'playwright-core'
 import { createServer, type ViteDevServer } from 'vite'
 import type { Block, Paragraph } from '../src/core/docx/types'
 import { Engine } from '../src/core/worker/engine'
@@ -39,7 +41,8 @@ export function useBrowser() {
     server = await createServer({ configFile: 'vite.e2e.config.ts', server: { port: 0, strictPort: false } })
     await server.listen()
     // PLAYWRIGHT_CHANNEL=chrome / msedge: an installed browser instead of Playwright's own Chromium
-    const browser = await chromium.launch({ channel: process.env.PLAYWRIGHT_CHANNEL || undefined })
+    const engine = process.env.E2E_BROWSER === 'firefox' ? firefox : process.env.E2E_BROWSER === 'webkit' ? webkit : chromium
+    const browser = await engine.launch({ channel: (engine === chromium && process.env.PLAYWRIGHT_CHANNEL) || undefined })
     shared = { base: server.resolvedUrls!.local[0], browser }
   })
   afterEach(async () => {

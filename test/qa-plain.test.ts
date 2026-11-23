@@ -291,4 +291,43 @@ describe('QA 2026-11-22 (Markdown): rules, underscores, bold links, alerts', () 
     typeInto(blocks, 'two')
     expect(saveMd(src, blocks)).toBe(src.replace('> two', '> twoX'))
   })
+
+  test('a quote with a line that goes on without its > (a lazy line): an edit of one line leaves the others as written', async () => {
+    const src = 'Before\n\n> first line\nlazy line\n> third line\n\nAfter\n'
+    expect(saveMd(src, await blocksOf(src, 'a.md'))).toBe(src)
+    for (const edited of ['Before', 'After']) {
+      const blocks = await blocksOf(src, 'a.md')
+      typeInto(blocks, edited)
+      expect(saveMd(src, blocks)).toBe(src.replace(edited, `${edited}X`))
+    }
+    const shape = textOf(await blocksOf(src, 'a.md'))
+    if (shape.includes('third line')) {
+      // one paragraph a line: the line edited is written again, the lazy one stays lazy
+      const blocks = await blocksOf(src, 'a.md')
+      typeInto(blocks, 'third line')
+      expect(saveMd(src, blocks)).toBe(src.replace('> third line', '> third lineX'))
+      const lazy = await blocksOf(src, 'a.md')
+      typeInto(lazy, 'lazy line')
+      expect(saveMd(src, lazy)).toBe(src.replace('lazy line', '> lazy lineX'))
+    } else {
+      // the lines are one paragraph: edited, it is one line of the quote; what is around the quote stays
+      const blocks = await blocksOf(src, 'a.md')
+      typeInto(blocks, 'first line')
+      const out = saveMd(src, blocks)
+      expect(out.startsWith('Before\n\n> ')).toBe(true)
+      expect(out.endsWith('\n\nAfter\n')).toBe(true)
+      expect(out.split('\n').filter((l) => l && !/^(>|Before|After)/.test(l))).toEqual([])
+    }
+  })
+
+  test('a heading or a list item right under a quote is not a line of it', async () => {
+    for (const next of ['# Title', '- item', '1. item', '***']) {
+      const src = `> quoted\n${next}\n\nAfter\n`
+      const blocks = await blocksOf(src, 'a.md')
+      typeInto(blocks, 'quoted')
+      const out = saveMd(src, blocks)
+      expect(out).toContain('quotedX')
+      expect(out).not.toContain(`> ${next}`)
+    }
+  })
 })
