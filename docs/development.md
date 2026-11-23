@@ -118,27 +118,6 @@ One-time setup: **Settings → Pages → Source: GitHub Actions**. Build locally
 
 ## Release
 
-### Pending compatibility notes: themes and icons
-
-Carry these notes into the next release's versioned notes when its version is chosen; leave already released notes unchanged.
-
-- `Theme` now means `ThemeMode | ThemeOptions`. Hosts that need only the mode union (`'light' | 'dark' | 'auto'`)
-  should use `ThemeMode` instead of `Theme` for their own state, parameters and records.
-- `FileMenuItem.icon` now accepts `IconName` rather than any string. Annotate variables holding icon names as
-  `IconName` to prevent widening to `string`; keep using the existing icon rendering API.
-- `ICON_NAMES` exposes the supported icon names as stable public keys. New keys may be added; existing keys must
-  not be renamed as an internal cleanup.
-- CSS declarations using `color-mix()` have token-based fallbacks for visible selection, hover and connection states.
-  This does not imply full support for older browsers.
-
-```ts
-import type { FileMenuItem, IconName, ThemeMode } from '@p10node/office-engine'
-
-const mode: ThemeMode = 'auto'
-const icon: IconName = 'save'
-const item: FileMenuItem = { label: 'Save a copy', icon, onClick: saveCopy }
-```
-
 ### Release process
 
 CI (`.github/workflows/ci.yml`) runs typecheck, tests, the library and SDK package builds and `npm pack --dry-run` of each package, and the browser tests, on every push to `main` and every PR.
