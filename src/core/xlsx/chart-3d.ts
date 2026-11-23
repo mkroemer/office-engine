@@ -11,7 +11,7 @@
 import { hexToRgb, rgbToHex } from '../color'
 import { lineHeight, textWidth, type Pt, type Svg } from '../diagram/svg'
 import { labelsAt, type ChartAxis, type ChartGroup, type ChartModel, type Fill, type LineLook, type View3D } from './chart'
-import { catLabels, cumulative, extent, fillPaint, fmt, gridPaint, highest, intervals, isStacked, linePaint, niceScale, PX, surfaceBands, textOf, type Box } from './chart-svg'
+import { catLabels, cumulative, extent, fillPaint, fmt, gridPaint, highest, intervals, isStacked, labelShown, linePaint, niceScale, PX, surfaceBands, textOf, type Box } from './chart-svg'
 
 type V3 = [number, number, number]
 
@@ -306,6 +306,14 @@ function valueScale(m: ChartModel, g: ChartGroup, a: ChartAxis | undefined, len:
   return { scale, labels: scale.ticks.map((t) => fmt(t, f, m.date1904)) }
 }
 
+/**
+ * The most marks a 3D chart is drawn with: bars, the stretches of ribbons and slabs between two points, the cells of a
+ * surface's mesh (141 × 141 points). Each is a solid of its own, built, cut along its bands and sorted before any is
+ * drawn: a chart of 100 000 takes seconds for a picture too large to show. One of more is not drawn (`drawCartesian3D`
+ * throws, the view shows the chart's placeholder).
+ */
+export const MAX_3D_MARKS = 20_000
+
 /** a wall or the floor: its fill and outline where the file gives them, the outline in the axis color where it gives none */
 function wall(svg: Svg, v: View, pts: V3[], w: (Fill & { line?: LineLook | null }) | undefined, edge: string | null) {
   const p = pts.map((q) => {
@@ -341,6 +349,9 @@ export function drawCartesian3D(svg: Svg, m: ChartModel, g: ChartGroup, area: Bo
   const showCat = !(catAxis?.deleted ?? false) && (catAxis?.labels ?? true)
   const showSer = rows > 1 && !!serAxis && !serAxis.deleted && serAxis.labels
   const names = g.series.map((s) => s.name)
+  let marks = 0
+  for (const s of g.series) marks += s.values.length
+  if ((surface ? (rows > 1 ? rows - 1 : 1) * (n - 1) : marks) > MAX_3D_MARKS) throw new Error(`a 3D chart of more than ${MAX_3D_MARKS} marks`)
 
   // the room the labels take around the 3D box; the value axis' labels from a first guess at its length
   const guess = valueScale(m, g, valAxis, horizontal ? area.w * 0.8 : area.h * 0.8, horizontal)
@@ -432,7 +443,8 @@ export function drawCartesian3D(svg: Svg, m: ChartModel, g: ChartGroup, area: Bo
     })
   if (showCat) {
     const room = horizontal ? lineHeight(catT.size) : widest(cats, catT) + 4
-    const every = Math.max(1, Math.ceil(room / Math.max(1, band)))
+    // (a band is a fraction of a pixel where a series has more points than the plot is wide)
+    const every = Math.max(1, Math.ceil(room / Math.max(1e-6, band))) || 1
     cats.forEach((c, k) => {
       if (k % every || k >= n) return
       const p = view.at(P(catAt(k) + band / 2, 0, 0))
@@ -501,7 +513,8 @@ export function drawCartesian3D(svg: Svg, m: ChartModel, g: ChartGroup, area: Bo
     }
     const z = (r: number) => (r + 0.5) * rowDepth
     const clampV = (v: number) => Math.min(Math.max(v, scale.min), scale.max)
-    for (let r = 0; r + 1 < rows || (rows === 1 && r === 0); r++) {
+    // (an axis without a step between its bounds has no band to color a cell with: nothing to draw)
+    for (let r = 0; bands.length > 0 && (r + 1 < rows || (rows === 1 && r === 0)); r++) {
       const ra = g.series[r]
       const rb = g.series[Math.min(rows - 1, r + 1)]
       for (let k = 0; k + 1 < n; k++) {
@@ -652,6 +665,7 @@ export function drawPie3D(svg: Svg, m: ChartModel, g: ChartGroup, box: Box) {
   const v3 = m.view3d!
   const s = g.series[0]
   if (!s) return
+  if (s.values.length > MAX_3D_MARKS) throw new Error(`a 3D chart of more than ${MAX_3D_MARKS} marks`)
   const vals = s.values.map((v) => (v ? Math.abs(v) : 0))
   const total = vals.reduce((a, b) => a + b, 0)
   if (!total) return
@@ -703,7 +717,7 @@ export function drawPie3D(svg: Svg, m: ChartModel, g: ChartGroup, box: Box) {
       const center = mean([...lo, ...hi])
       solids.push({ faces, center, ring: { lo: rimLo, hi: rimHi, closed: false }, fill, ...(face ? { face } : {}), ref: TOP, line: s.line, key: [-view.depth(point((b0 + b1) / 2, R * 0.7, t / 2, o))] })
     }
-    const l = labelsAt(s, k)
+    const l = labelShown(s, k) ? labelsAt(s, k) : undefined
     if (l) {
       const parts2: string[] = []
       if (l.series) parts2.push(s.name)

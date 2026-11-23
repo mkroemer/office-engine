@@ -217,6 +217,12 @@ export interface View3D {
 }
 
 export interface ChartModel {
+  /**
+   * A name of its own for a chart that never changes (one saved in a Word document or on a slide, `chartKeys`). Its
+   * model is posted again with every slide and batch of paragraphs read; the copies are told by it to be one chart, so
+   * a view draws its picture once.
+   */
+  key?: string
   title?: ChartText
   /** a 3D chart's view; absent for a flat chart */
   view3d?: View3D
@@ -488,16 +494,71 @@ export const MAX_CHART_POINTS = 250_000
 /** the most series a chart has in Excel: one with more is shown as its placeholder */
 export const MAX_SERIES = 255
 
+/**
+ * The most points the charts read together hold: a sheet's, a document's or a presentation's. Each chart has its own
+ * budget (`MAX_CHART_POINTS`), which a file of a thousand small chart parts would take a thousand times: a series
+ * that only says it has 100 000 points (`c:ptCount`) is a few bytes in the file and megabytes once read. A chart
+ * read past it is shown as its placeholder.
+ */
+export const MAX_READ_POINTS = 1_000_000
+
+/** the points charts read together may still take (`MAX_READ_POINTS` to begin with) */
+export interface PointBudget {
+  left: number
+}
+
+export const pointBudget = (): PointBudget => ({ left: MAX_READ_POINTS })
+
+let keyed = 0
+
+/** names for the charts of one document (`ChartModel.key`): its chart parts' names, told from every other document's */
+export function chartKeys(): (part: string) => string {
+  const doc = `${Date.now().toString(36)}.${Math.random().toString(36).slice(2, 10)}.${keyed++}`
+  return (part) => `${doc}:${part}`
+}
+
+/** the points a chart's model holds: its series' values and their categories */
+export function modelPoints(m: ChartModel): number {
+  let n = 0
+  for (const g of m.groups) for (const s of g.series) n += s.values.length + s.cats.length
+  return n
+}
+
+/**
+ * Takes a chart's points of `budget` for one more place that shows it, where it has them left. A chart part is read
+ * once, but its model is posted with every slide and every batch of paragraphs that shows it: a part shown in a
+ * thousand places would be held a thousand times.
+ */
+export function showable(budget: PointBudget, m: ChartModel): boolean {
+  const n = modelPoints(m)
+  if (n > budget.left) return false
+  budget.left -= n
+  return true
+}
+
 /** where a chart's values come from: the workbook's cells, and the points it may still read */
 interface Sources {
   read: RangeReader
   left: number
+  /** the budget shared with the charts read with this one, and what this chart has taken of it */
+  shared?: PointBudget
+  taken: number
 }
 
-/** takes `n` points of the chart's budget; past it the chart is not read (its placeholder is shown) */
+/** takes `n` points of the chart's budget, and of the one it shares; past either the chart is not read (its placeholder is shown) */
 function take(src: Sources, n: number) {
   src.left -= n
   if (src.left < 0) throw new Error(`more than ${MAX_CHART_POINTS} points in the chart`)
+  if (!src.shared) return
+  src.shared.left -= n
+  src.taken += n
+  if (src.shared.left < 0) throw new Error(`more than ${MAX_READ_POINTS} points in the charts read together`)
+}
+
+/** a chart that was not read after all gives back what it took of the shared budget */
+function giveBack(src: Sources) {
+  if (src.shared) src.shared.left += src.taken
+  src.taken = 0
 }
 
 /** a cache's points by index (`c:pt idx`), `ptCount` long */
@@ -586,7 +647,8 @@ async function seriesOf(ser: XEl, i: number, type: ChartType, varyColors: boolea
   const catText = (v: number | string | null) => {
     if (v === null) return ''
     const n = typeof v === 'number' ? v : catSrc?.format ? toNum(v) : null
-    return n === null ? String(v) : formatValue(n, catSrc?.format || 'General', date1904).text
+    // (a number that is none, 1e999 read from a cell, has no format to be shown in)
+    return n === null || !Number.isFinite(n) ? String(v) : formatValue(n, catSrc?.format || 'General', date1904).text
   }
   let cats = (catSrc?.values ?? []).map(catText)
   let catValues = !scatter && catSrc ? catSrc.values.map(toNum) : undefined
@@ -745,9 +807,21 @@ function layoutOf(el: XEl | undefined): ChartLayout | undefined {
 
 /**
  * The chart in `root` (a chart part's `c:chartSpace`), or null where it has no kind this reads (it stays a placeholder).
- * `read` gives a series reference's cells; `theme` resolves its colors.
+ * `read` gives a series reference's cells; `theme` resolves its colors; `budget` is shared by the charts read together.
  */
-export async function readChart(root: XEl | undefined, opts: { theme: Theme; date1904: boolean; read: RangeReader }): Promise<ChartModel | null> {
+export async function readChart(root: XEl | undefined, opts: { theme: Theme; date1904: boolean; read: RangeReader; budget?: PointBudget }): Promise<ChartModel | null> {
+  const src: Sources = { read: opts.read, left: MAX_CHART_POINTS, shared: opts.budget, taken: 0 }
+  try {
+    const model = await readModel(root, opts, src)
+    if (!model) giveBack(src)
+    return model
+  } catch (e) {
+    giveBack(src)
+    throw e
+  }
+}
+
+async function readModel(root: XEl | undefined, opts: { theme: Theme; date1904: boolean }, src: Sources): Promise<ChartModel | null> {
   const chart = kid(root, 'chart')
   const plot = kid(chart, 'plotArea')
   if (!chart || !plot) return null
@@ -761,7 +835,6 @@ export async function readChart(root: XEl | undefined, opts: { theme: Theme; dat
   let seriesIndex = 0
   const count = plot.c.reduce((a, g) => a + (GROUPS[g.n] ? kids(g, 'ser').length : 0), 0)
   if (count > MAX_SERIES) return null
-  const src: Sources = { read: opts.read, left: MAX_CHART_POINTS }
   for (const g of plot.c) {
     const type = GROUPS[g.n]
     if (!type) continue
@@ -864,8 +937,8 @@ export async function readChart(root: XEl | undefined, opts: { theme: Theme; dat
  * A chart of a Word document or PowerPoint slide: its values are those saved with it (the workbook they come from is
  * embedded in the file and not read), its colors resolved against the document's theme.
  */
-export function readSavedChart(root: XEl | undefined, theme: Theme): Promise<ChartModel | null> {
-  return readChart(root, { theme, date1904: on(kid(root, 'date1904')), read: async () => null })
+export function readSavedChart(root: XEl | undefined, theme: Theme, budget?: PointBudget): Promise<ChartModel | null> {
+  return readChart(root, { theme, date1904: on(kid(root, 'date1904')), read: async () => null, budget })
 }
 
 /** a 3D chart's view, its walls and floor; Excel's defaults where the file gives none */

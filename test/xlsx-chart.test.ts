@@ -368,7 +368,9 @@ describe('xlsx charts: large series, log axes, hidden points, markers', () => {
     const g = model!.groups[0]
     const big = Array.from({ length: 50_000 }, (_, k) => k % 97)
     g.series = [0, 1, 2].map((i) => ({ ...g.series[i % g.series.length], values: big, cats: big.map(String) }))
-    expect(() => renderChart(model!, 400, 260)).not.toThrow()
+    // (without the limit on a picture's size, which 150,000 bars are past: what is tested is that they are not spread
+    // into arguments)
+    expect(() => renderChart(model!, 400, 260, Infinity)).not.toThrow()
   })
 
   test('a log X axis places 10 halfway between 1 and 100', async () => {

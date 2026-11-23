@@ -24,6 +24,12 @@ const chartPart = (values: number[], view = '') =>
   `<c:gapWidth val="150"/><c:axId val="1"/><c:axId val="2"/></c:${view ? 'bar3DChart' : 'barChart'}><c:catAx><c:axId val="1"/><c:axPos val="b"/><c:crossAx val="2"/></c:catAx><c:valAx><c:axId val="2"/><c:axPos val="l"/><c:majorGridlines/><c:crossAx val="1"/></c:valAx>` +
   `</c:plotArea><c:legend><c:legendPos val="r"/></c:legend><c:plotVisOnly val="1"/></c:chart></c:chartSpace>`
 
+/** a line chart of two series that say they have 100 000 points each and give none: a few hundred bytes of file */
+const CLAIMED =
+  `${HEAD}<c:chartSpace xmlns:c="${C}" xmlns:a="${A}" xmlns:r="${R}"><c:chart><c:plotArea><c:lineChart><c:grouping val="standard"/>` +
+  [0, 1].map((i) => `<c:ser><c:idx val="${i}"/><c:order val="${i}"/><c:val><c:numLit><c:ptCount val="100000"/></c:numLit></c:val></c:ser>`).join('') +
+  `<c:axId val="1"/><c:axId val="2"/></c:lineChart><c:catAx><c:axId val="1"/><c:crossAx val="2"/></c:catAx><c:valAx><c:axId val="2"/><c:crossAx val="1"/></c:valAx></c:plotArea></c:chart></c:chartSpace>`
+
 const graphic = (rid: string) => `<a:graphic xmlns:a="${A}"><a:graphicData uri="${C}"><c:chart xmlns:c="${C}" xmlns:r="${R}" r:id="${rid}"/></a:graphicData></a:graphic>`
 
 /** the sample with files replaced or added, each edited from its old text (absent: '') */
@@ -66,6 +72,16 @@ describe('charts in Word documents', () => {
     expect(svg).not.toContain('NaN')
   })
 
+  test('a chart part shown in many places: the places share a budget of points, those past it keep their label', async () => {
+    // 400 000 points a place (two series that claim 100 000 each, and their categories): two places fit a million
+    const blocks = await blocksOf(await docx(inline.repeat(5), CLAIMED))
+    const shapes = inlines(blocks).filter((x) => x.t === 'shape' && x.label === 'Chart') as Extract<Inline, { t: 'shape' }>[]
+    expect(shapes.map((x) => !!x.chart)).toEqual([true, true, false, false, false])
+    // an ordinary chart is shown in every place
+    const small = inlines(await blocksOf(await docx(inline.repeat(5), chartPart([3, 7, 5])))).filter((x) => x.t === 'shape' && x.label === 'Chart') as Extract<Inline, { t: 'shape' }>[]
+    expect(small.map((x) => !!x.chart)).toEqual([true, true, true, true, true])
+  })
+
   test('a 3D chart keeps its view; a chart part that is missing leaves its labeled box', async () => {
     const three = await blocksOf(await docx(inline, chartPart([3, 7, 5], '<c:view3D><c:rotX val="15"/><c:rotY val="20"/><c:rAngAx val="1"/></c:view3D>')))
     const shape = inlines(three).find((x) => x.t === 'shape' && x.label === 'Chart') as Extract<Inline, { t: 'shape' }>
@@ -98,5 +114,25 @@ describe('charts on slides', () => {
     expect(chart.model.groups[0].series[0].values).toEqual([10, 20, 15, 30])
     expect(renderChart(chart.model, chart.box.w, chart.box.h)).toContain('>Q4<')
     expect(slide.els.some((e) => e.t === 'placeholder' && e.label === 'Chart' && e.top === 902)).toBe(true)
+  })
+
+  test('a chart part shown by many frames: they share a budget of points, and a slide read again keeps its charts', async () => {
+    const engine = new Engine(() => {})
+    await engine.open(await pptx([911, 912, 913, 914].map((id) => frame('rIdChart1', id)).join(''), CLAIMED), {})
+    const shown = async () => ((await engine.call('pptx.slide', [0])) as SlideModel).els.filter((e) => e.top !== undefined && e.top >= 911).map((e) => [e.top, e.t])
+    // 400 000 points a frame: two fit a million
+    const first = await shown()
+    expect(first).toEqual([[911, 'chart'], [912, 'chart'], [913, 'placeholder'], [914, 'placeholder']])
+    // read again (after an edit, for a thumbnail): its own share is not counted twice
+    expect(await shown()).toEqual(first)
+    expect(await shown()).toEqual(first)
+    // the slides share the budget: the sample's fifth slide shows the same part (its own chart's), past what is left;
+    // read at once with the first, neither takes the other's points
+    const all = (await Promise.all([4, 0, 4, 0].map((i) => engine.call('pptx.slide', [i])))) as SlideModel[]
+    for (const k of [1, 3]) expect(all[k].els.filter((e) => e.t === 'chart').length).toBe(2)
+    for (const k of [0, 2]) {
+      expect(all[k].els.filter((e) => e.t === 'chart').length).toBe(0)
+      expect(all[k].els.some((e) => e.t === 'placeholder' && e.label === 'Chart')).toBe(true)
+    }
   })
 })

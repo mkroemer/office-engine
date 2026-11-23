@@ -6,7 +6,7 @@ import { OpcPackage, relOfType, relsOfType, type Rels } from '../opc'
 import { parseTheme, type Theme } from '../theme'
 import { emuToPx } from '../units'
 import { decodeXml, kid, kids, num, path, textOf, type XEl } from '../xml'
-import { readSavedChart, type ChartModel } from '../xlsx/chart'
+import { chartKeys, MAX_READ_POINTS, pointBudget, readSavedChart, showable, type ChartModel } from '../xlsx/chart'
 import type { Box, Fill, PParaSpec, PresentationMeta, PRunSet, SlideEl, SlideModel, Stroke, TCell, TextBody, TPara, TRun } from './types'
 import {
   clone, el, escText, getAttr, isNode, kidOf, kidsOf, local, parseRaw, prefixOf, removeKids, serialize, setAttr, setOrdered, walkOoxml,
@@ -302,6 +302,11 @@ export class PptxPresentation {
   private layouts = new Map<string, Promise<Layout>>()
   /** charts by part, read once however many slides show them */
   private charts = new Map<string, Promise<ChartModel | null>>()
+  /** the points the presentation's charts may still read together: one read past them keeps its placeholder */
+  private chartPoints = pointBudget()
+  private chartKey = chartKeys()
+  /** the points of the charts each slide shows: the slides together have a budget of them (a chart on a master is on every slide) */
+  private shownPoints = new Map<number, number>()
   private tableStyles?: Promise<Map<string, XEl>>
   readonly meta: PresentationMeta
 
@@ -431,12 +436,22 @@ export class PptxPresentation {
     if (master && showSlideMaster && layout?.root.a.showMasterSp !== '0') r.walk(master, master.spTree, identity, els, true)
     if (layout && showSlideMaster) r.walk(layout, layout.spTree, identity, els, true)
     r.walk(slide, slide.spTree, identity, els, false)
-    // charts take the place of their frames' placeholders where their parts can be read
-    for (const c of r.charts) {
+    // charts take the place of their frames' placeholders where their parts can be read, and while the slides' charts
+    // together are within their budget of points
+    const models: (ChartModel | null)[] = []
+    for (const c of r.charts) models.push(await this.chart(c.target, theme))
+    // (nothing is awaited from here to the slide's share being set: slides read at the same time must not take the same
+    // points; the share it had is given back first, the slide being read again)
+    this.shownPoints.delete(index)
+    let others = 0
+    for (const n of this.shownPoints.values()) others += n
+    const room = { left: MAX_READ_POINTS - others }
+    r.charts.forEach((c, k) => {
       const i = els.indexOf(c.el)
-      const model = i >= 0 ? await this.chart(c.target, theme) : null
-      if (model) els[i] = { t: 'chart', box: c.el.box, model, ...(c.el.top !== undefined ? { top: c.el.top } : {}) }
-    }
+      const model = models[k]
+      if (i >= 0 && model && showable(room, model)) els[i] = { t: 'chart', box: c.el.box, model, ...(c.el.top !== undefined ? { top: c.el.top } : {}) }
+    })
+    this.shownPoints.set(index, MAX_READ_POINTS - others - room.left)
     return {
       index,
       w: this.meta.w,
@@ -452,7 +467,10 @@ export class PptxPresentation {
   private chart(target: string, theme: Theme): Promise<ChartModel | null> {
     let c = this.charts.get(target)
     if (!c) {
-      c = (async () => (this.pkg.has(target) ? readSavedChart(await this.pkg.xml(target), theme) : null))().catch((e: Error) => {
+      c = (async () => {
+        const model = this.pkg.has(target) ? await readSavedChart(await this.pkg.xml(target), theme, this.chartPoints) : null
+        return model && { ...model, key: this.chartKey(target) }
+      })().catch((e: Error) => {
         console.warn('[office-engine] chart not read:', e.message)
         return null
       })

@@ -1,4 +1,4 @@
-import { readSavedChart, type ChartModel } from '../xlsx/chart'
+import { chartKeys, pointBudget, readSavedChart, showable, type ChartModel } from '../xlsx/chart'
 import { fileHex } from '../color'
 import { OpcPackage, relOfType, type Rels } from '../opc'
 import type { RNode } from '../raw'
@@ -949,13 +949,16 @@ export class DocxDocument {
   readonly charts = new Map<string, ChartModel>()
 
   private async readCharts() {
+    // the document's charts share a budget of points: one read past it keeps its label
+    const budget = pointBudget()
+    const key = chartKeys()
     for (const rel of this.rels.values()) {
       if (rel.external || !rel.type.endsWith('/chart') || !this.pkg.has(rel.target) || this.charts.has(rel.target)) continue
-      const model = await readSavedChart(await this.pkg.xml(rel.target), this.theme).catch((e: Error) => {
+      const model = await readSavedChart(await this.pkg.xml(rel.target), this.theme, budget).catch((e: Error) => {
         console.warn('[office-engine] chart not read:', e.message)
         return null
       })
-      if (model) this.charts.set(rel.target, model)
+      if (model) this.charts.set(rel.target, { ...model, key: key(rel.target) })
     }
   }
 
@@ -1052,6 +1055,8 @@ export class DocxDocument {
   async stream(cb: DocxStreamCallbacks): Promise<void> {
     let item = 0
     let ords = new Map<XEl, number>()
+    // the places charts are shown at share a budget of points: one past it keeps its label
+    const shown = pointBudget()
     const hooks: ConvHooks = {
       item: () => item,
       para: (el, rec) => {
@@ -1071,7 +1076,10 @@ export class DocxDocument {
       },
       comment: (num) => this.comments.rootOfNum(num),
       note: this.noteText,
-      chart: (target) => this.charts.get(target),
+      chart: (target) => {
+        const model = this.charts.get(target)
+        return model && showable(shown, model) ? model : undefined
+      },
     }
     const conv = new Converter(this.styles, this.numbering, this.theme, this.rels, hooks)
     const baseMeta = {

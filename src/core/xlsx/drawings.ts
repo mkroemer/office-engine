@@ -12,7 +12,7 @@ import { desc, descAll, kid, textOf, type XEl } from '../xml'
 import { MAX_COL, MAX_ROWS, MAX_SHEET_WIDTH_PX, MAX_SHEET_HEIGHT_PX, ooxmlInt } from './limits'
 import { parseFormula, references } from './formula'
 import { isoToSerial } from './formula/dates'
-import { readChart, type ChartModel, type RangeReader, type RangeValues } from './chart'
+import { pointBudget, readChart, type ChartModel, type PointBudget, type RangeReader, type RangeValues } from './chart'
 import { T_BOOL, T_DATE, T_EMPTY, T_ERR, T_NUM, T_SST, type XlsxWorkbook } from './workbook'
 
 /** A cell corner: 0-based column and row, and the offset into that cell in CSS pixels */
@@ -94,7 +94,7 @@ function placement(anchor: XEl): Pick<SheetDrawing, 'from' | 'to' | 'at' | 'size
 }
 
 /** a chart's kind, title and model (null where it is a kind chart.ts does not draw), from its chart part */
-async function chartOf(wb: XlsxWorkbook, sheet: number, part: string): Promise<{ chart: string; title: string; model: ChartModel | null }> {
+async function chartOf(wb: XlsxWorkbook, sheet: number, part: string, budget: PointBudget): Promise<{ chart: string; title: string; model: ChartModel | null }> {
   const root = await wb.pkg.xml(part)
   const plot = desc(root, 'plotArea')
   const type = plot?.c.find((e) => e.n.endsWith('Chart'))
@@ -102,7 +102,7 @@ async function chartOf(wb: XlsxWorkbook, sheet: number, part: string): Promise<{
   // a bar chart is drawn with upright columns unless its direction says bars
   if (type?.n.startsWith('bar') && attr(kid(type, 'barDir'), 'val') !== 'bar') chart = 'column'
   const title = desc(kid(root, 'chart'), 'title')
-  const model = await readChart(root, { theme: wb.theme, date1904: wb.date1904, read: workbookReader(wb, sheet) }).catch((e: Error) => {
+  const model = await readChart(root, { theme: wb.theme, date1904: wb.date1904, read: workbookReader(wb, sheet), budget }).catch((e: Error) => {
     console.warn('[office-engine] chart not read:', e.message)
     return null
   })
@@ -191,11 +191,12 @@ export async function readSheetDrawings(wb: XlsxWorkbook, sheet: number): Promis
   if (!sheetPath) return []
   const sheetRels = await pkg.rels(sheetPath)
   const out: SheetDrawing[] = []
-  // a chart part is read once, however many anchors show it
+  // a chart part is read once, however many anchors show it; the sheet's charts share a budget of points
   const charts = new Map<string, ReturnType<typeof chartOf>>()
+  const budget = pointBudget()
   const chartFor = (part: string) => {
     let c = charts.get(part)
-    if (!c) charts.set(part, (c = chartOf(wb, sheet, part)))
+    if (!c) charts.set(part, (c = chartOf(wb, sheet, part, budget)))
     return c
   }
   for (const rel of sheetRels.values()) {

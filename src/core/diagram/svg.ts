@@ -126,38 +126,59 @@ export interface TextOpts {
   mono?: boolean
 }
 
+/** thrown where a picture would be larger than its builder was allowed (`Svg`'s `max`) */
+export class PictureTooLarge extends Error {
+  constructor() {
+    super('the picture is too large to draw')
+    this.name = 'PictureTooLarge'
+  }
+}
+
 export class Svg {
   private out: string[] = []
+  private size = 0
+
+  /**
+   * `max`: the most characters the picture may hold. Drawing past it throws `PictureTooLarge`, so a picture a crafted
+   * source would make hundreds of megabytes large is given up early; the caller shows something else in its place.
+   */
+  constructor(readonly max = Infinity) {}
+
+  private add(s: string) {
+    this.size += s.length
+    if (this.size > this.max) throw new PictureTooLarge()
+    this.out.push(s)
+  }
 
   rect(x: number, y: number, w: number, h: number, p: Paint, rx = 0): this {
-    this.out.push(`<rect x="${n(x)}" y="${n(y)}" width="${n(w)}" height="${n(h)}"${rx ? ` rx="${n(rx)}"` : ''}${paint(p)}/>`)
+    this.add(`<rect x="${n(x)}" y="${n(y)}" width="${n(w)}" height="${n(h)}"${rx ? ` rx="${n(rx)}"` : ''}${paint(p)}/>`)
     return this
   }
 
   circle(cx: number, cy: number, r: number, p: Paint): this {
-    this.out.push(`<circle cx="${n(cx)}" cy="${n(cy)}" r="${n(r)}"${paint(p)}/>`)
+    this.add(`<circle cx="${n(cx)}" cy="${n(cy)}" r="${n(r)}"${paint(p)}/>`)
     return this
   }
 
   ellipse(cx: number, cy: number, rx: number, ry: number, p: Paint): this {
-    this.out.push(`<ellipse cx="${n(cx)}" cy="${n(cy)}" rx="${n(rx)}" ry="${n(ry)}"${paint(p)}/>`)
+    this.add(`<ellipse cx="${n(cx)}" cy="${n(cy)}" rx="${n(rx)}" ry="${n(ry)}"${paint(p)}/>`)
     return this
   }
 
   line(x1: number, y1: number, x2: number, y2: number, p: Paint): this {
-    this.out.push(`<line x1="${n(x1)}" y1="${n(y1)}" x2="${n(x2)}" y2="${n(y2)}"${paint(p)}/>`)
+    this.add(`<line x1="${n(x1)}" y1="${n(y1)}" x2="${n(x2)}" y2="${n(y2)}"${paint(p)}/>`)
     return this
   }
 
   poly(points: [number, number][], p: Paint, closed = true): this {
     const pts = points.map(([x, y]) => `${n(x)},${n(y)}`).join(' ')
-    this.out.push(`<${closed ? 'polygon' : 'polyline'} points="${pts}"${paint(p)}/>`)
+    this.add(`<${closed ? 'polygon' : 'polyline'} points="${pts}"${paint(p)}/>`)
     return this
   }
 
   /** `d` uses numbers rounded by the caller (see `pathData`) */
   path(d: string, p: Paint): this {
-    this.out.push(`<path d="${d}"${paint(p)}/>`)
+    this.add(`<path d="${d}"${paint(p)}/>`)
     return this
   }
 
@@ -175,13 +196,13 @@ export class Svg {
     ls.forEach((l, k) => {
       if (!l) return
       // baseline: the middle of the line box plus about a third of the font size
-      this.out.push(`<text x="${n(x)}" y="${n(top + k * lh + lh / 2 + size * 0.35)}"${attrs}>${esc(l)}</text>`)
+      this.add(`<text x="${n(x)}" y="${n(top + k * lh + lh / 2 + size * 0.35)}"${attrs}>${esc(l)}</text>`)
     })
     return this
   }
 
   raw(s: string): this {
-    this.out.push(s)
+    this.add(s)
     return this
   }
 

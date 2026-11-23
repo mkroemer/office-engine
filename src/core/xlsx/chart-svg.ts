@@ -44,7 +44,40 @@ const dashOf = (d: string | undefined, w: number) => (d && DASH[d] ? DASH[d].map
 /** a line's paint: its color, width and dash */
 export const linePaint = (l: LineLook): Paint => ({ stroke: l.color, sw: Math.max(0.75, l.width * PX), dash: dashOf(l.dash, l.width) })
 
-export const fmt = (v: number, f: string | undefined, date1904: boolean) => formatValue(v, f || 'General', date1904).text
+/** `v` in the number format `f`; nothing for a number that is none (a bound of 1e308 doubled): the formats take finite ones */
+export const fmt = (v: number, f: string | undefined, date1904: boolean) => (Number.isFinite(v) ? formatValue(v, f || 'General', date1904).text : '')
+
+/**
+ * The most characters a chart's picture may hold. A browser lays a picture out on the main thread, for about a quarter
+ * of a second a megabyte: a line chart of 100 000 points, each with its marker and label (28 MB, from a file of 4 KB
+ * whose series only claim their points), held the page for seven seconds; the rings of a radar of them were 296 MB.
+ * A picture past it is not finished: `renderChart` throws `PictureTooLarge` and the view shows the chart's placeholder.
+ */
+export const MAX_CHART_SVG = 8 * 1024 * 1024
+
+/**
+ * The most data labels and markers a chart is drawn with. Of more, every k-th point shows its own: that many overlap
+ * into a band whatever their number, and are what a picture takes longest to lay out. A point's own label (`c:dLbl`)
+ * is always shown.
+ */
+export const MAX_LABELS = 2_000
+export const MAX_MARKERS = 20_000
+/** the most entries a legend lists (a pie's legend has one per point) */
+export const MAX_LEGEND = 500
+
+// while a chart is drawn (`renderChart` runs to its end before another starts): every which point shows its series'
+// label and its marker
+let labelStep = 1
+let markerStep = 1
+
+const shownByFlags = (l: { value: boolean; percent: boolean; category: boolean; series: boolean }) => l.value || l.percent || l.category || l.series
+
+/** whether point `k` of `s` shows its data label: its own always, its series' on every `labelStep`-th point */
+export const labelShown = (s: ChartSeries, k: number) => labelStep === 1 || k % labelStep === 0 || s.labels?.points?.[k] !== undefined
+const markerShown = (k: number) => markerStep === 1 || k % markerStep === 0
+
+/** a radar with more points than this has rings too close to a circle to tell, and no room for a spoke per point */
+const RADAR_CORNERS = 360
 
 // a chart's values run to tens of thousands: spread into Math.min / Math.max they exceed the engine's argument limit
 /** the smallest of `xs` (Infinity for none), as Math.min */
@@ -296,17 +329,20 @@ function legendEntries(m: ChartModel): LegendEntry[] {
   const g0 = m.groups[0]
   if (!g0) return []
   if (g0.type === 'surface') return surfaceBands(g0, m).map((b) => ({ label: b.label, fill: b.fill, look: b.look }))
+  const deleted = new Set(m.legend?.deleted)
+  const out: LegendEntry[] = []
   // a pie (or one series of varied colors): the points of its first series are the entries
   const pie = g0.type === 'pie' || g0.type === 'doughnut'
   if (m.groups.length === 1 && g0.varyColors && (pie || g0.series.length === 1)) {
     const s = g0.series[0]
-    return s.cats.map((c, k) => ({ label: c, fill: s.points[k]?.color ?? s.fill, look: s.points[k]?.look ?? (s.points[k]?.color ? undefined : s.look) })).filter((_, k) => !m.legend?.deleted.includes(k))
+    for (let k = 0; k < s.cats.length && out.length < MAX_LEGEND; k++)
+      if (!deleted.has(k)) out.push({ label: s.cats[k], fill: s.points[k]?.color ?? s.fill, look: s.points[k]?.look ?? (s.points[k]?.color ? undefined : s.look) })
+    return out
   }
-  const out: LegendEntry[] = []
   let k = 0
   for (const g of m.groups)
     for (const s of g.series) {
-      if (m.legend?.deleted.includes(k++)) continue
+      if (deleted.has(k++) || out.length >= MAX_LEGEND) continue
       out.push(lined(g) ? { label: s.name, line: s.line, marker: s.marker } : { label: s.name, fill: s.fill, look: s.look })
     }
   return out
@@ -409,7 +445,7 @@ function drawRing(svg: Svg, m: ChartModel, g: ChartGroup, s: ChartSeries, o: { c
         : `M${n(ox)} ${n(oy)} L${n(p1.x)} ${n(p1.y)} A${n(r)} ${n(r)} 0 ${large} 1 ${n(p2.x)} ${n(p2.y)} Z`
       svg.path(d, { fill, stroke, sw })
     }
-    const l = labelsAt(s, k)
+    const l = labelShown(s, k) ? labelsAt(s, k) : undefined
     if (l) {
       const parts: string[] = []
       if (l.series) parts.push(s.name)
@@ -493,10 +529,20 @@ export function cumulative(g: ChartGroup, s: ChartSeries): (number | null)[] {
   })
 }
 
-export function renderChart(m: ChartModel, W: number, H: number): string {
+/** The chart as an SVG picture of `W` × `H` px, of `max` characters at most (`PictureTooLarge` is thrown past them). */
+export function renderChart(m: ChartModel, W: number, H: number, max = MAX_CHART_SVG): string {
   // a group without series draws nothing: a pie or radar of it would have no first series to draw
   m = { ...m, groups: m.groups.filter((g) => g.series.length) }
-  const svg = new Svg()
+  let labelled = 0
+  let marked = 0
+  for (const g of m.groups)
+    for (const s of g.series) {
+      if (s.labels && shownByFlags(s.labels)) labelled += s.values.length
+      if (s.marker) marked += s.values.length
+    }
+  labelStep = Math.max(1, Math.ceil(labelled / MAX_LABELS))
+  markerStep = Math.max(1, Math.ceil(marked / MAX_MARKERS))
+  const svg = new Svg(max)
   // the chart area: a plain color is the picture's canvas; a gradient or pattern a rect of its own
   if (m.bgLook && m.bg !== null) svg.rect(0, 0, W, H, { fill: fillPaint(svg, m.bg, m.bgLook) })
   if (m.border !== null) svg.rect(0.5, 0.5, W - 1, H - 1, { stroke: m.border ?? m.gridColor, sw: 1 })
@@ -739,7 +785,8 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
   if (showCats) {
     // wrapped labels were made to fit their categories: all of them are shown
     const space = horizontal ? catLh : angle ? catLh / Math.max(0.2, Math.sin(rad)) : wrapped ? 0 : catTextW + 2
-    const every = Math.max(1, Math.ceil(space / Math.max(1, band)))
+    // (a band is a fraction of a pixel where a series has more points than the plot is wide)
+    const every = Math.max(1, Math.ceil(space / Math.max(1e-6, band))) || 1
     const y0 = inner.y + inner.h + 4
     const o = { size: catT.size, color: catT.color, bold: catT.bold }
     cats.forEach((c, k) => {
@@ -790,7 +837,7 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
   const c = CLIP_MARGIN
   svg.raw(`<defs><clipPath id="de-plot"><rect x="${Math.round(inner.x - c)}" y="${Math.round(inner.y - c)}" width="${Math.round(inner.w + 2 * c)}" height="${Math.round(inner.h + 2 * c)}"/></clipPath></defs><g clip-path="url(#de-plot)">`)
   // data labels go on a layer after the clipped series: a label beside a point on the plot's edge stays whole
-  const labels = new Svg()
+  const labels = new Svg(svg.max)
   labelLayers.set(svg, labels)
   for (const g of [...groups].sort((a, b) => order(a) - order(b))) {
     const p = plans.get(g.axIds[1]) ?? plans.get(primary)
@@ -851,7 +898,7 @@ interface Geo {
 }
 
 function label(svg: Svg, m: ChartModel, s: ChartSeries, k: number, v: number, x: number, y: number, anchor: 'start' | 'middle' | 'end' = 'middle', color?: string) {
-  const l = labelsAt(s, k)
+  const l = labelShown(s, k) ? labelsAt(s, k) : undefined
   if (!l) return
   const parts: string[] = []
   if (l.series) parts.push(s.name)
@@ -906,7 +953,7 @@ function drawBars(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo 
       const paint: Paint = { fill, stroke: s.line?.color ?? (raw < 0 && s.invertIfNegative ? (s.fill ?? undefined) : undefined), sw: s.line ? Math.max(0.75, s.line.width * PX) : 1, dash: s.line ? dashOf(s.line.dash, s.line.width) : undefined }
       if (horizontal) svg.rect(Math.min(a, b), c0, Math.abs(b - a), w, paint)
       else svg.rect(c0, Math.min(a, b), w, Math.abs(b - a), paint)
-      const l = labelsAt(s, k)
+      const l = labelShown(s, k) ? labelsAt(s, k) : undefined
       if (l) {
         // a clustered bar's label sits past its end unless the file places it; a stacked one's in its middle
         const pos = l.pos ?? (stacked ? 'ctr' : 'outEnd')
@@ -954,7 +1001,7 @@ function drawLines(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo
       if (v === null) return
       const x = catMid(k)
       const y = valPos(p, v)
-      if (s.marker) marker(svg, x, y, s.marker)
+      if (s.marker && markerShown(k)) marker(svg, x, y, s.marker)
       if (s.labels) label(svg, m, s, k, s.values[k] ?? v, x, y - lh * 0.8)
     })
   }
@@ -1007,7 +1054,7 @@ function drawScatter(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: {
     if (lines && s.line) for (const run of runs) if (run.length > 1) svg.path(linePath(run, smooth), linePaint(s.line))
     const lh = lineHeight(textOf(m, s.labels?.text).size)
     pts.forEach((pt) => {
-      if (s.marker) marker(svg, pt.x, pt.y, s.marker)
+      if (s.marker && markerShown(pt.k)) marker(svg, pt.x, pt.y, s.marker)
       if (s.labels) label(svg, m, s, pt.k, s.values[pt.k] ?? 0, pt.x, pt.y - lh * 0.8)
     })
   }
@@ -1069,13 +1116,20 @@ function drawRadar(svg: Svg, m: ChartModel, g: ChartGroup, box: Box, size: numbe
     const r = Math.max(0, Math.min(1, frac(scale, v))) * R
     return [cx + r * Math.cos(ang(k)), cy + r * Math.sin(ang(k))]
   }
-  if (m.plotFill) svg.poly(Array.from({ length: n }, (_, k) => at(k, scale.max)), { fill: fillPaint(svg, m.plotFill, m.plotLook) })
+  // a ring has a corner per point: past `RADAR_CORNERS` it is drawn as the circle it looks like, and the spokes (one per
+  // point, a solid disk of them) are left out, so the rings of a series of 100 000 points are not 100 000 corners each
+  const round = n > RADAR_CORNERS
+  const ring = (v: number, p: Paint) => (round ? svg.circle(cx, cy, Math.max(0, Math.min(1, frac(scale, v))) * R, p) : svg.poly(Array.from({ length: n }, (_, k) => at(k, v)), p))
+  if (m.plotFill) ring(scale.max, { fill: fillPaint(svg, m.plotFill, m.plotLook) })
   const grid = a ? gridPaint(m, a) : { stroke: m.gridColor }
-  if (grid) for (const t of scale.ticks) if (t !== scale.min) svg.poly(Array.from({ length: n }, (_, k) => at(k, t)), { ...grid, fill: 'none' })
+  if (grid) for (const t of scale.ticks) if (t !== scale.min) ring(t, { ...grid, fill: 'none' })
   const spoke = catAxis?.line === null ? null : catAxis?.line ? linePaint(catAxis.line) : { stroke: m.axisColor }
-  if (spoke) for (let k = 0; k < n; k++) svg.line(cx, cy, ...at(k, scale.max), spoke)
+  if (spoke && !round) for (let k = 0; k < n; k++) svg.line(cx, cy, ...at(k, scale.max), spoke)
+  // (as many labels as corners at most: every k-th of more)
+  const every = Math.ceil(n / RADAR_CORNERS)
   if (showCats)
     cats.forEach((c, k) => {
+      if (k % every) return
       const x = cx + (R + 6) * Math.cos(ang(k))
       const y = cy + (R + 6) * Math.sin(ang(k))
       const cos = Math.cos(ang(k))
@@ -1092,7 +1146,7 @@ function drawRadar(svg: Svg, m: ChartModel, g: ChartGroup, box: Box, size: numbe
     else if (s.line) svg.poly(poly, { fill: 'none', ...linePaint(s.line) })
     const lh = lineHeight(textOf(m, s.labels?.text).size)
     for (const p of pts) {
-      if (s.marker && !filled) marker(svg, p.x, p.y, s.marker)
+      if (s.marker && !filled && markerShown(p.k)) marker(svg, p.x, p.y, s.marker)
       if (s.labels) label(svg, m, s, p.k, s.values[p.k]!, p.x, p.y - lh * 0.8)
     }
   }
