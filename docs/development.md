@@ -44,6 +44,8 @@ src/collab   real-time collaboration (hub, session, per-format adapters)
 
 `DocxView` measures the blocks off screen in time slices (`src/react/docx/measure.ts`: a block's height, where a paragraph's lines and a table's rows are), `paginate()` cuts them into pages (`paginate.ts`: pure, lines and rows given, keep rules; unit tests in `test/docx-paginate.test.ts`) and only the pages in view render. The browser breaks the lines; the offset each line starts at is read (`lineStarts`) only for the paragraphs a page in view or an edit cuts. A paragraph split across pages renders as one element per part, each with the paragraph's `data-pa` address and the offsets it holds (`data-from`, `data-to`): `paraEl()` / `posFromDom()` / `domFromPos()` in `src/react/edit/input.ts` map DOM places to paragraph offsets over the parts, so the caret, selections, find and comments need nothing else. Header rows repeated on the following pages of a table are copies without an address (`.de-head-copy`).
 
+A document longer than a browser lets a box scroll (12,000,000 px) is scrolled through `ScrollMap` (`src/react/docx/longscroll.ts`, unit tests in `test/docx-longscroll.test.ts`): the place shown is the scroll position plus an offset the pages are drawn by. A step of the reader or of the browser leaves the offset alone, so the browser moves the pages by itself; a jump of the scrollbar's thumb sets it; at rest the box is put where its thumb belongs, pages and scroll position in one frame.
+
 ## Browser tests
 
 `e2e/*.spec.ts` drive a fixture app (`e2e/app`, served by Vite with `vite.e2e.config.ts`) in headless Chromium through `playwright-core`, one browser and server per file (`e2e/harness.ts`).
@@ -56,6 +58,7 @@ The app reads `DocViewer` props from the query string (`?src=samples/sample.docx
 | `docx.spec.ts`             | typing, formatting, styles, lists, colors, fonts, links, tables, images, find & replace, undo                                            |
 | `docx-page.spec.ts`        | page setup: size, orientation, margins, columns; refused values; numbers typed in a locale                                               |
 | `docx-split.spec.ts`       | paragraphs and tables split across pages: layout, caret, editing, header rows                                                            |
+| `docx-longscroll.spec.ts`  | a document past the scroll cap: wheel, Page Down, the caret, the last page by steps, the box at rest, zoom                               |
 | `docx-hf.spec.ts`          | headers and footers: page numbers, text, different first page, saved and undone                                                          |
 | `docx-table.spec.ts`       | table editing: cell selection, merges, colors, borders, alignment, column widths                                                         |
 | `docx-tabs.spec.ts`        | tab stops: left / center / right / decimal, leaders, stops of a style, absolute position tabs, typing, HTML export                       |
