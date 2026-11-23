@@ -261,6 +261,9 @@ describe('pptx', () => {
     expect(s3.title).toBe('Table')
     expect(tbl.rows[0].cells[0].fill?.t).toBe('solid')
     const s4: any = await engine.call('pptx.slide', [4])
-    expect(s4.els.some((e: any) => e.t === 'placeholder' && e.label === 'Chart')).toBe(true)
+    // its chart is drawn from the values saved with it, no longer a placeholder
+    const chart = s4.els.find((e: any) => e.t === 'chart')
+    expect(chart?.model.groups[0].series.length).toBeGreaterThan(0)
+    expect(s4.els.some((e: any) => e.t === 'placeholder' && e.label === 'Chart')).toBe(false)
   })
 })

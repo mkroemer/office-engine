@@ -2,7 +2,7 @@
  * An Excel chart (chart.ts `ChartModel`) drawn as a self-contained SVG picture of `w` × `h` CSS pixels, DOM-free (it
  * runs anywhere): bars and columns (clustered, stacked, 100%), lines (markers, smoothing), areas, scatter, bubbles,
  * stock (high-low lines, up-down bars), pie and doughnut, radar, and surface (seen from above, as Excel's contour
- * chart), combined on primary and secondary axes; axis bounds chosen the way Excel does when the file fixes none
+ * chart), combined on primary and secondary axes; 3D charts in their view (chart-3d.ts); axis bounds chosen the way Excel does when the file fixes none
  * (zero included, steps of 1, 2 or 5), major gridlines, tick and data labels in the series' number formats, title and
  * legend, in the colors, lines, fills (gradients and patterns too) and text looks the file gives. Text is measured
  * with the diagram renderers' widths (diagram/svg.ts), so labels are placed without a browser.
@@ -12,13 +12,14 @@
 import { dict } from '../dict'
 import { lineHeight, pathData, Svg, textWidth, wrap, type Paint, type Pt } from '../diagram/svg'
 import type { ChartAxis, ChartGroup, ChartModel, ChartSeries, ChartText, FillLook, LineLook, TextLook } from './chart'
-import { SURFACE_BANDS } from './chart'
-import { formatValue } from './numfmt'
+import { labelsAt, SURFACE_BANDS } from './chart'
+import { drawCartesian3D, drawPie3D } from './chart-3d'
+import { formatValue, serialToDate } from './numfmt'
 
-const PX = 96 / 72
+export const PX = 96 / 72
 const PAD = 8
 
-interface Box {
+export interface Box {
   x: number
   y: number
   w: number
@@ -41,25 +42,28 @@ const DASH: Record<string, number[]> = dict({
 const dashOf = (d: string | undefined, w: number) => (d && DASH[d] ? DASH[d].map((x) => x * Math.max(1, w)).join(' ') : undefined)
 
 /** a line's paint: its color, width and dash */
-const linePaint = (l: LineLook): Paint => ({ stroke: l.color, sw: Math.max(0.75, l.width * PX), dash: dashOf(l.dash, l.width) })
+export const linePaint = (l: LineLook): Paint => ({ stroke: l.color, sw: Math.max(0.75, l.width * PX), dash: dashOf(l.dash, l.width) })
 
-const fmt = (v: number, f: string | undefined, date1904: boolean) => formatValue(v, f || 'General', date1904).text
+export const fmt = (v: number, f: string | undefined, date1904: boolean) => formatValue(v, f || 'General', date1904).text
 
 // a chart's values run to tens of thousands: spread into Math.min / Math.max they exceed the engine's argument limit
 /** the smallest of `xs` (Infinity for none), as Math.min */
-function lowest(xs: readonly number[]): number {
+export function lowest(xs: readonly number[]): number {
   let m = Infinity
   for (const x of xs) if (x < m) m = x
   return m
 }
 /** the largest of `xs` (-Infinity for none), as Math.max */
-function highest(xs: readonly number[]): number {
+export function highest(xs: readonly number[]): number {
   let m = -Infinity
   for (const x of xs) if (x > m) m = x
   return m
 }
 
-/** Excel's automatic bounds: zero kept in view unless the values sit far from it, a step of 1, 2 or 5 × 10ⁿ */
+/**
+ * Excel's automatic bounds: zero kept in view unless the values sit close together far from it, 5 % of the span left
+ * past the values, and the smallest step of 1, 2 or 5 × 10ⁿ that keeps the axis to `ticks` intervals (at most 10)
+ */
 export function niceScale(lo: number, hi: number, opts: { min?: number; max?: number; major?: number; zero?: boolean; ticks?: number } = {}): Scale {
   if (!Number.isFinite(lo) || !Number.isFinite(hi)) (lo = 0), (hi = 1)
   if (lo > hi) [lo, hi] = [hi, lo]
@@ -70,10 +74,17 @@ export function niceScale(lo: number, hi: number, opts: { min?: number; max?: nu
   if (opts.major !== undefined && !(Number.isFinite(opts.major) && opts.major > 0)) opts.major = undefined
   if (opts.min !== undefined && opts.max !== undefined && opts.max <= opts.min) opts.max = undefined
   if (opts.zero !== false) {
-    // values all alike keep zero in view too, so bars of them have a height
-    if (lo > 0 && (lo < (hi * 5) / 6 || lo === hi)) lo = 0
-    if (hi < 0 && (hi > (lo * 5) / 6 || lo === hi)) hi = 0
+    // values close together far from zero: the axis starts half their spread below them; values all alike keep zero
+    // in view, so bars of them have a height
+    if (lo > 0 && lo > (hi * 5) / 6 && lo !== hi) lo -= (hi - lo) / 2
+    else if (lo > 0) lo = 0
+    if (hi < 0 && hi < (lo * 5) / 6 && lo !== hi) hi += (hi - lo) / 2
+    else if (hi < 0) hi = 0
   }
+  // room past the values, on the sides that are not zero: the largest value is not left on the top line
+  const span = hi - lo || Math.abs(hi) * 0.1 || 1
+  if (opts.max === undefined && hi !== 0) hi += span * 0.05
+  if (opts.min === undefined && lo !== 0) lo -= span * 0.05
   if (opts.min !== undefined) lo = opts.min
   if (opts.max !== undefined) hi = opts.max
   // one bound fixed past all the values: the other one moves to give the axis a span
@@ -82,22 +93,27 @@ export function niceScale(lo: number, hi: number, opts: { min?: number; max?: nu
     else if (opts.min === undefined) lo = hi
   }
   if (lo === hi) hi = lo === 0 ? 1 : lo + Math.abs(lo) * 0.1
-  const want = Math.max(2, opts.ticks ?? 6)
+  const most = Math.min(10, Math.max(1, Math.floor(opts.ticks ?? 6)))
   let step = opts.major
   if (!step || step <= 0) {
-    const rough = (hi - lo) / want
+    const rough = (hi - lo) / most
     const mag = 10 ** Math.floor(Math.log10(rough))
-    step = ([1, 2, 5, 10].find((m) => m * mag >= rough) ?? 10) * mag
+    step = ([1, 2, 5, 10].find((m) => m * mag >= rough * 0.995) ?? 10) * mag
   }
-  let min = opts.min ?? Math.floor(lo / step + 1e-9) * step
+  const min = opts.min ?? Math.floor(lo / step + 1e-9) * step
   let max = opts.max ?? Math.ceil(hi / step - 1e-9) * step
-  // the largest value is not left on the top line
-  if (opts.max === undefined && max === hi && hi !== 0 && hi > 0) max += step
-  if (opts.min === undefined && min === lo && lo < 0) min -= step
   if (max <= min) max = min + step
   const ticks: number[] = []
   for (let k = 0, v = min; v <= max + step * 1e-6 && k < 200; k++, v = min + k * step) ticks.push(Math.abs(v) < step * 1e-9 ? 0 : v)
   return { min, max, ticks }
+}
+
+/**
+ * How many intervals an automatic value axis of `len` px may have, as Excel allows them: labels of `size` px about
+ * 1.6 times their size apart up the side, a label's width or so apart along the bottom
+ */
+export function intervals(len: number, size: number, across: boolean): number {
+  return Math.max(1, Math.floor(len / (across ? Math.max(40, size * 4.5) : size * 1.6)))
 }
 
 function logScale(lo: number, hi: number, base: number, opts: { min?: number; max?: number }): Scale {
@@ -136,14 +152,17 @@ function textBlock(svg: Svg, t: ChartText, x: number, y: number, maxW: number, a
 }
 
 /** a text's size in px and color: its own look over the chart's */
-const textOf = (m: ChartModel, look: TextLook | undefined) => ({ size: (look?.size ?? m.fontSize) * PX, color: look?.color ?? m.textColor, bold: look?.bold })
+export const textOf = (m: ChartModel, look: TextLook | undefined) => ({ size: (look?.size ?? m.fontSize) * PX, color: look?.color ?? m.textColor, bold: look?.bold })
 
 // ---------------------------------------------------------------- fills: gradients and patterns
 
 const defIds = new WeakMap<Svg, number>()
 
+/** a pattern's tile: 8 pt, in CSS pixels */
+const PATTERN_TILE = Math.round((8 * 96 * 1000) / 72) / 1000
+
 /** the paint for a fill: its color, or a gradient or pattern defined in the picture */
-function fillPaint(svg: Svg, fill: string | null | undefined, look?: FillLook): string {
+export function fillPaint(svg: Svg, fill: string | null | undefined, look?: FillLook): string {
   if (!look || fill === null) return fill ?? 'none'
   const k = (defIds.get(svg) ?? 0) + 1
   defIds.set(svg, k)
@@ -158,61 +177,49 @@ function fillPaint(svg: Svg, fill: string | null | undefined, look?: FillLook): 
       svg.raw(`<defs><linearGradient id="${id}" x1="${r(x1)}%" y1="${r(y1)}%" x2="${r(x2)}%" y2="${r(y2)}%">${stops}</linearGradient></defs>`)
     }
   } else {
-    svg.raw(`<defs><pattern id="${id}" width="8" height="8" patternUnits="userSpaceOnUse"><rect width="8" height="8" fill="${look.bg}"/>${patternTile(look.preset, look.fg)}</pattern></defs>`)
+    svg.raw(`<defs><pattern id="${id}" width="${PATTERN_TILE}" height="${PATTERN_TILE}" viewBox="0 0 8 8" patternUnits="userSpaceOnUse"><rect width="8" height="8" fill="${look.bg}"/>${patternTile(look.preset, look.fg)}</pattern></defs>`)
   }
   return `url(#${id})`
 }
 
-/** an 8 × 8 Bayer matrix: a pattern of n % fills the cells below n % of 64, spread evenly */
-const BAYER = [0, 32, 8, 40, 2, 34, 10, 42, 48, 16, 56, 24, 50, 18, 58, 26, 12, 44, 4, 36, 14, 46, 6, 38, 60, 28, 52, 20, 62, 30, 54, 22, 3, 35, 11, 43, 1, 33, 9, 41, 51, 19, 59, 27, 49, 17, 57, 25, 15, 47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21]
+/**
+ * DrawingML's preset patterns as Office draws them: 8 × 8 bitmaps (the Windows hatch bitmaps), a row per byte, its high
+ * bit at the left. A cell is a point, so the tile is 8 pt wide.
+ */
+const PATTERNS: Record<string, string> = dict({
+  pct5: '8000000008000000', pct10: '8000080080000800', pct20: '8800220088002200', pct25: '8822882288228822',
+  pct30: 'aa44aa11aa44aa11', pct40: 'aa55aa51aa55aa15', pct50: 'aa55aa55aa55aa55', pct60: 'ee55bb55ee55bb55',
+  pct70: '77dd77dd77dd77dd', pct75: '77ffddff77ffddff', pct80: 'effffeffeffffeff', pct90: 'fffffff7ffffff7f',
+  horz: 'ff00000000000000', vert: '8080808080808080', ltHorz: 'ff000000ff000000', ltVert: '8888888888888888',
+  dkHorz: 'ffff0000ffff0000', dkVert: 'cccccccccccccccc', narHorz: 'ff00ff00ff00ff00', narVert: '5555555555555555',
+  dashHorz: 'f00000000f000000', dashVert: '8080808008080808', cross: 'ff80808080808080',
+  dnDiag: '8040201008040201', upDiag: '0102040810204080', ltDnDiag: '8844221188442211', ltUpDiag: '1122448811224488',
+  dkDnDiag: 'cc663399cc663399', dkUpDiag: '3366cc993366cc99', wdDnDiag: 'c1e070381c0e0783', wdUpDiag: '83070e1c3870e0c1',
+  dashDnDiag: '0000884422110000', dashUpDiag: '0000112244880000', diagCross: '8142241818244281',
+  smCheck: '9966669999666699', lgCheck: 'f0f0f0f00f0f0f0f', smGrid: 'ff888888ff888888', lgGrid: 'ff80808080808080',
+  dotGrid: 'aa00800080008000', smConfetti: '8008400210012004', lgConfetti: 'b130031bd8c00c8d', horzBrick: 'ff808080ff080808',
+  diagBrick: '0102040818244281', solidDmnd: '10387cfe7c381000', openDmnd: '8244281028448201', dotDmnd: '8000220008002200',
+  plaid: 'aa55aa55f0f0f0f0', sphere: '77898f8f7798f8f8', weave: '8854224588142251', divot: '0010081000800180',
+  shingle: '038448300c020101', wave: '001825c0001825c0', trellis: 'ff66ff99ff66ff99', zigZag: '8142241881422418',
+})
 
-/** a preset pattern's foreground in an 8 × 8 tile (DrawingML's `prst` names); one not drawn here is shown at 50 % */
+/** a preset pattern's foreground in its 8 × 8 tile, a run of set bits as one rectangle; one not known is drawn at 50 % */
 function patternTile(preset: string, fg: string): string {
-  const cells = (on: (x: number, y: number) => boolean) => {
-    let s = ''
-    for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) if (on(x, y)) s += `M${x} ${y}h1v1h-1z`
-    return s ? `<path d="${s}" fill="${fg}"/>` : ''
+  const bits = PATTERNS[preset] ?? PATTERNS.pct50
+  let d = ''
+  for (let y = 0; y < 8; y++) {
+    const row = parseInt(bits.slice(y * 2, y * 2 + 2), 16)
+    for (let x = 0; x < 8; ) {
+      if (!(row & (0x80 >> x))) {
+        x++
+        continue
+      }
+      const from = x
+      while (x < 8 && row & (0x80 >> x)) x++
+      d += `M${from} ${y}h${x - from}v1h${from - x}z`
+    }
   }
-  const lines = (d: string, w: number) => `<path d="${d}" stroke="${fg}" stroke-width="${w}" fill="none"/>`
-  const horz = (gap: number, w: number, dash = false) => lines(Array.from({ length: 8 / gap }, (_, k) => `M0 ${k * gap + w / 2}H${dash ? 4 : 8}`).join(''), w)
-  const vert = (gap: number, w: number, dash = false) => lines(Array.from({ length: 8 / gap }, (_, k) => `M${k * gap + w / 2} 0V${dash ? 4 : 8}`).join(''), w)
-  const down = (gap: number, w: number) => lines([-8, ...Array.from({ length: 8 / gap }, (_, k) => k * gap)].map((o) => `M${o} 0L${o + 8} 8`).join(''), w)
-  const up = (gap: number, w: number) => lines([16, ...Array.from({ length: 8 / gap }, (_, k) => 8 + k * gap)].map((o) => `M${o} 0L${o - 8} 8`).join(''), w)
-  const pct = /^pct(\d+)$/.exec(preset)
-  if (pct) return cells((x, y) => BAYER[y * 8 + x] < Math.round((Number(pct[1]) / 100) * 64))
-  switch (preset) {
-    case 'horz': return horz(4, 1)
-    case 'ltHorz': return horz(4, 1)
-    case 'narHorz': return horz(2, 1)
-    case 'dkHorz': return horz(4, 2)
-    case 'dashHorz': return horz(4, 1, true)
-    case 'vert': return vert(4, 1)
-    case 'ltVert': return vert(4, 1)
-    case 'narVert': return vert(2, 1)
-    case 'dkVert': return vert(4, 2)
-    case 'dashVert': return vert(4, 1, true)
-    case 'dnDiag': return down(4, 1)
-    case 'ltDnDiag': return down(4, 1)
-    case 'dkDnDiag': return down(4, 2)
-    case 'wdDnDiag': return down(8, 3)
-    case 'dashDnDiag': return down(8, 1)
-    case 'upDiag': return up(4, 1)
-    case 'ltUpDiag': return up(4, 1)
-    case 'dkUpDiag': return up(4, 2)
-    case 'wdUpDiag': return up(8, 3)
-    case 'dashUpDiag': return up(8, 1)
-    case 'cross':
-    case 'smGrid': return horz(4, 1) + vert(4, 1)
-    case 'lgGrid': return horz(8, 1) + vert(8, 1)
-    case 'diagCross':
-    case 'openDmnd': return down(8, 1) + up(8, 1)
-    case 'smCheck': return cells((x, y) => ((x >> 1) + (y >> 1)) % 2 === 0)
-    case 'lgCheck': return cells((x, y) => ((x >> 2) + (y >> 2)) % 2 === 0)
-    case 'solidDmnd': return `<path d="M4 0L8 4L4 8L0 4z" fill="${fg}"/>`
-    case 'dotGrid': return cells((x, y) => x % 4 === 0 && y % 4 === 0)
-    case 'dotDmnd': return cells((x, y) => (x % 4 === 0 && y % 4 === 0) || (x % 4 === 2 && y % 4 === 2))
-    default: return cells((x, y) => BAYER[y * 8 + x] < 32)
-  }
+  return d ? `<path d="${d}" fill="${fg}"/>` : ''
 }
 
 // ---------------------------------------------------------------- markers and lines
@@ -273,7 +280,7 @@ function linePath(pts: Pt[], smooth: boolean): string {
 }
 
 /** a group drawn as lines (its legend entries show a line and a marker) */
-const lined = (g: ChartGroup) => g.type === 'line' || g.type === 'scatter' || g.type === 'stock' || (g.type === 'radar' && g.radarStyle !== 'filled')
+const lined = (g: ChartGroup) => (g.type === 'line' && !g.three) || g.type === 'scatter' || g.type === 'stock' || (g.type === 'radar' && g.radarStyle !== 'filled')
 
 // ---------------------------------------------------------------- legend
 
@@ -372,7 +379,6 @@ function drawRing(svg: Svg, m: ChartModel, g: ChartGroup, s: ChartSeries, o: { c
   const total = vals.reduce((a, b) => a + b, 0)
   if (!total) return
   let a = ((g.firstSliceAng - 90) * Math.PI) / 180
-  const lt = textOf(m, s.labels?.text)
   const n = (x: number) => Math.round(x * 100) / 100
   vals.forEach((v, k) => {
     if (!v) return
@@ -403,17 +409,20 @@ function drawRing(svg: Svg, m: ChartModel, g: ChartGroup, s: ChartSeries, o: { c
         : `M${n(ox)} ${n(oy)} L${n(p1.x)} ${n(p1.y)} A${n(r)} ${n(r)} 0 ${large} 1 ${n(p2.x)} ${n(p2.y)} Z`
       svg.path(d, { fill, stroke, sw })
     }
-    if (s.labels) {
+    const l = labelsAt(s, k)
+    if (l) {
       const parts: string[] = []
-      if (s.labels.series) parts.push(s.name)
-      if (s.labels.category) parts.push(s.cats[k] ?? '')
-      if (s.labels.value) parts.push(fmt(s.values[k]!, s.labels.format ?? s.format, m.date1904))
-      if (s.labels.percent) parts.push(fmt(v / total, s.labels.format && s.labels.format.includes('%') ? s.labels.format : '0%', m.date1904))
-      const lr = outside ? r * 1.15 : rin ? (r + rin) / 2 : r * 0.65
+      if (l.series) parts.push(s.name)
+      if (l.category) parts.push(s.cats[k] ?? '')
+      if (l.value) parts.push(fmt(s.values[k]!, l.format ?? s.format, m.date1904))
+      if (l.percent) parts.push(fmt(v / total, l.format && l.format.includes('%') ? l.format : '0%', m.date1904))
+      const out = outside || l.pos === 'outEnd'
+      const lr = out ? r * 1.15 : l.pos === 'inEnd' ? r * 0.8 : rin ? (r + rin) / 2 : r * 0.65
       const p = at(lr, mid)
-      const anchor = outside ? (Math.cos(mid) >= 0 ? 'start' : 'end') : 'middle'
-      const color = s.labels.text?.color ?? (outside ? m.textColor : '#ffffff')
-      svg.text(p.x, p.y, parts.join(s.labels.sep ?? (outside ? '; ' : '\n')).split('\n'), { size: lt.size, color, bold: lt.bold, anchor })
+      const anchor = out ? (Math.cos(mid) >= 0 ? 'start' : 'end') : 'middle'
+      const lk = textOf(m, l.text)
+      const color = l.text?.color ?? (out ? m.textColor : '#ffffff')
+      svg.text(p.x, p.y, parts.join(l.sep ?? (out ? '; ' : '\n')).split('\n'), { size: lk.size, color, bold: lk.bold, anchor })
     }
     a += sweep
   })
@@ -428,11 +437,11 @@ interface AxisPlan {
   labels: string[]
 }
 
-const isStacked = (g: ChartGroup) => g.grouping === 'stacked' || g.grouping === 'percentStacked'
+export const isStacked = (g: ChartGroup) => g.grouping === 'stacked' || g.grouping === 'percentStacked'
 const xValued = (g: ChartGroup) => g.type === 'scatter' || g.type === 'bubble'
 
 /** the extent of a group's values on its value axis (sums when stacked, 0…1 when 100%) */
-function extent(g: ChartGroup, blanks: ChartModel['blanks'] = 'gap'): [number, number] {
+export function extent(g: ChartGroup, blanks: ChartModel['blanks'] = 'gap'): [number, number] {
   if (g.grouping === 'percentStacked') {
     const neg = g.series.some((s) => s.values.some((v) => v !== null && v < 0))
     return [neg ? -1 : 0, 1]
@@ -470,7 +479,7 @@ function bubbleRoom(lo: number, hi: number): [number, number] {
 }
 
 /** a stacked line's points: each series on top of those before it */
-function cumulative(g: ChartGroup, s: ChartSeries): (number | null)[] {
+export function cumulative(g: ChartGroup, s: ChartSeries): (number | null)[] {
   const i = g.series.indexOf(s)
   return s.values.map((v, k) => {
     if (v === null) return null
@@ -529,7 +538,11 @@ export function renderChart(m: ChartModel, W: number, H: number): string {
   const pie = m.groups.find((g) => g.type === 'pie' || g.type === 'doughnut')
   const radar = m.groups.find((g) => g.type === 'radar')
   const surface = m.groups.find((g) => g.type === 'surface')
-  if (pie) drawPie(svg, m, pie, inner ?? area)
+  const g0 = m.groups[0]
+  if (m.view3d && g0?.three) {
+    if (g0.type === 'pie') drawPie3D(svg, m, g0, inner ?? area)
+    else drawCartesian3D(svg, m, g0, area, inner)
+  } else if (pie) drawPie(svg, m, pie, inner ?? area)
   else if (radar) drawRadar(svg, m, radar, inner ?? area, size)
   else if (surface) drawSurface(svg, m, surface, area, inner, size)
   else drawCartesian(svg, m, area, inner, size)
@@ -546,7 +559,7 @@ function plotArea(svg: Svg, m: ChartModel, b: Box) {
 }
 
 /** a value axis' gridline paint, or null where it has none */
-function gridPaint(m: ChartModel, a: ChartAxis): Paint | null {
+export function gridPaint(m: ChartModel, a: ChartAxis): Paint | null {
   if (!a.gridlines || a.grid === null) return null
   return a.grid ? linePaint(a.grid) : { stroke: m.gridColor }
 }
@@ -558,7 +571,10 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
   // value axes and the groups on them
   const valIds = [...new Set(groups.map((g) => g.axIds[1]).filter(Boolean))]
   const plans = new Map<string, AxisPlan>()
-  const cats = groups.find((g) => !xValued(g))?.series[0]?.cats ?? []
+  // the category axis drawn: the first one shown (a combination's groups each have their own), else the first
+  const catGroups = groups.filter((g) => !xValued(g))
+  const catAxis = catGroups.map((g) => axis(g.axIds[0])).find((a) => a && !a.deleted) ?? axis(catGroups[0]?.axIds[0] ?? '')
+  const cats = catLabels(catGroups[0]?.series[0], catAxis, m.date1904)
   const n = Math.max(1, highest(groups.filter((g) => !xValued(g)).flatMap((g) => g.series.map((s) => s.values.length))))
   const valLen = horizontal ? area.w : area.h
   for (const id of valIds) {
@@ -572,7 +588,7 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
     const whole = on.every((g) => g.grouping === 'percentStacked')
     const scale = a?.logBase
       ? logFor(on.flatMap((g) => g.series.flatMap((s) => s.values)), a.logBase, a)
-      : niceScale(lo, hi, { min: a?.min ?? (whole ? lo : undefined), max: a?.max ?? (whole ? hi : undefined), major: a?.major, ticks: Math.round(valLen / 40) })
+      : niceScale(lo, hi, { min: a?.min ?? (whole ? lo : undefined), max: a?.max ?? (whole ? hi : undefined), major: a?.major, ticks: intervals(valLen, textOf(m, a?.text).size, horizontal) })
     const f = a?.format ?? (pct ? '0%' : on[0]?.series.find((s) => s.format)?.format)
     plans.set(id, { axis: a ?? fallbackAxis(id, horizontal ? 'b' : 'l'), scale: { ...scale, format: f }, labels: scale.ticks.map((t) => fmt(t, f, m.date1904)) })
   }
@@ -590,7 +606,7 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
     if (a?.logBase) sc = logFor(xs, a.logBase, a)
     else {
       const [lo, hi] = on.some((x) => x.type === 'bubble') ? bubbleRoom(lowest(xs), highest(xs)) : [lowest(xs), highest(xs)]
-      sc = niceScale(lo, hi, { min: a?.min, max: a?.max, major: a?.major, ticks: Math.round(area.w / 70) })
+      sc = niceScale(lo, hi, { min: a?.min, max: a?.max, major: a?.major, ticks: intervals(area.w, textOf(m, a?.text).size, true) })
     }
     // linked to its source: the format of the X values, never the Y values'
     const f = a?.format ?? on.flatMap((x) => x.series).find((s) => s.xFormat)?.xFormat
@@ -598,7 +614,6 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
   }
   // the first group's X axis is the one drawn
   const xPlan = scatter ? (xPlans.get(scatter.axIds[0]) ?? null) : null
-  const catAxis = axis(groups.find((g) => !xValued(g))?.axIds[0] ?? '')
   const showCats = !!cats.length && !scatter && !(catAxis?.deleted ?? false) && (catAxis?.labels ?? true)
   const primary = valIds.find((id) => !['r', 't'].includes(plans.get(id)!.axis.pos)) ?? valIds[0]
   const secondary = valIds.find((id) => id !== primary)
@@ -613,10 +628,27 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
   const valW = (p: AxisPlan | undefined) => (shows(p) ? highest(p!.labels.map((l) => textWidth(l, look(p!.axis).size, look(p!.axis).bold))) + 6 : 0)
   const catW = showCats ? Math.min(area.w * 0.35, highest(cats.map((c) => textWidth(c, catT.size, catT.bold)))) + 6 : 0
   const titleH = (a: ChartAxis | undefined) => (a?.title && !a.deleted ? lineHeight(a.title.size * PX) + 4 : 0)
-  // category labels too wide to stand side by side are tilted by 45°, as Excel does
+  // category labels at the angle the file gives; else flat where they fit, wrapped at their spaces where that makes
+  // them fit, and tilted by 45° where neither does, as Excel does
   const catTextW = showCats ? highest(cats.map((c) => textWidth(c, catT.size, catT.bold))) : 0
-  const tilt = showCats && !horizontal && catTextW + 2 > (area.w * 0.85) / n
-  const catBottom = tilt ? Math.min(area.h * 0.4, catTextW * Math.SQRT1_2 + catLh) : catLh + 4
+  const room = (area.w * 0.85) / n
+  let angle = 0
+  let wrapped: string[][] | null = null
+  if (showCats && !horizontal) {
+    if (catAxis?.rot !== undefined) angle = catAxis.rot
+    else if (catTextW + 2 > room) {
+      const ws = cats.map((c) => wrap([c], Math.max(8, room - 2), catT.size, catT.bold))
+      const widest = highest(ws.flatMap((l) => l.map((x) => textWidth(x, catT.size, catT.bold))))
+      if (widest + 2 <= room && highest(ws.map((l) => l.length)) * catLh <= area.h * 0.4) wrapped = ws
+      else angle = -45
+    }
+  }
+  const rad = (Math.abs(angle) * Math.PI) / 180
+  const catBottom = angle
+    ? Math.min(area.h * 0.4, catTextW * Math.sin(rad) + catLh * Math.cos(rad)) + 4
+    : wrapped
+      ? highest(wrapped.map((l) => l.length)) * catLh + 4
+      : catLh + 4
   let inner: Box
   if (fixed) inner = fixed
   else {
@@ -647,17 +679,25 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
   }
   const catReverse = catAxis?.reverse ?? false
   const catLen = horizontal ? inner.h : inner.w
-  // a date axis places each point at its date, a day to a band: dates a week apart are seven bands apart
+  // a date axis places each point at its date, a band to its base unit (a day, a month or a year): days a week
+  // apart are seven bands apart, the firsts of months a band
   const dates = catAxis?.kind === 'date' ? groups.find((g) => !xValued(g))?.series[0]?.catValues : undefined
   const known = dates?.filter((v): v is number => v !== null) ?? []
+  const unit = catAxis?.baseUnit ?? (known.length ? baseUnitOf(known, m.date1904) : 'days')
+  const unitOf = (d: number) => {
+    if (unit === 'days') return Math.floor(d)
+    const t = serialToDate(d, m.date1904)
+    return unit === 'years' ? t.getUTCFullYear() : t.getUTCFullYear() * 12 + t.getUTCMonth()
+  }
   const d0 = catAxis?.min ?? (known.length ? lowest(known) : 0)
   const d1 = catAxis?.max ?? (known.length ? highest(known) : 0)
-  const byDate = known.length > 0 && d1 >= d0
-  const units = byDate ? Math.min(100_000, Math.floor(d1 - d0) + 1) : n
+  const byDate = known.length > 0 && d1 >= d0 && Number.isFinite(d0) && Number.isFinite(d1)
+  const u0 = byDate ? unitOf(d0) : 0
+  const units = byDate ? Math.max(1, Math.min(100_000, unitOf(d1) - u0 + 1)) : n
   const band = catLen / units
   const catMid = (k: number) => {
     const d = byDate ? dates![k] : null
-    let i = d !== null && d !== undefined ? d - d0 : k
+    let i = d !== null && d !== undefined ? unitOf(d) - u0 : k
     // horizontal bars run from the bottom up, as Excel draws them
     if (horizontal !== catReverse) i = units - 1 - i
     return (horizontal ? inner.y : inner.x) + (i + 0.5) * band
@@ -695,19 +735,24 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
       if (shows(xPlan)) svg.text(x, inner.y + inner.h + 4 + lineHeight(t.size) / 2, xPlan.labels[k], { size: t.size, color: t.color, bold: t.bold, anchor: 'middle' })
     }
   }
-  // category labels: flat, tilted where they do not fit flat, and every k-th where they overlap even so
+  // category labels: flat, wrapped or turned, and every k-th where they overlap even so
   if (showCats) {
-    const space = horizontal || tilt ? catLh * (tilt ? Math.SQRT2 : 1) : catTextW + 2
+    // wrapped labels were made to fit their categories: all of them are shown
+    const space = horizontal ? catLh : angle ? catLh / Math.max(0.2, Math.sin(rad)) : wrapped ? 0 : catTextW + 2
     const every = Math.max(1, Math.ceil(space / Math.max(1, band)))
     const y0 = inner.y + inner.h + 4
     const o = { size: catT.size, color: catT.color, bold: catT.bold }
     cats.forEach((c, k) => {
       if (k % every) return
       if (horizontal) svg.text(inner.x - 4, catMid(k), c, { ...o, anchor: 'end' })
-      else if (tilt) {
+      else if (angle) {
+        // turned about its end next to the axis: a label turned back (counterclockwise) ends there, one turned
+        // forward starts there
         const x = catMid(k)
-        svg.raw(`<g transform="rotate(-45 ${Math.round(x)} ${Math.round(y0)})">`).text(x, y0, c, { ...o, anchor: 'end' }).raw('</g>')
-      } else svg.text(catMid(k), y0 + catLh / 2, c, { ...o, anchor: 'middle' })
+        const y = y0 + (catLh / 2) * Math.cos(rad)
+        svg.raw(`<g transform="rotate(${Math.round(angle * 100) / 100} ${Math.round(x)} ${Math.round(y)})">`).text(x, y, c, { ...o, anchor: angle < 0 ? 'end' : 'start' }).raw('</g>')
+      } else if (wrapped) svg.text(catMid(k), y0 + (wrapped[k].length * catLh) / 2, wrapped[k], { ...o, anchor: 'middle' })
+      else svg.text(catMid(k), y0 + catLh / 2, c, { ...o, anchor: 'middle' })
     })
   }
   // the category axis line, where it crosses the value axis: zero (or the bound nearest it), or where the file says
@@ -750,7 +795,7 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
   for (const g of [...groups].sort((a, b) => order(a) - order(b))) {
     const p = plans.get(g.axIds[1]) ?? plans.get(primary)
     if (!p) continue
-    if (g.type === 'bar') drawBars(svg, m, g, p, { valPos, catMid, band, horizontal, size, base: crossOf(p) })
+    if (g.type === 'bar') drawBars(svg, m, g, p, { valPos, catMid, band, horizontal, flip: horizontal !== catReverse, size, base: crossOf(p) })
     else if (g.type === 'area') drawArea(svg, g, p, { valPos, catMid, base: crossOf(p) })
     else if (g.type === 'line') drawLines(svg, m, g, p, { valPos, catMid, size })
     else if (g.type === 'stock') drawStock(svg, m, g, p, { valPos, catMid, band, size })
@@ -767,8 +812,26 @@ function drawCartesian(svg: Svg, m: ChartModel, area: Box, fixed: Box | null, si
 
 const CLIP_MARGIN = 6
 
+/** the base unit Excel picks for dates left to it: years where they all fall on one day of the year, months where they
+ *  all fall on one day of the month, else days */
+function baseUnitOf(dates: number[], date1904: boolean): 'days' | 'months' | 'years' {
+  const ds = dates.slice(0, 1000).map((d) => serialToDate(d, date1904))
+  if (ds.some((d) => !Number.isFinite(d.getTime()))) return 'days'
+  const day = ds[0].getUTCDate()
+  if (ds.length < 2 || ds.some((d) => d.getUTCDate() !== day)) return 'days'
+  return ds.every((d) => d.getUTCMonth() === ds[0].getUTCMonth()) ? 'years' : 'months'
+}
+
 /** while a chart's series are drawn, the layer their data labels go on (unclipped, above them) */
 const labelLayers = new WeakMap<Svg, Svg>()
+
+/** a series' categories as an axis labels them: in the axis' own number format where it has one, else as their cells show them */
+export function catLabels(s: ChartSeries | undefined, a: ChartAxis | undefined, date1904: boolean): string[] {
+  if (!s) return []
+  const f = a?.format
+  if (!f || !s.catValues) return s.cats
+  return s.cats.map((c, k) => (s.catValues![k] !== null && s.catValues![k] !== undefined ? fmt(s.catValues![k]!, f, date1904) : c))
+}
 
 /** where the category axis crosses the value axis: as the file says (`crosses`, `crossesAt`), else zero or the bound nearest it */
 function crossing(s: Scale, cat: ChartAxis | undefined): number {
@@ -788,7 +851,8 @@ interface Geo {
 }
 
 function label(svg: Svg, m: ChartModel, s: ChartSeries, k: number, v: number, x: number, y: number, anchor: 'start' | 'middle' | 'end' = 'middle', color?: string) {
-  const l = s.labels!
+  const l = labelsAt(s, k)
+  if (!l) return
   const parts: string[] = []
   if (l.series) parts.push(s.name)
   if (l.category) parts.push(s.cats[k] ?? '')
@@ -803,7 +867,7 @@ function baseline(s: Scale): number {
   return Math.min(Math.max(0, s.min), s.max)
 }
 
-function drawBars(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo & { band: number; horizontal: boolean; size: number; base: number }) {
+function drawBars(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo & { band: number; horizontal: boolean; flip: boolean; size: number; base: number }) {
   const { valPos, catMid, band, horizontal } = geo
   const stacked = isStacked(g)
   const n = stacked ? 1 : g.series.length
@@ -832,7 +896,9 @@ function drawBars(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo 
         else negSum = to
       }
       const off = stacked ? 0 : i * w * (1 - ov)
-      const c0 = catMid(k) - total / 2 + off
+      // the series of a cluster follow the category axis' direction: the first one nearest its start (a horizontal
+      // bar chart's bottom)
+      const c0 = geo.flip ? catMid(k) + total / 2 - off - w : catMid(k) - total / 2 + off
       const a = valPos(p, from)
       const b = valPos(p, to)
       const pt = s.points[k]
@@ -840,12 +906,20 @@ function drawBars(svg: Svg, m: ChartModel, g: ChartGroup, p: AxisPlan, geo: Geo 
       const paint: Paint = { fill, stroke: s.line?.color ?? (raw < 0 && s.invertIfNegative ? (s.fill ?? undefined) : undefined), sw: s.line ? Math.max(0.75, s.line.width * PX) : 1, dash: s.line ? dashOf(s.line.dash, s.line.width) : undefined }
       if (horizontal) svg.rect(Math.min(a, b), c0, Math.abs(b - a), w, paint)
       else svg.rect(c0, Math.min(a, b), w, Math.abs(b - a), paint)
-      if (s.labels) {
-        const mid = (a + b) / 2
-        const inside = stacked || s.labels.pos === 'ctr' || s.labels.pos === 'inEnd' || s.labels.pos === 'inBase'
-        const lh = lineHeight(textOf(m, s.labels.text).size)
-        if (horizontal) label(svg, m, s, k, raw, inside ? mid : Math.max(a, b) + 4, c0 + w / 2, inside ? 'middle' : 'start', inside ? '#ffffff' : undefined)
-        else label(svg, m, s, k, raw, c0 + w / 2, inside ? mid : Math.min(a, b) - lh / 2, 'middle', inside ? '#ffffff' : undefined)
+      const l = labelsAt(s, k)
+      if (l) {
+        // a clustered bar's label sits past its end unless the file places it; a stacked one's in its middle
+        const pos = l.pos ?? (stacked ? 'ctr' : 'outEnd')
+        const t = textOf(m, l.text)
+        const inside = pos !== 'outEnd'
+        // along the bar: a and b are its base and end; dir points from the base to the end
+        const dir = Math.sign(b - a) || (horizontal ? 1 : -1)
+        const pad = 4
+        const half = horizontal ? textWidth(fmt(raw, l.format ?? s.format, m.date1904), t.size, t.bold) / 2 : lineHeight(t.size) / 2
+        const at = pos === 'outEnd' ? b + dir * (pad + half) : pos === 'inEnd' ? b - dir * (pad + half) : pos === 'inBase' ? a + dir * (pad + half) : (a + b) / 2
+        const color = inside ? '#ffffff' : undefined
+        if (horizontal) label(svg, m, s, k, raw, at, c0 + w / 2, 'middle', color)
+        else label(svg, m, s, k, raw, c0 + w / 2, at, 'middle', color)
       }
     })
   }
@@ -1029,7 +1103,7 @@ const ptOf = ([x, y]: [number, number]): Pt => ({ x, y })
 
 // ---------------------------------------------------------------- surface
 
-interface Band {
+export interface Band {
   lo: number
   hi: number
   label: string
@@ -1038,7 +1112,7 @@ interface Band {
 }
 
 /** a surface's value bands: one per step of its value axis, in the style's colors unless the file gives a band its own */
-function surfaceBands(g: ChartGroup, m: ChartModel): Band[] {
+export function surfaceBands(g: ChartGroup, m: ChartModel): Band[] {
   const a = m.axes.find((x) => x.kind === 'val' && g.axIds.includes(x.id))
   const all = g.series.flatMap((s) => s.values).filter((v): v is number => v !== null)
   const s = niceScale(all.length ? lowest(all) : 0, all.length ? highest(all) : 1, { min: a?.min, max: a?.max, major: a?.major, ticks: 6 })
@@ -1054,7 +1128,7 @@ function surfaceBands(g: ChartGroup, m: ChartModel): Band[] {
 /**
  * A surface seen from above, as Excel's contour chart: categories across, series up, each point of the grid between
  * the values colored by the band its value (interpolated between the four around it) falls in. A wireframe draws the
- * grid's lines in their bands' colors instead. A 3D surface is drawn the same way, flat.
+ * grid's lines in their bands' colors instead. A 3D surface is drawn in its view (chart-3d.ts).
  */
 function drawSurface(svg: Svg, m: ChartModel, g: ChartGroup, area: Box, fixed: Box | null, size: number) {
   const bands = surfaceBands(g, m)

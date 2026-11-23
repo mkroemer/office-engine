@@ -1,3 +1,4 @@
+import { readSavedChart, type ChartModel } from '../xlsx/chart'
 import { fileHex } from '../color'
 import { OpcPackage, relOfType, type Rels } from '../opc'
 import type { RNode } from '../raw'
@@ -59,6 +60,8 @@ export interface ConvHooks {
   comment?(num: string | undefined): string | undefined
   /** the number a footnote / endnote reference shows (its place among the document's notes) */
   note?(kind: 'foot' | 'end', id: string | undefined): string | undefined
+  /** the chart read from the chart part at `target`, where it could be */
+  chart?(target: string): ChartModel | undefined
 }
 
 const sameMarks = (a: string[] | undefined, b: string[] | undefined) => (a?.length ?? 0) === (b?.length ?? 0) && (!a || a.every((x, i) => b![i] === x))
@@ -625,7 +628,11 @@ export class Converter {
       sink.push({ t: 'img', target, w, h, alt: docPr?.a.descr || docPr?.a.title || undefined, href: click ?? href, src, rid: blip?.a['r:embed'], ...(cm ? { cm } : {}) })
       return
     }
-    if (desc(gd, 'chart')) sink.push({ t: 'shape', w, h, label: 'Chart', src })
+    const chart = desc(gd, 'chart')
+    if (chart) {
+      const model = this.hooks.chart?.(this.target(chart.a['r:id']) ?? '')
+      sink.push({ t: 'shape', w, h, label: 'Chart', ...(model ? { chart: model } : {}), src })
+    }
     else if (desc(gd, 'relIds')) sink.push({ t: 'shape', w, h, label: 'Diagram', src })
     else sink.push({ t: 'shape', w: 0, h: 0, src })
   }
@@ -938,6 +945,20 @@ export class DocxDocument {
     readonly comments: DocxComments,
   ) {}
 
+  /** the body's charts by part, read from the values saved with them; a part not read has none (its label shows) */
+  readonly charts = new Map<string, ChartModel>()
+
+  private async readCharts() {
+    for (const rel of this.rels.values()) {
+      if (rel.external || !rel.type.endsWith('/chart') || !this.pkg.has(rel.target) || this.charts.has(rel.target)) continue
+      const model = await readSavedChart(await this.pkg.xml(rel.target), this.theme).catch((e: Error) => {
+        console.warn('[office-engine] chart not read:', e.message)
+        return null
+      })
+      if (model) this.charts.set(rel.target, model)
+    }
+  }
+
   static async open(pkg: OpcPackage, mainPath: string): Promise<DocxDocument> {
     const rels = await pkg.rels(mainPath)
     const themeRel = relOfType(rels, 'theme')
@@ -951,6 +972,7 @@ export class DocxDocument {
       return readDocxComments(pkg, mainPath, new Map())
     })
     const doc = new DocxDocument(pkg, mainPath, rels, styles, numbering, theme, comments)
+    await doc.readCharts()
     const setRel = relOfType(rels, 'settings')
     const settings = setRel ? await pkg.xml(setRel.target).catch(() => undefined) : undefined
     if (settings) {
@@ -1049,6 +1071,7 @@ export class DocxDocument {
       },
       comment: (num) => this.comments.rootOfNum(num),
       note: this.noteText,
+      chart: (target) => this.charts.get(target),
     }
     const conv = new Converter(this.styles, this.numbering, this.theme, this.rels, hooks)
     const baseMeta = {
@@ -1146,7 +1169,7 @@ export class DocxDocument {
   reconvert(pid: number, xml: string, map: GenRun[], layer: Layer | undefined, marker?: ListMarker): { blocks: Block[]; rec: ParaRecord } {
     const root = parseXml(xml, undefined, DOCX_UNDERSTOOD)
     const forced: NonNullable<ConvHooks['forced']> = { pid, root, map, layer, marker }
-    const conv = new Converter(this.styles, this.numbering, this.theme, this.rels, { forced, note: this.noteText })
+    const conv = new Converter(this.styles, this.numbering, this.theme, this.rels, { forced, note: this.noteText, chart: (target) => this.charts.get(target) })
     const out: Block[] = []
     conv.paragraph(root, out)
     return { blocks: out, rec: forced.rec! }

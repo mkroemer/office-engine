@@ -6,6 +6,7 @@ import { OpcPackage, relOfType, relsOfType, type Rels } from '../opc'
 import { parseTheme, type Theme } from '../theme'
 import { emuToPx } from '../units'
 import { decodeXml, kid, kids, num, path, textOf, type XEl } from '../xml'
+import { readSavedChart, type ChartModel } from '../xlsx/chart'
 import type { Box, Fill, PParaSpec, PresentationMeta, PRunSet, SlideEl, SlideModel, Stroke, TCell, TextBody, TPara, TRun } from './types'
 import {
   clone, el, escText, getAttr, isNode, kidOf, kidsOf, local, parseRaw, prefixOf, removeKids, serialize, setAttr, setOrdered, walkOoxml,
@@ -299,6 +300,8 @@ export class PptxPresentation {
   /** the comments (read in `open`) */
   comments = new PptxComments()
   private layouts = new Map<string, Promise<Layout>>()
+  /** charts by part, read once however many slides show them */
+  private charts = new Map<string, Promise<ChartModel | null>>()
   private tableStyles?: Promise<Map<string, XEl>>
   readonly meta: PresentationMeta
 
@@ -428,6 +431,12 @@ export class PptxPresentation {
     if (master && showSlideMaster && layout?.root.a.showMasterSp !== '0') r.walk(master, master.spTree, identity, els, true)
     if (layout && showSlideMaster) r.walk(layout, layout.spTree, identity, els, true)
     r.walk(slide, slide.spTree, identity, els, false)
+    // charts take the place of their frames' placeholders where their parts can be read
+    for (const c of r.charts) {
+      const i = els.indexOf(c.el)
+      const model = i >= 0 ? await this.chart(c.target, theme) : null
+      if (model) els[i] = { t: 'chart', box: c.el.box, model, ...(c.el.top !== undefined ? { top: c.el.top } : {}) }
+    }
     return {
       index,
       w: this.meta.w,
@@ -438,6 +447,18 @@ export class PptxPresentation {
       title: r.title,
       notes: await this.notesOf(slide.rels),
     }
+  }
+
+  private chart(target: string, theme: Theme): Promise<ChartModel | null> {
+    let c = this.charts.get(target)
+    if (!c) {
+      c = (async () => (this.pkg.has(target) ? readSavedChart(await this.pkg.xml(target), theme) : null))().catch((e: Error) => {
+        console.warn('[office-engine] chart not read:', e.message)
+        return null
+      })
+      this.charts.set(target, c)
+    }
+    return c
   }
 
   /** every slide's title placeholder text ('' where there is none): its XML only, nothing laid out */
@@ -635,6 +656,8 @@ function readXfrm(x: XEl | undefined): Box | undefined {
 class SlideRenderer {
   /** the text of the slide's title placeholder, once walked */
   title: string | undefined
+  /** chart frames walked: their placeholders and their chart parts, read after the walk */
+  readonly charts: { el: SlideEl & { t: 'placeholder' }; target: string }[] = []
   constructor(
     private pres: PptxPresentation,
     private slide: Part,
@@ -1122,7 +1145,10 @@ class SlideRenderer {
     if (shown) return void out.push({ t: 'pic', box, target: shown })
     const uri = gd.a.uri ?? ''
     const label = uri.includes('chart') ? 'Chart' : uri.includes('diagram') ? 'SmartArt' : uri.includes('ole') ? 'Embedded object' : 'Object'
-    out.push({ t: 'placeholder', box, label })
+    const ph: SlideEl & { t: 'placeholder' } = { t: 'placeholder', box, label }
+    out.push(ph)
+    const chart = uri.includes('chart') ? part.rels.get(kid(gd, 'chart')?.a['r:id'] ?? '') : undefined
+    if (chart && !chart.external) this.charts.push({ el: ph, target: chart.target })
   }
 
   private table(tbl: XEl, box: Box, part: Part, sid?: number): SlideEl {

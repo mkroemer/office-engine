@@ -1,3 +1,4 @@
+import type { ChartModel } from '../xlsx/chart'
 /** Geometry in px (96 dpi, EMU/9525); font sizes in pt. */
 
 export type Fill =
@@ -80,6 +81,8 @@ export type SlideEl = (
   /** `sid`: id of the graphic frame, on the slide's own tables (cell text editing) */
   | { t: 'table'; box: Box; cols: number[]; rows: { h: number; cells: TCell[] }[]; sid?: number }
   | { t: 'placeholder'; box: Box; label: string }
+  /** a chart, drawn from the values saved with it */
+  | { t: 'chart'; box: Box; model: ChartModel }
 ) & { top?: number }
 
 /** 'text', 'line', 'image' or any DrawingML preset geometry name (rect, ellipse, star5, chevron…) */

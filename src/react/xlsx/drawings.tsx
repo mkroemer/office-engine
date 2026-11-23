@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import type { DocumentClient } from '../../core/worker/client'
-import type { ChartModel } from '../../core/xlsx/chart'
-import { renderChart } from '../../core/xlsx/chart-svg'
+import { chartUrl, releaseChart } from '../common/chart'
 import type { SheetDrawing } from '../../core/xlsx/drawings'
 import { MAX_COL, MAX_ROWS } from '../../core/xlsx/limits'
 import { Icon } from '../edit/Toolbar'
@@ -55,35 +54,8 @@ export function useSheetDrawings(client: DocumentClient, sheet: number, edits = 
   return list
 }
 
-/** each chart's picture, drawn for the size it was last shown at ('' when it could not be drawn at that size) */
-const chartUrls = new WeakMap<ChartModel, { key: string; url: string }>()
-
-/**
- * The chart drawn at `w` × `h` as an SVG picture's object URL (in an img: nothing in it runs), or '' when drawing it
- * failed: it is drawn in the grid's render, so a chart a crafted file breaks shows its placeholder box, not a blank view.
- */
-function chartUrl(m: ChartModel, w: number, h: number): string {
-  const key = `${Math.round(w)}x${Math.round(h)}`
-  const had = chartUrls.get(m)
-  if (had?.key === key) return had.url
-  if (had?.url) URL.revokeObjectURL(had.url)
-  let url = ''
-  try {
-    url = URL.createObjectURL(new Blob([renderChart(m, Math.round(w), Math.round(h))], { type: 'image/svg+xml' }))
-  } catch (e) {
-    console.warn('[office-engine] chart not drawn:', (e as Error).message)
-  }
-  chartUrls.set(m, { key, url })
-  return url
-}
-
 function releaseCharts(list: ShownDrawing[]) {
-  for (const d of list) {
-    const had = d.model && chartUrls.get(d.model)
-    if (!had) continue
-    if (had.url) URL.revokeObjectURL(had.url)
-    chartUrls.delete(d.model!)
-  }
+  for (const d of list) releaseChart(d.model)
 }
 
 /**

@@ -3,6 +3,7 @@ import { cssColor, cssPaint } from '../../core/color'
 import type { Box, Fill, SlideEl, SlideModel, Stroke, TCell, TextBody, TRun } from '../../core/pptx/types'
 import { safeHref } from '../../core/url'
 import type { DocumentClient } from '../../core/worker/client'
+import { chartUrl } from '../common/chart'
 import { useMediaUrl } from '../common/hooks'
 import { useStrings } from '../strings'
 import { geomPath, LINE_GEOMS } from './geometry'
@@ -224,6 +225,17 @@ function ShapeView({ el, client, live, editing }: { el: Extract<SlideEl, { t: 's
   )
 }
 
+/** a chart drawn from its model at its frame's size; its placeholder box where it cannot be drawn */
+function ChartView({ el }: { el: Extract<SlideEl, { t: 'chart' }> }) {
+  const str = useStrings()
+  const url = chartUrl(el.model, el.box.w, el.box.h)
+  return (
+    <div className="de-el" style={{ ...boxStyle(el.box), ...(url ? {} : { display: 'flex' }) }} data-top={el.top}>
+      {url ? <img src={url} alt={str.xlsx.drawings.chart} style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%' }} draggable={false} /> : <div className="de-ph" style={{ width: '100%', height: '100%' }}>{str.xlsx.drawings.chart}</div>}
+    </div>
+  )
+}
+
 function PicView({ el, client, live }: { el: Extract<SlideEl, { t: 'pic' }>; client: DocumentClient; live: boolean }) {
   const url = useMediaUrl(client, el.target, live)
   const str = useStrings()
@@ -303,6 +315,8 @@ function ElView({ el, client, live, editing }: { el: SlideEl; client: DocumentCl
       return <PicView el={el} client={client} live={live} />
     case 'table':
       return <TableView el={el} client={client} live={live} editing={editing} />
+    case 'chart':
+      return <ChartView el={el} />
     case 'placeholder':
       return (
         <div className="de-el de-ph" style={{ ...boxStyle(el.box), display: 'flex' }} data-top={el.top}>
