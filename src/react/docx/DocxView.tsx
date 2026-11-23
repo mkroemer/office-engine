@@ -4,7 +4,7 @@ import { DEFAULT_PAGE } from '../../core/docx/types'
 import { registerHost } from '../../collab/hosts'
 import { safeHref } from '../../core/url'
 import type { DocumentClient } from '../../core/worker/client'
-import { claimFocus, lowerIndex, useForceUpdate, useIsoLayoutEffect, useScroll, useSize } from '../common/hooks'
+import { claimFocus, lowerIndex, useForceUpdate, useIsoLayoutEffect, useSize } from '../common/hooks'
 import { useFileOps, useSelectAll, useViewer } from '../common/Slots'
 import { Status } from '../common/Status'
 import { ZoomControl, type Zoom } from '../common/ZoomControl'
@@ -28,6 +28,7 @@ import { docxBodyHtml, docxToHtml, docxToMarkdown, docxToText, pictureData } fro
 import { BlockView, contextual, type RenderCtx } from './render'
 import { columnsOf, headOf, pageAt, pageHF, pagesOf, paginate, pieceOf, type Lines, type PageSlice } from './paginate'
 import { lineStarts, paraLines, tableLines } from './measure'
+import { useLongScroll } from './longscroll'
 import { layoutTabs } from './tabs'
 import { formatCount, formatNumber, useStrings } from '../strings'
 import { docxFonts, docxPageFonts } from '../../core/fonts'
@@ -96,7 +97,7 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   const [done, setDone] = useState<{ error?: string } | null>(null)
   const [zoom, setZoom] = useState<Zoom>(initialZoom)
   const [scrollRef, size] = useSize<HTMLDivElement>()
-  const scroll = useScroll(scrollRef)
+  const scroll = useLongScroll(scrollRef, '.de-page')
   const pagesRef = useRef<HTMLDivElement>(null)
   const [domSel, setDomSel] = useState<number[]>([])
   const editor = useMemo(() => new DocxEditor(client, st, bump), [client, st, bump])
@@ -225,18 +226,17 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
   const totalH = acc + skeleton * (pageH * z + GAP) + PAD - GAP
   const spacerH = Math.min(totalH, MAX_SCROLL_PX)
   const maxLogicalY = Math.max(0, totalH - size.h)
-  const maxScrollY = Math.max(0, spacerH - size.h)
-  const scrollScale = maxScrollY > 0 ? Math.max(1, maxLogicalY / maxScrollY) : 1
-  const scrollY = Math.min(maxLogicalY, scroll.y * scrollScale)
-  const scrollOffset = scrollY - scroll.y
-  const scrollToY = (y: number) => {
-    if (scrollRef.current) scrollRef.current.scrollTop = Math.max(0, Math.min(maxLogicalY, y)) / scrollScale
-  }
-  /** the logical position (in `tops`) of a physical `scrollTop` */
-  const logicalY = (top: number) => Math.min(maxLogicalY, top * scrollScale)
-  const scrollByY = (delta: number) => {
-    if (scrollRef.current) scrollRef.current.scrollTop += delta / scrollScale
-  }
+  // Past the cap the box scrolls over less than the document is long. `scroll.map` says which place of the document
+  // (a position in `tops`) a scroll position shows, and the pages are drawn `scrollOffset` higher in the box than they
+  // are in the document. That only changes on a jump (the scrollbar) or when the box rests: a step of the reader, or of
+  // the browser for the caret, scrolls the pages by itself, once and as far as it goes, like in a short document.
+  scroll.map.fit(maxLogicalY, Math.max(0, spacerH - size.h), size.h, z)
+  const capped = scroll.map.capped
+  const scrollOffset = capped ? scroll.off : 0
+  /** the place of the document at the top of the box, as drawn */
+  const scrollY = Math.max(0, Math.min(maxLogicalY, scroll.y + scrollOffset))
+  const scrollToY = scroll.to
+  const scrollByY = scroll.by
   const renderedScroll = useRef(scroll.y)
   useIsoLayoutEffect(() => { renderedScroll.current = scroll.y })
   // A native scroll changes the viewport before useScroll's frame-batched
@@ -282,18 +282,18 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
     }
     if (again.current.next === 0 && a?.gen !== fonts.gen) {
       // (nothing measured again yet: these are the pages the reader sees)
-      const y = logicalY(sc.scrollTop)
+      const y = scroll.now()
       const pi = lowerIndex(tops, y)
       let bi = pages[pi].start
       while (bi < pages[pi].end - 1 && blockTop(pi, bi + 1) <= y) bi++
       anchor.current = { gen: fonts.gen, bi, dy: blockTop(pi, bi) - y, y }
-    } else if (a && Math.abs(sc.scrollTop - a.y) <= 1) {
+    } else if (a && Math.abs(scroll.now() - a.y) <= 1) {
       const pi = pages.findIndex((p) => a.bi >= p.start && a.bi < p.end)
       // the first part of the block as drawn; not there while where its lines start is read, or when its page is out of view
       const el = root.querySelector<HTMLElement>(`[data-pa="${a.bi}"]:not([data-from])`)
       if (el) scrollByY(el.getBoundingClientRect().top - sc.getBoundingClientRect().top - a.dy)
       else if (pi >= 0) scrollToY(blockTop(pi, a.bi) - a.dy)
-      a.y = sc.scrollTop
+      a.y = scroll.now()
       // (released once the block is placed by what is drawn)
       if (again.current.next < 0 && el) anchor.current = null
     } else anchor.current = null
@@ -1087,7 +1087,8 @@ export function DocxView({ client, onStatus, initialZoom = 'fit' }: DocxViewProp
         <div
           ref={pagesRef}
           className={isEditing ? 'de-pages de-editing' : 'de-pages'}
-          style={{ height: spacerH, width: totalW, overflow: scrollScale > 1 ? 'clip' : undefined }}
+          // (capped: a page drawn past the end of the box's range must not lengthen it, and the box is scrolled by `ScrollMap` alone when pages move in it)
+          style={{ height: spacerH, width: totalW, overflow: capped ? 'clip' : undefined, overflowAnchor: capped ? 'none' : undefined }}
           contentEditable={isEditing || undefined}
           suppressContentEditableWarning
           spellCheck={false}
