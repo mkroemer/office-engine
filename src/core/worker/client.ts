@@ -121,6 +121,11 @@ export class DocumentClient {
   /** calls the engine directly, bypassing `interceptor` */
   direct<M extends keyof Methods>(method: M, ...args: Parameters<Methods[M]>): Promise<ReturnType<Methods[M]>> {
     if (this.destroyed) return Promise.reject(new Error('Document closed'))
+    // a worker has no page to resolve an address against: font files are named by their whole address
+    if (method === 'fonts.set' && typeof document !== 'undefined') {
+      const fonts = args[0] as Parameters<Methods['fonts.set']>[0]
+      ;(args as unknown[])[0] = fonts.map((f) => (typeof f.src === 'string' ? { ...f, src: new URL(f.src, document.baseURI).href } : f))
+    }
     if (this.engine) return this.engine.call(method, args) as Promise<ReturnType<Methods[M]>>
     const id = ++this.seq
     return new Promise((resolve, reject) => {
