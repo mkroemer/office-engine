@@ -417,13 +417,17 @@ describe('slides as pages', () => {
     expect(svg).toContain('office-engine')
   })
 
-  test('hidden slides are left out unless asked for', async () => {
+  test('hidden slides are left out unless asked for, also when named', async () => {
     const engine = new Engine(() => {})
     await engine.open(new Uint8Array(readFileSync('playground/public/samples/sample.pptx')), { name: 'sample.pptx' })
     await engine.call('pptx.slides', [{ op: 'hide', index: 1, hidden: true }])
     const count = async (opts: object) => /\/Count (\d+)/.exec(latin1(new Uint8Array(await ((await engine.call('pdf', [opts])) as Blob).arrayBuffer())))![1]
     expect(await count({})).toBe('4')
     expect(await count({ hidden: true })).toBe('5')
+    // named, a hidden slide is still left out: a list of slides does not show what was hidden
+    expect(await count({ slides: [0, 1] })).toBe('1')
+    expect(await count({ slides: [1], hidden: true })).toBe('1')
+    expect(engine.call('pdf', [{ slides: [1] }])).rejects.toThrow('Every slide asked for is hidden')
   })
 
   test('a page as SVG', () => {

@@ -18,9 +18,9 @@ export interface MeasuredText extends Omit<TextMeasure, 'pieces'> {
 }
 
 export interface PdfExport {
-  /** the slides written, by index (default all but the hidden ones) */
+  /** the slides written, by index (default all); hidden ones only with `hidden` */
   slides?: number[]
-  /** hidden slides too, when `slides` does not say (default false) */
+  /** hidden slides are written too (default false: not even when `slides` names them) */
   hidden?: boolean
   /** the document's title in the file's metadata */
   title?: string

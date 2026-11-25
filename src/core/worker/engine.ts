@@ -321,11 +321,12 @@ export class Engine {
     const pres = this.pptx
     if (!pres) throw new Error('PDF output is written for presentations only so far (p10node/office-engine#44)')
     const all = pres.meta.slides
-    const which = opts.slides ?? all.filter((s) => opts.hidden || !s.hidden).map((s) => s.index)
-    if (!which.length) throw new Error(opts.slides ? 'No slides were asked for' : 'Every slide is hidden: ask for them with `hidden: true`')
+    for (const i of opts.slides ?? []) if (!all[i]) throw new Error(`No slide #${i}`)
+    // hidden slides only when asked for, even when named: a list of pages does not show what was hidden
+    const which = (opts.slides ?? all.map((s) => s.index)).filter((i) => opts.hidden || !all[i].hidden)
+    if (!which.length) throw new Error(opts.slides?.length ? 'Every slide asked for is hidden: ask for them with `hidden: true`' : opts.slides ? 'No slides were asked for' : 'Every slide is hidden: ask for them with `hidden: true`')
     const pages: Page[] = []
     for (const i of which) {
-      if (!all[i]) throw new Error(`No slide #${i}`)
       pages.push(await this.slidePage(await pres.slide(i)))
     }
     const bytes = await writePdf(pages, { ...(opts.title ? { title: opts.title } : {}), onWarning: (text) => this.warn(text) })
