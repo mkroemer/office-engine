@@ -32,6 +32,8 @@ export interface OpenParams {
    * colored in it, whatever its name and type say. Without it, the name (main.ts) or MIME type tells a source file.
    */
   language?: string
+  /** gzip-compressed files (.csv.gz, .svgz): bytes they may unpack to (default: no limit) */
+  maxUnpacked?: number
 }
 
 export interface OpenResult {

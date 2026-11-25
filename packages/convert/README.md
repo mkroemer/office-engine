@@ -16,7 +16,7 @@ npm i -g @p10node/convert      # or: bunx @p10node/convert …
 
 ```sh
 office-convert report.doc                       # report.docx next to it
-office-convert report.doc out/report.docx       # the format from the output's extension
+office-convert report.doc out/report.docx       # the format from the output's extension (an output that exists: -o and --force)
 office-convert *.xls *.ods -o converted/        # several at once, into a directory
 office-convert sales.xlsx -t csv --sheet Q3     # a sheet as CSV
 cat notes.md | office-convert - --name notes.md -t html -o - > notes.html
@@ -29,7 +29,7 @@ office-convert serve -p 3000                    # the HTTP service
 | `-o, --out`       | next to each input; a file (one input, `-` for stdout) or a directory |
 | `--sheet`         | CSV / TSV: the sheet the file was saved on; an index or a name |
 | `--encoding`      | text files: a guess (UTF-8, UTF-16, Windows-1252…)         |
-| `-f, --force`     | existing files are not overwritten                         |
+| `-f, --force`     | existing files are not overwritten; an input never is, under any name |
 | `-j, --jobs`      | files at once: the number of CPUs                          |
 | `--timeout`       | 120 s per file (0: no limit)                               |
 | `--max-size`      | 100 MB per file                                            |
@@ -74,12 +74,13 @@ One file gives the converted file, several a ZIP. Gotenberg's headers are read: 
 | Status | When                                                                 |
 |--------|----------------------------------------------------------------------|
 | 400    | no file, too many files, a format the file cannot be written as      |
-| 413    | the request is larger than `MAX_SIZE`                                |
+| 405    | not a POST                                                           |
+| 413    | the request is larger than `MAX_SIZE`, or the converted file would be larger than 1 GB |
 | 422    | the file cannot be read: damaged, encrypted, not a format the engine knows |
 | 501    | PDF                                                                  |
 | 503    | the file took longer than `TIMEOUT`, or every thread is busy and the queue is full (`Retry-After`) |
 
-Settings, as flags of `office-convert serve` or environment variables: `PORT` (3000), `HOST` (0.0.0.0), `WORKERS` (the number of CPUs), `TIMEOUT` (120 s), `MAX_SIZE` (100 MB per request), `MAX_FILES` (20 per request). Each conversion runs on a worker thread: one past its time, or whose client hung up, ends with its thread. The engine's own limits for crafted files (ZIP entries, unpacked sizes, cells, chart points) apply as in the browser.
+Settings, as flags of `office-convert serve` or environment variables: `PORT` (3000), `HOST` (0.0.0.0), `WORKERS` (the number of CPUs), `TIMEOUT` (120 s), `MAX_SIZE` (100 MB per request), `MAX_FILES` (20 per request). Each conversion runs on a worker thread: one past its time, or whose client hung up, ends with its thread, and when one file of a request fails the others are given up. At most 100 files, and 1 GB of them, wait for a thread; more is answered `503`. A gzip-compressed file unpacks to 1 GB at most. The engine's own limits for crafted files (ZIP entries, unpacked sizes, cells, chart points) apply as in the browser.
 
 ## API
 
@@ -98,4 +99,4 @@ const handler = createHandler(converter, { maxBytes: 50 * 1024 * 1024 })
 await listen(handler, { port: 3000 })   // Bun.serve under Bun, node:http under Node
 ```
 
-`convert` resolves with `{ data: Uint8Array, name, type, ext, kind, from?, warnings }` and rejects with a `ConvertError` (`code`: `unsupported`, `not-implemented`) for a request it cannot do, an `Error` for a file it cannot read. `Converter` adds `TimeoutError`, `BusyError` and `ThreadError` (the thread ran out of memory or crashed).
+`convert` resolves with `{ data: Uint8Array, name, type, ext, kind, from?, warnings }` and rejects with a `ConvertError` (`code`: `unsupported`, `not-implemented`, `too-large`) for a request it cannot do, an `Error` for a file it cannot read. Its limits: `maxOutput` (the file written, 1 GB) and `maxUnpacked` (a gzip-compressed input, 1 GB). `Converter` takes `workers`, `timeout`, `queue` (100), `bytes` (1 GB of input running and waiting) and `memory` (MB of heap per thread, Node only), copies the bytes it is given, and adds `TimeoutError`, `BusyError` and `ThreadError` (the thread ran out of memory or crashed).

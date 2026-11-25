@@ -12,6 +12,8 @@ export interface ConverterOptions {
   workers?: number
   /** conversions waiting for a thread before more are refused with a `BusyError` (default 100) */
   queue?: number
+  /** bytes of input running and waiting before more are refused with a `BusyError` (default 1 GB; one file is always taken when none is) */
+  bytes?: number
   /** milliseconds a conversion may take before its thread is ended (default 120000; 0: no limit) */
   timeout?: number
   /** megabytes of JavaScript heap a thread may use (Node only: Bun has no such limit) */
@@ -48,6 +50,8 @@ interface Task {
   signal?: AbortSignal
   resolve: (r: Converted) => void
   reject: (e: Error) => void
+  /** while it waits: what takes it out of the queue when its signal aborts */
+  onAbort?: () => void
 }
 
 interface Thread {
@@ -65,7 +69,11 @@ export class Converter {
   readonly workers: number
   readonly timeout: number
   private readonly queueMax: number
+  private readonly bytesMax: number
   private readonly memory?: number
+  /** input bytes of the conversions running and waiting */
+  private bytes = 0
+  private tasks = 0
   private readonly idle: Thread[] = []
   private readonly busy = new Set<Thread>()
   private readonly waiting: Task[] = []
@@ -76,6 +84,7 @@ export class Converter {
     this.workers = Math.max(0, Math.floor(opts.workers ?? availableParallelism()))
     this.timeout = opts.timeout ?? 120_000
     this.queueMax = opts.queue ?? 100
+    this.bytesMax = opts.bytes ?? 1024 * 1024 * 1024
     this.memory = opts.memory
   }
 
@@ -89,29 +98,50 @@ export class Converter {
     if (!this.workers) return convert(data, opts)
     const { signal, ...rest } = opts
     if (signal?.aborted) return Promise.reject(signal.reason)
+    const size = data.byteLength
+    if (this.tasks && this.bytes + size > this.bytesMax) return Promise.reject(new BusyError())
+    const idle = this.idle.length > 0 || this.busy.size < this.workers
+    if (!idle && this.waiting.length >= this.queueMax) return Promise.reject(new BusyError())
+    this.bytes += size
+    this.tasks++
+    const done = () => {
+      this.bytes -= size
+      this.tasks--
+    }
     return new Promise<Converted>((resolve, reject) => {
-      const task: Task = { data, opts: rest, signal, resolve, reject }
+      const task: Task = {
+        data,
+        opts: rest,
+        signal,
+        resolve: (r) => (done(), resolve(r)),
+        reject: (e) => (done(), reject(e)),
+      }
       const thread = this.idle.pop() ?? (this.busy.size < this.workers ? this.spawn() : undefined)
       if (thread) return this.run(thread, task)
-      if (this.waiting.length >= this.queueMax) return reject(new BusyError())
       this.waiting.push(task)
-      signal?.addEventListener(
-        'abort',
-        () => {
+      if (signal) {
+        task.onAbort = () => {
           const at = this.waiting.indexOf(task)
           if (at < 0) return
           this.waiting.splice(at, 1)
-          reject(signal.reason)
-        },
-        { once: true },
-      )
+          task.reject(signal.reason)
+        }
+        signal.addEventListener('abort', task.onAbort, { once: true })
+      }
     })
+  }
+
+  /** the next conversion waiting, its abort listener gone */
+  private dequeue(): Task | undefined {
+    const task = this.waiting.shift()
+    if (task?.onAbort) task.signal?.removeEventListener('abort', task.onAbort)
+    return task
   }
 
   /** ends every thread; conversions under way and waiting are rejected */
   async close(): Promise<void> {
     this.closed = true
-    for (const t of this.waiting.splice(0)) t.reject(new Error('The converter is closed'))
+    for (let t = this.dequeue(); t; t = this.dequeue()) t.reject(new Error('The converter is closed'))
     const all = [...this.idle.splice(0), ...this.busy]
     this.busy.clear()
     for (const t of all) this.end(t, new Error('The converter is closed'))
@@ -150,9 +180,15 @@ export class Converter {
       signal.addEventListener('abort', thread.abort, { once: true })
     }
     const id = ++this.seq
-    // the bytes move to the thread: the caller's copy is left empty when it owns the whole buffer
-    const data = task.data.byteOffset === 0 && task.data.byteLength === task.data.buffer.byteLength ? task.data : task.data.slice()
-    thread.worker.postMessage({ id, data, opts: task.opts } satisfies Job, [data.buffer as ArrayBuffer])
+    try {
+      // a copy of its own moves to the thread: the caller's bytes stay as they are (a Node Buffer may share its memory with others)
+      const data = new Uint8Array(task.data)
+      thread.worker.postMessage({ id, data, opts: task.opts } satisfies Job, [data.buffer as ArrayBuffer])
+    } catch (e) {
+      // (options that cannot be sent: the thread takes the next conversion)
+      this.release(thread)
+      task.reject(e as Error)
+    }
   }
 
   /** the thread is done with its task: it takes the next one, or waits */
@@ -166,7 +202,7 @@ export class Converter {
 
   private next(thread: Thread): void {
     if (this.closed) return
-    const task = this.waiting.shift()
+    const task = this.dequeue()
     if (task) return this.run(thread, task)
     thread.worker.unref()
     this.idle.push(thread)
@@ -184,7 +220,7 @@ export class Converter {
     if (at >= 0) this.idle.splice(at, 1)
     this.end(thread, err)
     if (!known || this.closed) return
-    const task = this.waiting.shift()
+    const task = this.dequeue()
     if (task) this.run(this.spawn(), task)
   }
 

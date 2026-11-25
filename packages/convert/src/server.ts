@@ -58,22 +58,32 @@ export function createHandler(converter: Converter, opts: ServiceOptions = {}): 
       const gotenberg = path === '/forms/libreoffice/convert'
       if (path !== '/convert' && !gotenberg) throw new HttpError(404, 'Not found')
       if (req.method !== 'POST') throw new HttpError(405, 'Method not allowed: POST the files')
+      // Gotenberg's LibreOffice route writes PDF whatever else it is told: answered before the body is read
+      if (gotenberg) throw new ConvertError('PDF output is not available yet: it needs the layout of p10node/office-engine#44', 'not-implemented')
 
       const { files, fields } = await readRequest(req, url, maxBytes)
       if (!files.length) throw new HttpError(400, 'No file: POST the files as multipart/form-data, or one file as the body')
       if (files.length > maxFiles) throw new HttpError(400, `Too many files: at most ${maxFiles} in one request`)
-      // Gotenberg's LibreOffice route writes PDF whatever else it is told
       const field = fields.get('to')
-      const to = gotenberg ? 'pdf' : field ? targetOf(field) : undefined
+      const to = field ? targetOf(field) : undefined
       if (to === null) throw new HttpError(400, `Unknown format “${field}”`)
       const options: ConvertOptions = {
         ...(to ? { to: to as Target } : {}),
         ...(fields.get('sheet') ? { sheet: fields.get('sheet')! } : {}),
         ...(fields.get('encoding') ? { encoding: fields.get('encoding')! } : {}),
         ...(fields.get('language') ? { language: fields.get('language')! } : {}),
-        signal: req.signal,
       }
-      const results = await Promise.all(files.map(async (f) => converter.convert(f.data, { ...options, name: f.name })))
+      // one file failing (busy, too large, damaged) fails the request: the others are given up with it
+      const batch = new AbortController()
+      const signal = AbortSignal.any([req.signal, batch.signal])
+      const results = await Promise.all(
+        files.map((f) =>
+          converter.convert(f.data, { ...options, name: f.name, signal }).catch((e: Error) => {
+            batch.abort(e)
+            throw e
+          }),
+        ),
+      )
       const outName = req.headers.get('gotenberg-output-filename')?.trim()
       return answer(results.length === 1 ? fileResponse(results[0], outName) : await zipResponse(results, outName))
     } catch (e) {
@@ -160,10 +170,12 @@ function fileResponse(r: Converted, outName?: string): Response {
 
 async function zipResponse(results: Converted[], outName?: string): Promise<Response> {
   const entries = new Map<string, Uint8Array>()
+  const taken = new Set<string>()
   for (const r of results) {
-    // two inputs of the same name: the second is report (2).docx
+    // two inputs of the same name: the second is report (2).docx (the ZIP writer takes names without their case)
     let name = r.name
-    for (let n = 2; entries.has(name); n++) name = r.name.replace(/(\.[^.]*)?$/, ` (${n})$1`)
+    for (let n = 2; taken.has(name.toLowerCase()); n++) name = r.name.replace(/(\.[^.]*)?$/, ` (${n})$1`)
+    taken.add(name.toLowerCase())
     entries.set(name, r.data)
   }
   const zip = await writeZip(entries)
@@ -176,7 +188,7 @@ function errorResponse(e: unknown): Response {
   const err = e as Error
   const status =
     e instanceof HttpError ? e.status
-    : e instanceof ConvertError ? (e.code === 'not-implemented' ? 501 : 400)
+    : e instanceof ConvertError ? (e.code === 'not-implemented' ? 501 : e.code === 'too-large' ? 413 : 400)
     : e instanceof BusyError || e instanceof TimeoutError ? 503
     : e instanceof ThreadError ? 500
     : err?.name === 'AbortError' ? 499

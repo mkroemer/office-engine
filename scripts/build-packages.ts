@@ -107,7 +107,8 @@ async function buildServer(dir: string) {
     const dts = readFileSync(`${types}/${f}.d.ts`, 'utf8')
     const outside = [...dts.matchAll(/\bfrom\s+['"]([^'"]+)['"]/g)].map((m) => m[1]).filter((s) => !/^\.\/[a-z]+$/.test(s))
     if (outside.length) throw new Error(`convert: ${f}.d.ts refers to ${outside.join(', ')}`)
-    writeFileSync(`${dir}/dist/${f}.d.ts`, dts)
+    // with their extension, as Node's ESM resolution (TypeScript's NodeNext) wants them
+    writeFileSync(`${dir}/dist/${f}.d.ts`, dts.replace(/(\bfrom\s+['"]\.\/[a-z]+)(['"])/g, '$1.js$2'))
   }
   copyFileSync(abs('LICENSE'), `${dir}/LICENSE`)
   const size = js.reduce((n, f) => n + statSync(`${dir}/dist/${f}`).size, 0)

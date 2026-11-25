@@ -1,5 +1,7 @@
 import { afterAll, describe, expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { gzipSync } from 'node:zlib'
 import { BusyError, convert, ConvertError, Converter, createHandler, TimeoutError } from '../packages/convert/src/index'
 import { ZipArchive } from '../src/core/zip'
 import { BlobSource } from '../src/core/source'
@@ -62,6 +64,15 @@ describe('convert', () => {
     const pdf = await convert(S('sample.docx'), { to: 'pdf' }).catch((e) => e)
     expect(pdf.code).toBe('not-implemented')
     expect(await convert(S('sample.xlsx'), { to: 'csv', sheet: 'No such sheet' }).catch((e) => e.code)).toBe('unsupported')
+    expect(await convert(S('sample.xlsx'), { to: 'csv', sheet: 0.5 }).catch((e) => e.code)).toBe('unsupported')
+  })
+
+  test('what is written, and what a gzip-compressed file unpacks to, is limited', async () => {
+    expect(await convert(S('sample.xlsx'), { to: 'csv', maxOutput: 100 }).catch((e) => e.code)).toBe('too-large')
+    expect(await convert(S('sample.docx'), { to: 'html', maxOutput: 1000 }).catch((e) => e.code)).toBe('too-large')
+    const gz = new Uint8Array(gzipSync(new Uint8Array(4 * 1024 * 1024).fill(0x41)))
+    expect((await convert(gz, { name: 'a.csv.gz', maxUnpacked: 1024 * 1024 }).catch((e) => e)).message).toContain('too large')
+    expect((await convert(gz, { name: 'a.csv.gz' })).kind).toBe('xlsx')
   })
 })
 
@@ -91,6 +102,30 @@ describe('Converter', () => {
     setTimeout(() => ac.abort(new Error('gave up')), 100)
     expect((await p.catch((e) => e)).message).toBe('gave up')
     expect(pool.load.running).toBe(0)
+  })
+
+  test('a Node Buffer sharing its memory is converted, and left as it was', async () => {
+    const doc = S('sample.doc')
+    const shared = Buffer.alloc(doc.length + 64)
+    shared.set(doc, 32)
+    const view = shared.subarray(32, 32 + doc.length)
+    expect((await pool.convert(view, { name: 'a.doc' })).name).toBe('a.docx')
+    expect(Buffer.compare(view, doc)).toBe(0)
+  })
+
+  test('a full queue refuses more; so does more input than the byte budget', async () => {
+    const budget = new Converter({ workers: 1, bytes: 1024, timeout: 0 })
+    try {
+      const ac = new AbortController()
+      const first = budget.convert(bigCsv(), { signal: ac.signal }).catch(() => {})
+      expect(await budget.convert(S('sample.doc')).catch((e) => e)).toBeInstanceOf(BusyError)
+      ac.abort()
+      await first
+      // nothing running: one file is taken, whatever its size
+      expect((await budget.convert(S('sample.doc'))).kind).toBe('docx')
+    } finally {
+      await budget.close()
+    }
   })
 
   test('a full queue refuses more', async () => {
@@ -140,6 +175,27 @@ describe('HTTP service', () => {
     expect(res.headers.get('gotenberg-trace')).toBe('t-1')
     const zip = await ZipArchive.open(new BlobSource(await res.blob()))
     expect(zip.list().map((e) => e.name).sort()).toEqual(['a (2).docx', 'a.docx', 'b.xlsx'])
+    // names that differ only in case are two files too
+    const cased = await post('/convert', form([['Report.md', S('sample.md')], ['report.md', S('sample.md')]], { to: 'txt' }))
+    const both = await ZipArchive.open(new BlobSource(await cased.blob()))
+    expect(both.list().map((e) => e.name).sort()).toEqual(['Report.txt', 'report (2).txt'])
+  })
+
+  test('a file of a batch refused: the others are given up; PDF is refused before the pool is asked', async () => {
+    const one = new Converter({ workers: 1, queue: 0, timeout: 0 })
+    try {
+      const h = createHandler(one)
+      const busy = h(new Request('http://x/convert', { method: 'POST', body: form([['big.csv', bigCsv()], ['a.doc', S('sample.doc')]]) }))
+      expect((await busy).status).toBe(503)
+      expect(one.load.running).toBe(0)
+      const ac = new AbortController()
+      const running = one.convert(bigCsv(), { signal: ac.signal }).catch(() => {})
+      expect((await h(new Request('http://x/forms/libreoffice/convert', { method: 'POST', body: form([['a.docx', S('sample.docx')]]) }))).status).toBe(501)
+      ac.abort()
+      await running
+    } finally {
+      await one.close()
+    }
   })
 
   test('the file as the body, its name and format in the query', async () => {
@@ -159,5 +215,43 @@ describe('HTTP service', () => {
     expect(await status(post('/convert', new FormData()))).toBe(400)
     expect(await status(handle(new Request('http://x/convert')))).toBe(405)
     expect(await status(handle(new Request('http://x/nope')))).toBe(404)
+  })
+})
+
+describe('office-convert', () => {
+  const dir = mkdtempSync(`${tmpdir()}/office-convert-`)
+  afterAll(() => rmSync(dir, { recursive: true, force: true }))
+  const CLI = `${import.meta.dir}/../packages/convert/src/cli.ts`
+  const run = (...args: string[]) => {
+    const p = Bun.spawnSync(['bun', CLI, ...args], { cwd: dir })
+    return { code: p.exitCode, err: p.stderr.toString(), out: p.stdout }
+  }
+
+  test('in out, and an output that exists is not taken for an input', () => {
+    writeFileSync(`${dir}/in.doc`, S('sample.doc'))
+    expect(run('in.doc', 'out.docx').code).toBe(0)
+    expect(existsSync(`${dir}/out.docx`)).toBe(true)
+    const again = run('--force', 'in.doc', 'out.docx')
+    expect(again.code).toBe(2)
+    expect(again.err).toContain('--out out.docx')
+    expect(run('in.doc', '-o', 'out.docx').err).toContain('exists (--force overwrites it)')
+    expect(run('in.doc', '-o', 'out.docx', '--force').code).toBe(0)
+  })
+
+  test('an input is never overwritten, under any name', () => {
+    writeFileSync(`${dir}/src.doc`, S('sample.doc'))
+    symlinkSync(`${dir}/src.doc`, `${dir}/alias.txt`)
+    const r = run('src.doc', '-t', 'txt', '-o', 'alias.txt', '--force')
+    expect(r.code).toBe(1)
+    expect(r.err).toContain('is one of the inputs')
+    expect(Buffer.compare(readFileSync(`${dir}/src.doc`), S('sample.doc'))).toBe(0)
+  })
+
+  test('to stdout, whole', () => {
+    writeFileSync(`${dir}/big.csv`, bigCsv())
+    const r = run('big.csv', '-o', '-', '--timeout', '0')
+    expect(r.code).toBe(0)
+    expect(r.out.length).toBeGreaterThan(1_000_000)
+    expect(r.out.subarray(0, 2).toString('latin1')).toBe('PK')
   })
 })

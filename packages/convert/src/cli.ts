@@ -109,8 +109,9 @@ async function convertFiles() {
   let out = o.out
   let to: Target | undefined
   if (o.to) to = targetOf(o.to) ?? fail(`Unknown format “${o.to}”: docx, xlsx, pptx, txt, md, html, csv, tsv`)
-  // office-convert in.doc out.docx: a second name that is no file yet, with a format's extension, is the output
-  if (!out && !to && inputs.length === 2 && !existsSync(inputs[1]) && targetOf(extname(inputs[1]))) {
+  // office-convert in.doc out.docx: a second name with a format's extension is the output, when it is no file yet
+  if (!out && !to && inputs.length === 2 && targetOf(extname(inputs[1]))) {
+    if (existsSync(inputs[1])) fail(`${inputs[1]} exists: give --out ${inputs[1]} (with --force) to write it, or --to / --out <directory> to convert both files`)
     out = inputs[1]
     inputs = [inputs[0]]
   }
@@ -120,35 +121,72 @@ async function convertFiles() {
   // the output's extension is the format, when --to does not say
   if (out && !outDir && out !== '-' && !to) to = targetOf(extname(out)) ?? undefined
   const maxBytes = num(o['max-size'], undefined, 100, '--max-size') * 1024 * 1024
+  const tooBig = () => new Error(`larger than ${maxBytes / 1024 / 1024} MB (--max-size)`)
   const converter = new Converter({ workers: Math.min(inputs.length, num(o.jobs, undefined, 0, '--jobs') || availableParallelism()), timeout: num(o.timeout, undefined, 120, '--timeout') * 1000 })
 
-  let failed = 0
+  // the inputs as files (device and inode): an output that is one of them, under any name (a link), is never written
+  const idOf = (path: string) => {
+    const st = statSync(path)
+    return `${st.dev}:${st.ino}`
+  }
+  const inputIds = new Set<string>()
+  for (const input of inputs) if (input !== '-' && existsSync(input)) inputIds.add(idOf(input))
   // outputs this run writes: two inputs of the same name (report.doc, report.odt) would write one file
   const claimed = new Map<string, string>()
-  await Promise.all(
-    inputs.map(async (input) => {
+
+  const one = async (input: string) => {
+    const stdin = input === '-'
+    let data: Uint8Array
+    if (stdin) data = await readStdin(maxBytes, tooBig)
+    else {
+      if (statSync(input).size > maxBytes) throw tooBig()
+      data = readFileSync(input)
+    }
+    const r = await converter.convert(data, { ...(to ? { to } : {}), name: stdin ? (o.name ?? 'document') : basename(input), ...(o.sheet !== undefined ? { sheet: o.sheet } : {}), ...(o.encoding ? { encoding: o.encoding } : {}) })
+    for (const w of r.warnings) process.stderr.write(`${input}: ${w}\n`)
+    if (out === '-') {
+      await new Promise<void>((done, failed) => process.stdout.write(r.data, (e) => (e ? failed(e) : done())))
+      return
+    }
+    const dest = out && !outDir ? out : join(outDir ?? (stdin ? '.' : dirname(input)), r.name)
+    const other = claimed.get(resolve(dest))
+    if (other) throw new Error(`${dest} is written from ${other} already`)
+    claimed.set(resolve(dest), input)
+    if (existsSync(dest) && inputIds.has(idOf(dest))) throw new Error(`${dest} is one of the inputs: give --out or --to`)
+    // without --force, the file is created only when there is none (a link left in its place included)
+    writeFileSync(dest, r.data, { flag: o.force ? 'w' : 'wx' })
+    process.stderr.write(`${input} → ${dest}\n`)
+  }
+
+  let failed = 0
+  let next = 0
+  // as many files at once as there are threads: the others are read once a thread is free
+  const runner = async () => {
+    while (next < inputs.length) {
+      const input = inputs[next++]
       try {
-        const stdin = input === '-'
-        if (!stdin && statSync(input).size > maxBytes) throw new Error(`larger than ${maxBytes / 1024 / 1024} MB (--max-size)`)
-        const data = new Uint8Array(readFileSync(stdin ? 0 : input))
-        if (data.byteLength > maxBytes) throw new Error(`larger than ${maxBytes / 1024 / 1024} MB (--max-size)`)
-        const r = await converter.convert(data, { ...(to ? { to } : {}), name: stdin ? (o.name ?? 'document') : basename(input), ...(o.sheet !== undefined ? { sheet: o.sheet } : {}), ...(o.encoding ? { encoding: o.encoding } : {}) })
-        for (const w of r.warnings) process.stderr.write(`${input}: ${w}\n`)
-        if (out === '-') return void process.stdout.write(r.data)
-        const dest = out && !outDir ? out : join(outDir ?? (stdin ? '.' : dirname(input)), r.name)
-        if (!stdin && resolve(dest) === resolve(input)) throw new Error(`would overwrite itself: give --out or --to`)
-        const other = claimed.get(resolve(dest))
-        if (other) throw new Error(`${dest} is written from ${other} already`)
-        claimed.set(resolve(dest), input)
-        if (!o.force && existsSync(dest)) throw new Error(`${dest} exists (--force overwrites it)`)
-        writeFileSync(dest, r.data)
-        process.stderr.write(`${input} → ${dest}\n`)
+        await one(input)
       } catch (e) {
         failed++
-        process.stderr.write(`${input}: ${(e as Error).message}\n`)
+        const err = e as NodeJS.ErrnoException
+        process.stderr.write(`${input}: ${err.code === 'EEXIST' ? `${err.path ?? 'the output'} exists (--force overwrites it)` : err.message}\n`)
       }
-    }),
-  )
+    }
+  }
+  await Promise.all(Array.from({ length: Math.max(1, converter.workers) }, runner))
   await converter.close()
-  process.exit(failed ? 1 : 0)
+  // (not process.exit: what is still going to stdout is written first)
+  process.exitCode = failed ? 1 : 0
+}
+
+/** stdin read whole, refused past `max` bytes as soon as it gets there */
+async function readStdin(max: number, tooBig: () => Error): Promise<Uint8Array> {
+  const chunks: Uint8Array[] = []
+  let size = 0
+  for await (const chunk of process.stdin as AsyncIterable<Uint8Array>) {
+    size += chunk.byteLength
+    if (size > max) throw tooBig()
+    chunks.push(chunk)
+  }
+  return Buffer.concat(chunks)
 }

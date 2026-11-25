@@ -47,6 +47,10 @@ export interface ConvertOptions {
   encoding?: string
   /** the file is source code in this language ("typescript", "py"…), whatever its name says */
   language?: string
+  /** bytes the file written may have (default 1 GB): a larger one fails with a `ConvertError` `too-large` */
+  maxOutput?: number
+  /** bytes a gzip-compressed input (.csv.gz, .svgz) may unpack to (default 1 GB) */
+  maxUnpacked?: number
   /** gives up the conversion: the promise rejects with an `AbortError` */
   signal?: AbortSignal
 }
@@ -71,7 +75,7 @@ export interface Converted {
 export class ConvertError extends Error {
   constructor(
     message: string,
-    readonly code: 'unsupported' | 'unknown-target' | 'not-implemented',
+    readonly code: 'unsupported' | 'not-implemented' | 'too-large',
   ) {
     super(message)
     this.name = 'ConvertError'
@@ -88,6 +92,10 @@ export function targetOf(s: string | null | undefined): Target | null {
 
 const baseName = (name: string | undefined) => (name ?? '').replace(/^.*[\\/]/, '').replace(/\.[^.]*$/, '') || 'document'
 
+const GB = 1024 * 1024 * 1024
+
+const tooLarge = (max: number) => new ConvertError(`The converted file would be larger than ${Math.round(max / (1024 * 1024))} MB`, 'too-large')
+
 const aborted = (signal?: AbortSignal) => {
   if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new DOMException('The conversion was aborted', 'AbortError')
 }
@@ -96,6 +104,7 @@ const aborted = (signal?: AbortSignal) => {
 export async function convert(input: Uint8Array | ArrayBuffer | Blob, opts: ConvertOptions = {}): Promise<Converted> {
   if (opts.to === 'pdf') throw new ConvertError('PDF output is not available yet: it needs the layout of p10node/office-engine#44', 'not-implemented')
   aborted(opts.signal)
+  const maxOutput = opts.maxOutput ?? GB
   const warnings: string[] = []
   const listeners = new Set<(event: keyof Events, data: unknown) => void>()
   const engine = new Engine((event, data) => {
@@ -106,7 +115,7 @@ export async function convert(input: Uint8Array | ArrayBuffer | Blob, opts: Conv
   opts.signal?.addEventListener('abort', stop, { once: true })
   try {
     const name = opts.name ?? (typeof File !== 'undefined' && input instanceof File ? input.name : undefined)
-    const info = await engine.open(input, { ...(name ? { name } : {}), ...(opts.encoding ? { encoding: opts.encoding } : {}), ...(opts.language ? { language: opts.language } : {}) })
+    const info = await engine.open(input, { ...(name ? { name } : {}), ...(opts.encoding ? { encoding: opts.encoding } : {}), ...(opts.language ? { language: opts.language } : {}), maxUnpacked: opts.maxUnpacked ?? GB })
     aborted(opts.signal)
     const to = opts.to ?? info.kind
     if (!WRITES[info.kind].includes(to)) {
@@ -136,7 +145,9 @@ export async function convert(input: Uint8Array | ArrayBuffer | Blob, opts: Conv
       if (to === 'xlsx') out = (await call('save')) as Blob
       else {
         const sheet = sheetIndex(info, opts.sheet)
-        await loaded(engine, listeners, sheet, opts.signal)
+        const { rows, cols } = await loaded(engine, listeners, sheet, opts.signal)
+        // a separator or a line break at least per cell: a sparse sheet (one cell at XFD1048576) is refused before it is written
+        if (rows * cols > maxOutput) throw tooLarge(maxOutput)
         out = (await call('xlsx.text', sheet, to === 'tsv' ? '\t' : ',')) as Blob
       }
     } else {
@@ -151,7 +162,9 @@ export async function convert(input: Uint8Array | ArrayBuffer | Blob, opts: Conv
       }
     }
     aborted(opts.signal)
+    if ((typeof out === 'string' ? out.length : out.size) > maxOutput) throw tooLarge(maxOutput)
     const data = typeof out === 'string' ? new TextEncoder().encode(out) : new Uint8Array(await out.arrayBuffer())
+    if (data.byteLength > maxOutput) throw tooLarge(maxOutput)
     // an Office file keeps its variant (macros, template): the engine says which
     const ext = to === info.kind && info.ext ? info.ext : to
     const from = info.from ?? info.converted ?? info.imported
@@ -168,20 +181,20 @@ function sheetIndex(info: OpenResult, sheet: number | string | undefined): numbe
   const sheets = info.xlsx!.sheets
   if (sheet === undefined || sheet === '') return info.xlsx!.active ?? 0
   const n = typeof sheet === 'number' ? sheet : /^\d+$/.test(sheet) ? Number(sheet) : sheets.findIndex((s) => s.name === sheet)
-  if (n < 0 || n >= sheets.length) throw new ConvertError(`No sheet “${sheet}”: ${sheets.map((s) => s.name).join(', ')}`, 'unsupported')
+  if (!Number.isInteger(n) || n < 0 || n >= sheets.length) throw new ConvertError(`No sheet “${sheet}”: ${sheets.map((s) => s.name).join(', ')}`, 'unsupported')
   return n
 }
 
-/** loads a sheet and resolves once it is read whole (or rejects with what stopped it) */
-function loaded(engine: Engine, listeners: Set<(event: keyof Events, data: unknown) => void>, sheet: number, signal?: AbortSignal): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
+/** loads a sheet and resolves once it is read whole, with its size (or rejects with what stopped it) */
+function loaded(engine: Engine, listeners: Set<(event: keyof Events, data: unknown) => void>, sheet: number, signal?: AbortSignal): Promise<SheetProgress> {
+  return new Promise<SheetProgress>((resolve, reject) => {
     const done = (event: keyof Events, data: unknown) => {
       const p = data as SheetProgress & { error?: string }
       if (event !== 'xlsx:progress' || p.sheet !== sheet || !p.done) return
       listeners.delete(done)
       signal?.removeEventListener('abort', stop)
       if (p.error) reject(new Error(p.error))
-      else resolve()
+      else resolve(p)
     }
     const stop = () => {
       listeners.delete(done)
