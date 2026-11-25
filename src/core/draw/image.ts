@@ -70,20 +70,29 @@ export interface Pixels {
   alpha?: Uint8Array
 }
 
-/** inflated, up to `limit` bytes: what is past them is never unpacked (a picture's data says how much it needs) */
+/** what a picture's data may unpack to past what its pixels take before it is no longer read (and not checked) */
+const SLACK = 1024 * 1024
+
+/**
+ * Inflated: the first `limit` bytes are kept. The stream is read to its end, so a damaged one (its checksum missing
+ * or wrong) is refused, unless more than `SLACK` bytes follow what is needed: those are never unpacked.
+ */
 async function inflate(data: Uint8Array, limit: number): Promise<Uint8Array> {
   const reader = new Blob([data as Uint8Array<ArrayBuffer>]).stream().pipeThrough(new DecompressionStream('deflate')).getReader()
   const out = new Uint8Array(limit)
   let size = 0
+  let past = 0
   try {
-    while (size < limit) {
+    while (past <= SLACK) {
       const { done, value } = await reader.read()
       if (done) break
-      out.set(value.subarray(0, limit - size), size)
-      size += Math.min(value.length, limit - size)
+      const keep = Math.min(value.length, limit - size)
+      out.set(value.subarray(0, keep), size)
+      size += keep
+      past += value.length - keep
     }
   } catch {
-    // (damaged data: what came before it is drawn, the rest stays blank)
+    throw new ImageError('A PNG whose pixels are damaged')
   } finally {
     void reader.cancel().catch(() => {})
   }

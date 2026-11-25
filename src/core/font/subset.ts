@@ -382,14 +382,19 @@ function subsetCff(font: Font, used: Iterable<number>, chars: [number, number][]
   if (cid) {
     // a CID font's glyphs are renumbered: its CIDs are no longer those of its character collection (Adobe-Japan1…), so
     // the subset says Adobe-Identity-0, as the PDF that embeds it does
-    const list = strings.items.map((b) => String.fromCharCode(...b))
+    // (byte by byte: a long string spread into one call is past an engine's limit of arguments)
+    const list = strings.items.map((b) => {
+      let s = ''
+      for (const c of b) s += String.fromCharCode(c)
+      return s
+    })
     const sid = (s: string) => {
       let i = list.indexOf(s)
       if (i < 0) i = list.push(s) - 1
       return STANDARD_STRINGS + i
     }
     set.set(ROS, [sid('Adobe'), sid('Identity'), 0])
-    writeIndex(tail, list.map((s) => Array.from(s, (c) => c.charCodeAt(0))))
+    writeIndex(tail, list.map((s) => Uint8Array.from(s, (c) => c.charCodeAt(0))))
     tail.bytes(cff.subarray(strings.end, gsubrs.end))
   } else tail.bytes(cff.subarray(tops.end, gsubrs.end))
 

@@ -293,6 +293,8 @@ class SvgReader {
     for (const c of def.c) {
       const p = this.shapePath(c)
       if (!p) continue
+      // (a clip's segments count as drawn: each element it clips draws them)
+      if ((this.segments += p.length) > MAX_SVG_SEGMENTS) throw tooLarge()
       const t = parseTransform(c.a.transform)
       d.push(...(t === IDENTITY ? p : transformPath(p, t)))
       if (c.a['clip-rule'] === 'evenodd') evenodd = true

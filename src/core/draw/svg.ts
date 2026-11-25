@@ -4,6 +4,7 @@
  * where the fonts are installed; pictures are embedded as data: URLs.
  */
 import { esc } from '../diagram/svg'
+import { glyphTexts } from './glyphs'
 import type { DrawItem, Page, Paint, Rgba, Seg } from './types'
 
 const n = (v: number) => String(Math.round(v * 100) / 100)
@@ -56,16 +57,11 @@ export function pageToSvg(page: Page, opts: SvgOptions = {}): string {
         const xs: string[] = []
         let chars = ''
         let x = it.x
+        const texts = glyphTexts(it)
         it.glyphs.forEach((_, i) => {
-          const from = it.clusters[i]
-          if (it.clusters.indexOf(from) === i) {
-            let to = it.text.length
-            for (const c of it.clusters) if (c > from && c < to) to = c
-            const part = it.text.slice(from, to)
-            for (const ch of part) {
-              xs.push(n(x + (it.dx?.[i] ?? 0)))
-              chars += ch
-            }
+          for (const ch of texts[i]) {
+            xs.push(n(x + (it.dx?.[i] ?? 0)))
+            chars += ch
           }
           x += it.advances[i]
         })

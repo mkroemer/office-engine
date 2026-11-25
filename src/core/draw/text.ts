@@ -314,6 +314,8 @@ function breakLines(runs: Measured[], avail: (first: boolean) => number, wrap: b
   let brk: { pos: Pos; width: number } | null = null
   /** the width up to the end of the last non-space */
   let inked = 0
+  /** the first character of the cluster the loop is in */
+  let base = 0
   const push = (to: Pos, w: number, last: boolean) => {
     lines.push({ from: start, to, width: w, last })
     start = to
@@ -331,12 +333,14 @@ function breakLines(runs: Measured[], avail: (first: boolean) => number, wrap: b
       const c = r.text[i]
       const cp = r.text.codePointAt(i)!
       let w = r.adv[i]
-      // inside a cluster: no break here, nor a line end
+      // inside a cluster: no break here, nor a line end; after its last unit, a line can end after an ideograph
       if (i > 0 && !r.starts[i] && c !== '\n' && c !== '\r' && c !== '\v' && c !== '\t') {
         width += w
         inked = width
+        if (isCjk(base) && (i + 1 >= r.text.length || r.starts[i + 1])) brk = { pos: { run: k, at: i + 1 }, width: inked }
         continue
       }
+      base = cp
       if (c === '\t') {
         // to the next default tab stop
         const at = width
@@ -390,7 +394,16 @@ function emit(items: DrawItem[], r: Measured, a: number, b: number, x: number, b
   const mark = items.length
   const y = baseline - r.rise
   const startX = x
-  for (const p of r.pieces) {
+  // the pieces in the line: they follow one another through the text, so the first is found by halving
+  let lo = 0
+  let hi = r.pieces.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (r.pieces[mid].to > a) hi = mid
+    else lo = mid + 1
+  }
+  for (let k = lo; k < r.pieces.length && r.pieces[k].from < b; k++) {
+    const p = r.pieces[k]
     // the piece's part of the line: its own text, so a copy gives each character once
     const from = Math.max(a, p.from)
     const to = Math.min(b, p.to)

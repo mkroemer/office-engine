@@ -579,3 +579,91 @@ describe('review: hostile input, copied text, licenses', () => {
     expect(flip.items[0]).toMatchObject({ t: 'image', x: -25, w: 100 })
   })
 })
+
+describe('re-check: budgets, names, boxes', () => {
+  const style = (over: Partial<RunStyle> = {}): RunStyle => ({ font: 'Test Em', size: 10, color: BLACK, ...over })
+  const para = (runs: { text: string; style: RunStyle }[]): ParaSpec => ({ runs, align: 'left', marL: 0, indent: 0, before: 0, after: 0, emptySize: 10 })
+  const texts = (items: DrawItem[]) => items.filter((i): i is Extract<DrawItem, { t: 'text' }> => i.t === 'text')
+  const red = { r: 255, g: 0, b: 0, a: 1 }
+
+  test('clip paths count toward the segments an SVG may draw', async () => {
+    let d = 'M0 0'
+    for (let i = 0; i < 4000; i++) d += ` L${i % 10} ${i % 7}`
+    let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><defs><clipPath id="c"><path d="${d}"/></clipPath><rect id="r" width="1" height="1" clip-path="url(#c)"/></defs>`
+    for (let i = 0; i < 251; i++) svg += '<use href="#r"/>'
+    expect(svgItems(svg + '</svg>', book())).rejects.toThrow(/path segments is not drawn/)
+  })
+
+  test('a picture part that throws, or rejects with anything, is left out', async () => {
+    for (const part of [() => { throw new Error('sync') }, () => Promise.reject(null)]) {
+      const warnings: string[] = []
+      await slidePage({ index: 0, w: 10, h: 10, els: [{ t: 'pic', box: { x: 0, y: 0, w: 5, h: 5 }, target: 'a.png' }] }, { fonts: book(), part: part as () => Promise<Uint8Array | null>, onWarning: (w) => warnings.push(w) })
+      expect(warnings.length).toBe(1)
+    }
+  })
+
+  test('a link with half a surrogate pair is written, as U+FFFD', async () => {
+    const pdf = await writePdf([{ w: 10, h: 10, items: [{ t: 'link', x: 0, y: 0, w: 5, h: 5, url: 'https://example.org/\ud800x' }] }])
+    expect(latin1(pdf)).toContain('/URI(https://example.org/%EF%BF%BDx)')
+  })
+
+  test('long runs and runs in two fonts stay linear', async () => {
+    const font = await Font.open(EM)
+    const n = 40000
+    const g = font.glyphOf(0x41)
+    const t0 = performance.now()
+    await writePdf([{ w: 10, h: 10, items: [{ t: 'text', x: 0, y: 10, size: 10, font, glyphs: Array(n).fill(g), advances: Array(n).fill(10), text: 'A'.repeat(n), clusters: Array.from({ length: n }, (_, i) => i), fill: BLACK }] }])
+    expect(performance.now() - t0).toBeLessThan(2000)
+    const greek = buildFont({ family: 'Test Greek', advances: [500, 600], chars: [[0x3a9, 1]] })
+    const b = new FontBook([{ family: 'Test Em', src: EM }, { family: 'Test Greek', src: greek }])
+    const t1 = performance.now()
+    const out = await layoutParagraphs(b, [para([{ text: 'AΩ'.repeat(6000), style: style({ font: 'Test Em, Test Greek' }) }])], 1)
+    expect(texts(out.items).length).toBe(12000)
+    expect(performance.now() - t1).toBeLessThan(3000)
+  })
+
+  test('masks have names of their own; a form\'s box holds the page wherever it is drawn; whole fonts carry no subset tag', async () => {
+    const whole = await Font.open(buildFont({ family: 'Test Whole', fsType: 0x0100, advances: [500, 600], chars: [[0x41, 1]] }))
+    const items: DrawItem[] = [
+      { t: 'path', d: rectPath(0, 0, 10, 10), fill: { t: 'linear', x0: 0, y0: 0, x1: 10, y1: 0, stops: [{ at: 0, color: { ...red, a: 0 } }, { at: 1, color: red }] } },
+      ...Array.from({ length: 5 }, (_, i): DrawItem => ({ t: 'path', d: rectPath(0, 0, 1, 1), fill: { t: 'color', color: { ...red, a: (i + 1) / 10 } } })),
+      { t: 'group', transform: [1, 0, 0, 1, -1000010, 0], items: [{ t: 'group', opacity: 0.5, items: [{ t: 'path', d: rectPath(1000010, 0, 50, 50), fill: { t: 'color', color: red } }] }] },
+      { t: 'text', x: 0, y: 20, size: 10, font: whole, glyphs: [1], advances: [6], text: 'A', clusters: [0], fill: BLACK },
+    ]
+    const { text } = await readPdf(await writePdf([{ w: 100, h: 100, items }]))
+    const names = [...text.matchAll(/\/ExtGState<<([^>]*)>>/g)].flatMap((m) => [...m[1].matchAll(/\/(\w+) \d+ 0 R/g)].map((x) => x[1]))
+    expect(new Set(names).size).toBe(names.length)
+    expect(names).toContain('M1')
+    // the transparent group's form: in its space the page is at x 1000010 (and the box around it)
+    const box = /\/BBox\[([^\]]*)\]\/Group<<\/S\/Transparency\/I true/.exec(text)![1].split(' ').map(Number)
+    expect(box[0]).toBeLessThanOrEqual(1000010)
+    expect(box[2]).toBeGreaterThanOrEqual(1000110)
+    expect(text).toContain('/BaseFont/TestWhole')
+  })
+
+  test('a gradient along a line is a shading pattern; stops that round together make one edge', async () => {
+    const stops = [0, 0.0002, 0.5001, 0.5002, 0.9998, 1].map((at, i) => ({ at, color: i % 2 ? red : BLACK }))
+    const { text, objects } = await readPdf(await writePdf([{ w: 100, h: 100, items: [{ t: 'path', d: [{ k: 'M', x: 0, y: 0 }, { k: 'L', x: 100, y: 0 }], stroke: { paint: { t: 'linear', x0: 0, y0: 0, x1: 100, y1: 0, stops }, width: 4 } }] }]))
+    expect(text).toContain('/PatternType 2')
+    expect([...objects.values()].map((o) => (o.stream ? latin1(o.stream) : '')).join('')).toContain('/Pattern CS /P1 SCN')
+    const bounds = /\/Bounds\[([^\]]*)\]/.exec(text)![1].split(' ').map(Number)
+    for (let i = 1; i < bounds.length; i++) expect(bounds[i]).toBeGreaterThan(bounds[i - 1])
+  })
+
+  test('a PNG whose data is cut short of its checksum is refused', async () => {
+    const chunk = (t: string, d: number[] | Uint8Array) => [d.length >>> 24, (d.length >> 16) & 255, (d.length >> 8) & 255, d.length & 255, ...[...t].map((c) => c.charCodeAt(0)), ...d, 0, 0, 0, 0]
+    const raw = await deflate(new Uint8Array([0, 7]))
+    const png = (data: Uint8Array) => new Uint8Array([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, ...chunk('IHDR', [0, 0, 0, 1, 0, 0, 0, 1, 8, 0, 0, 0, 0]), ...chunk('IDAT', data), ...chunk('IEND', [])])
+    expect([...(await decodePng(png(raw))).color]).toEqual([7])
+    expect(decodePng(png(raw.subarray(0, raw.length - 4)))).rejects.toThrow(/damaged/)
+  })
+
+  test('a line can end after an ideograph of two UTF-16 units', async () => {
+    // x 10 px, the ideograph in Helvetica (a question mark, 5.56 px), y and z 10 px: x and the ideograph fit in 31 px with y
+    const out = await layoutParagraphs(book(), [para([{ text: 'x\u{20000}yz', style: style() }])], 21)
+    const t = texts(out.items)
+    expect(t.map((i) => i.text)).toEqual(['x', '\u{20000}', 'yz'])
+    expect(t[1].y).toBe(t[0].y)
+    expect(t[2].y).toBeGreaterThan(t[0].y)
+  })
+})

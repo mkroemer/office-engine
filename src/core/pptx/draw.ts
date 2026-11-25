@@ -77,15 +77,17 @@ class SlideDrawer {
   private image(target: string): Promise<ImageData | null> {
     let p = this.images.get(target)
     if (!p) {
-      p = this.opts.part(target).then(
+      p = Promise.resolve()
+        .then(() => this.opts.part(target))
+        .then(
         (bytes) => {
           if (!bytes) return null
           const kind = sniffImage(bytes)
           return { bytes, type: kind ? `image/${kind === 'svg' ? 'svg+xml' : kind}` : 'application/octet-stream', key: target }
         },
         // a part that cannot be read leaves its picture out, not the slide
-        (e: Error) => {
-          this.warn(`A picture could not be read: ${e.message}`)
+        (e: unknown) => {
+          this.warn(`A picture could not be read: ${e instanceof Error ? e.message : String(e)}`)
           return null
         },
       )

@@ -18,6 +18,13 @@ export function rotate(deg: number, cx = 0, cy = 0): Matrix {
   return [c, s, -s, c, cx - c * cx + s * cy, cy - s * cx - c * cy]
 }
 
+/** the matrix that undoes `m`; null for one that flattens (a scale of 0) */
+export function invert(m: Matrix): Matrix | null {
+  const det = m[0] * m[3] - m[1] * m[2]
+  if (!det || !Number.isFinite(det)) return null
+  return [m[3] / det, -m[1] / det, -m[2] / det, m[0] / det, (m[2] * m[5] - m[3] * m[4]) / det, (m[1] * m[4] - m[0] * m[5]) / det]
+}
+
 export const apply = (m: Matrix, x: number, y: number): [number, number] => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]]
 
 export function transformPath(d: Seg[], m: Matrix): Seg[] {
