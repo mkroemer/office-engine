@@ -2,10 +2,11 @@
 /** office-convert: converts files on the command line, or runs the HTTP service (`office-convert serve`). */
 import { closeSync, constants, createReadStream, existsSync, fstatSync, ftruncateSync, openSync, statSync, writeSync, type Stats } from 'node:fs'
 import { availableParallelism } from 'node:os'
-import { basename, dirname, extname, join, resolve } from 'node:path'
+import { basename, delimiter, dirname, extname, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import pkg from '../package.json' with { type: 'json' }
-import { targetOf, type Target } from './convert'
+import { pageRanges, targetOf, type Target } from './convert'
+import { findFonts, systemFontDirs } from './fonts'
 import { Converter } from './pool'
 import { createHandler } from './server'
 import { listen } from './serve'
@@ -18,12 +19,16 @@ Usage:
   office-convert serve [options]       the HTTP service (POST /convert, Gotenberg's routes)
 
 Options:
-  -t, --to <format>     docx, xlsx, pptx, txt, md, html, csv, tsv
+  -t, --to <format>     docx, xlsx, pptx, pdf, txt, md, html, csv, tsv
                         (default: the Office format the file opens as: .doc → .docx, .csv → .xlsx)
   -o, --out <path>      the output file (one input; - for stdout) or an existing directory
       --name <name>     the name of the file read from stdin (-): its extension tells text formats
       --sheet <n|name>  CSV / TSV: the sheet written (default: the one the file was saved on)
       --encoding <enc>  text files: the encoding they are read in (default: a guess)
+      --slides <pages>  PDF: the slides written, as 1-3,5 (default all but the hidden ones)
+      --hidden          PDF: hidden slides too
+      --fonts <path>    PDF: a font file or folder to set text in, before the system's (again for more)
+      --no-system-fonts PDF: only the fonts of --fonts
   -f, --force           overwrite files that exist
   -j, --jobs <n>        files converted at once (default: the number of CPUs)
       --timeout <s>     seconds a file may take (default 120; 0: no limit)
@@ -36,6 +41,8 @@ serve:
       --timeout <s>     seconds a file may take (default $TIMEOUT or 120)
       --max-size <MB>   largest request (default $MAX_SIZE or 100)
       --max-files <n>   files in one request (default $MAX_FILES or 20)
+      --fonts <path>    font files or folders for PDF output (default $FONTS, separated by "${delimiter}")
+      --no-system-fonts not the system's fonts (default: $SYSTEM_FONTS=0 says the same)
 
   -h, --help, -v, --version
 `
@@ -61,6 +68,10 @@ const { values: o, positionals } = (() => {
         'max-size': { type: 'string' },
         'max-files': { type: 'string' },
         port: { type: 'string', short: 'p' },
+        slides: { type: 'string' },
+        hidden: { type: 'boolean' },
+        fonts: { type: 'string', multiple: true },
+        'no-system-fonts': { type: 'boolean' },
         host: { type: 'string' },
         help: { type: 'boolean', short: 'h' },
         version: { type: 'boolean', short: 'v' },
@@ -90,13 +101,20 @@ if (o.version) {
 }
 
 const env = process.env
+
+/** the fonts PDFs are set in: --fonts (or $FONTS) first, then the system's unless told not to */
+const fontDirs = () => [...(o.fonts ?? env.FONTS?.split(delimiter).filter(Boolean) ?? []), ...(o['no-system-fonts'] || env.SYSTEM_FONTS === '0' ? [] : systemFontDirs())]
+
 if (positionals[0] === 'serve') {
   if (positionals.length > 1) fail(`serve takes no files\n\n${USAGE}`)
   const maxBytes = num(o['max-size'], env.MAX_SIZE, 100, '--max-size') * 1024 * 1024
-  const converter = new Converter({ workers: num(o.jobs, env.WORKERS, NaN, '--jobs') || undefined, timeout: num(o.timeout, env.TIMEOUT, 120, '--timeout') * 1000 })
+  // (found now, before the first request: a request does not wait for the font folders to be read)
+  const fonts = findFonts(fontDirs())
+  const converter = new Converter({ workers: num(o.jobs, env.WORKERS, NaN, '--jobs') || undefined, timeout: num(o.timeout, env.TIMEOUT, 120, '--timeout') * 1000, fonts })
   const handler = createHandler(converter, { maxBytes, maxFiles: num(o['max-files'], env.MAX_FILES, 20, '--max-files'), version: pkg.version })
   const server = await listen(handler, { port: num(o.port, env.PORT, 3000, '--port'), host: o.host ?? env.HOST ?? '0.0.0.0', maxBytes })
-  process.stderr.write(`office-convert ${pkg.version} listening on ${server.url} (${converter.workers} threads)\n`)
+  const families = new Set((await fonts).map((f) => f.family)).size
+  process.stderr.write(`office-convert ${pkg.version} listening on ${server.url} (${converter.workers} threads, ${families} font families for PDF)\n`)
   const stop = () => {
     void server.close().then(() => converter.close()).then(() => process.exit(0))
   }
@@ -108,7 +126,7 @@ async function convertFiles() {
   let inputs = positionals
   let out = o.out
   let to: Target | undefined
-  if (o.to) to = targetOf(o.to) ?? fail(`Unknown format “${o.to}”: docx, xlsx, pptx, txt, md, html, csv, tsv`)
+  if (o.to) to = targetOf(o.to) ?? fail(`Unknown format “${o.to}”: docx, xlsx, pptx, pdf, txt, md, html, csv, tsv`)
   // office-convert in.doc out.docx: a second name with a format's extension is the output, when it is no file yet; one that
   // is a file is an input, but not with --force, where writing it may have been meant
   if (!out && !to && inputs.length === 2 && targetOf(extname(inputs[1]))) {
@@ -125,7 +143,9 @@ async function convertFiles() {
   const maxBytes = num(o['max-size'], undefined, 100, '--max-size') * 1024 * 1024
   const tooBig = () => new Error(`larger than ${maxBytes / 1024 / 1024} MB (--max-size)`)
   // (no byte budget: as many files are read as there are threads, each within --max-size)
-  const converter = new Converter({ workers: Math.min(inputs.length, num(o.jobs, undefined, 0, '--jobs') || availableParallelism()), timeout: num(o.timeout, undefined, 120, '--timeout') * 1000, bytes: Infinity })
+  const slides = o.slides !== undefined ? (pageRanges(o.slides) ?? fail(`--slides “${o.slides}” is not a list of pages such as 1-3,5`)) : undefined
+  // (the font folders are read when a PDF is first asked for)
+  const converter = new Converter({ workers: Math.min(inputs.length, num(o.jobs, undefined, 0, '--jobs') || availableParallelism()), timeout: num(o.timeout, undefined, 120, '--timeout') * 1000, bytes: Infinity, fonts: () => findFonts(fontDirs()) })
 
   // the inputs as files (device and inode): an output that is one of them, under any name (a link), is never written;
   // stdin too, when it is a file (< report.doc)
@@ -146,7 +166,7 @@ async function convertFiles() {
     if (!stdin && statSync(input).size > maxBytes) throw tooBig()
     // (read up to the limit whatever the size said: a pipe or a device has none)
     const data = await readAtMost(stdin ? process.stdin : createReadStream(input), maxBytes, tooBig)
-    const r = await converter.convert(data, { ...(to ? { to } : {}), name: stdin ? (o.name ?? 'document') : basename(input), ...(o.sheet !== undefined ? { sheet: o.sheet } : {}), ...(o.encoding ? { encoding: o.encoding } : {}) })
+    const r = await converter.convert(data, { ...(to ? { to } : {}), name: stdin ? (o.name ?? 'document') : basename(input), ...(o.sheet !== undefined ? { sheet: o.sheet } : {}), ...(o.encoding ? { encoding: o.encoding } : {}), ...(slides ? { slides } : {}), ...(o.hidden ? { hidden: true } : {}) })
     for (const w of r.warnings) process.stderr.write(`${input}: ${w}\n`)
     if (out === '-') {
       await new Promise<void>((done, failed) => process.stdout.write(r.data, (e) => (e ? failed(e) : done())))

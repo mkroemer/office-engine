@@ -2,7 +2,8 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { gzipSync } from 'node:zlib'
-import { BusyError, convert, ConvertError, Converter, createHandler, TimeoutError } from '../packages/convert/src/index'
+import { BusyError, convert, ConvertError, Converter, createHandler, findFonts, pageRanges, TimeoutError, withGenerics } from '../packages/convert/src/index'
+import { testFont } from './font-builder'
 import { rowsToXlsx } from '../src/core/convert'
 import { Engine } from '../src/core/worker/engine'
 import { ZipArchive } from '../src/core/zip'
@@ -59,12 +60,14 @@ describe('convert', () => {
     expect(text(tsv.data)).toContain('North\t2026-01-16')
   })
 
-  test('formats a kind cannot be written as, and PDF, are refused', async () => {
+  test('formats a kind cannot be written as, and PDF of documents and workbooks, are refused', async () => {
     const e = await convert(S('sample.pptx'), { to: 'csv' }).catch((e) => e)
     expect(e).toBeInstanceOf(ConvertError)
     expect(e.code).toBe('unsupported')
     const pdf = await convert(S('sample.docx'), { to: 'pdf' }).catch((e) => e)
     expect(pdf.code).toBe('not-implemented')
+    expect(pdf.message).toContain('#48')
+    expect(await convert(S('sample.xlsx'), { to: 'pdf' }).catch((e) => e.message)).toContain('#47')
     expect(await convert(S('sample.xlsx'), { to: 'csv', sheet: 'No such sheet' }).catch((e) => e.code)).toBe('unsupported')
     expect(await convert(S('sample.xlsx'), { to: 'csv', sheet: 0.5 }).catch((e) => e.code)).toBe('unsupported')
   })
@@ -152,7 +155,8 @@ describe('Converter', () => {
 })
 
 describe('HTTP service', () => {
-  const converter = new Converter({ workers: 0 })
+  // (no font files: text is set in Helvetica, the same on every machine)
+  const converter = new Converter({ workers: 0, fonts: [] })
   const handle = createHandler(converter, { maxBytes: 1024 * 1024, maxFiles: 3, version: '9.9.9' })
   const form = (files: [string, Uint8Array][], fields: Record<string, string> = {}) => {
     const fd = new FormData()
@@ -189,7 +193,7 @@ describe('HTTP service', () => {
     expect(both.list().map((e) => e.name).sort()).toEqual(['Report.txt', 'report (2).txt'])
   })
 
-  test('a file of a batch refused: the others are given up; PDF is refused before the pool is asked', async () => {
+  test('a file of a batch refused: the others are given up; PDF of a document is refused before the pool is asked', async () => {
     const one = new Converter({ workers: 1, queue: 0, timeout: 0 })
     try {
       const h = createHandler(one)
@@ -270,5 +274,94 @@ describe('office-convert', () => {
     expect(r.code).toBe(0)
     expect(r.out.length).toBeGreaterThan(1_000_000)
     expect(r.out.subarray(0, 2).toString('latin1')).toBe('PK')
+  })
+})
+
+describe('PDF', () => {
+  const dir = mkdtempSync(`${tmpdir()}/office-convert-pdf-`)
+  afterAll(() => rmSync(dir, { recursive: true, force: true }))
+  // a font named as the sample's text asks (Calibri), written to a file: fonts are declared by their paths
+  writeFileSync(`${dir}/calibri.ttf`, testFont({ family: 'Calibri', advance: 500 }))
+  const fonts = [{ family: 'Calibri', src: `${dir}/calibri.ttf` }]
+  const latin1 = (b: Uint8Array) => new TextDecoder('latin1').decode(b)
+  const count = (pdf: Uint8Array) => Number(/\/Count (\d+)/.exec(latin1(pdf))?.[1])
+
+  test('a presentation (also a .ppt, .odp, Keynote or Visio file) as a PDF, its text in the fonts given', async () => {
+    const r = await convert(S('sample.pptx'), { to: 'pdf', name: 'deck.pptx', fonts })
+    expect(r).toMatchObject({ name: 'deck.pdf', type: 'application/pdf', ext: 'pdf', kind: 'pptx' })
+    expect(latin1(r.data.subarray(0, 8))).toBe('%PDF-1.7')
+    expect(count(r.data)).toBe(5)
+    expect(latin1(r.data)).toMatch(/\/BaseFont\/[A-Z]{6}\+Calibri/)
+    for (const f of ['sample.ppt', 'sample.odp', 'sample.key', 'sample.vsdx']) expect(count((await convert(S(f), { to: 'pdf', name: f, fonts })).data)).toBeGreaterThan(0)
+  })
+
+  test('the slides asked for; one that is not there is refused', async () => {
+    expect(count((await convert(S('sample.pptx'), { to: 'pdf', fonts, slides: [1, 2] })).data)).toBe(2)
+    expect(await convert(S('sample.pptx'), { to: 'pdf', fonts, slides: [9] }).catch((e) => e.code)).toBe('unsupported')
+    expect(pageRanges('1-3, 5')).toEqual([0, 1, 2, 4])
+    expect(pageRanges('3-1')).toBeNull()
+    expect(pageRanges('1-1000000000')).toBeNull()
+  })
+
+  test('text no font file serves is set in Helvetica, and said so', async () => {
+    const r = await convert(S('sample.pptx'), { to: 'pdf', fonts: [] })
+    expect(latin1(r.data)).toContain('/BaseFont/Helvetica')
+    expect(r.warnings.some((w) => /No font file for Calibri/.test(w))).toBe(true)
+  })
+
+  test('the font files of folders, by family, weight and style; the generic families after them', async () => {
+    writeFileSync(`${dir}/sans.ttf`, testFont({ family: 'Liberation Sans' }))
+    writeFileSync(`${dir}/not-a-font.ttf`, 'nothing')
+    const found = await findFonts([dir])
+    expect(found.filter((f) => f.family === 'Calibri')).toEqual([{ family: 'Calibri', src: `${dir}/calibri.ttf`, weight: 400, style: 'normal' }])
+    expect(found.find((f) => f.family === 'sans-serif')?.src).toBe(`${dir}/sans.ttf`)
+    expect(found.some((f) => String(f.src).endsWith('not-a-font.ttf'))).toBe(false)
+    // a host's own generic family is kept
+    expect(withGenerics([{ family: 'sans-serif', src: 'x' }, { family: 'Arial', src: 'y' }]).filter((f) => f.family === 'sans-serif')).toEqual([{ family: 'sans-serif', src: 'x' }])
+  })
+
+  test('on worker threads, the fonts read by their paths in the thread', async () => {
+    const pool = new Converter({ workers: 1, fonts })
+    try {
+      const r = await pool.convert(S('sample.pptx'), { to: 'pdf' })
+      expect(latin1(r.data)).toMatch(/\+Calibri/)
+    } finally {
+      await pool.close()
+    }
+  })
+
+  test("Gotenberg's route: presentations as PDF, nativePageRanges; documents 501; what is not done here, 400", async () => {
+    const handle = createHandler(new Converter({ workers: 0, fonts }))
+    const form = (files: [string, Uint8Array][], fields: Record<string, string> = {}) => {
+      const fd = new FormData()
+      for (const [name, data] of files) fd.append('files', new File([data as BlobPart], name))
+      for (const [k, v] of Object.entries(fields)) fd.append(k, v)
+      return fd
+    }
+    const post = (body: FormData, path = '/forms/libreoffice/convert') => handle(new Request(`http://x${path}`, { method: 'POST', body, headers: { 'Gotenberg-Output-Filename': 'out' } }))
+    const res = await post(form([['deck.pptx', S('sample.pptx')]], { nativePageRanges: '2-3' }))
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('application/pdf')
+    expect(res.headers.get('content-disposition')).toContain('filename="out.pdf"')
+    expect(count(new Uint8Array(await res.arrayBuffer()))).toBe(2)
+    expect((await post(form([['a.docx', S('sample.docx')]]))).status).toBe(501)
+    expect((await post(form([['a.pptx', S('sample.pptx')]], { nativePageRanges: 'x' }))).status).toBe(400)
+    expect((await post(form([['a.pptx', S('sample.pptx')], ['b.odp', S('sample.odp')]], { merge: 'true' }))).status).toBe(400)
+    expect((await post(form([['a.pptx', S('sample.pptx')]], { pdfa: 'PDF/A-2b' }))).status).toBe(400)
+    // two files: a ZIP of two PDFs
+    const zip = await post(form([['a.pptx', S('sample.pptx')], ['b.odp', S('sample.odp')]]))
+    expect(zip.headers.get('content-type')).toBe('application/zip')
+    // and through /convert
+    const one = await post(form([['a.pptx', S('sample.pptx')]], { to: 'pdf', slides: '1' }), '/convert')
+    expect(count(new Uint8Array(await one.arrayBuffer()))).toBe(1)
+  })
+
+  test('office-convert deck.pptx deck.pdf, with --fonts and only those', () => {
+    writeFileSync(`${dir}/deck.pptx`, S('sample.pptx'))
+    const p = Bun.spawnSync(['bun', `${import.meta.dir}/../packages/convert/src/cli.ts`, '--fonts', `${dir}/calibri.ttf`, '--no-system-fonts', '--slides', '1,3', 'deck.pptx', 'deck.pdf'], { cwd: dir })
+    expect(p.exitCode).toBe(0)
+    const pdf = new Uint8Array(readFileSync(`${dir}/deck.pdf`))
+    expect(count(pdf)).toBe(2)
+    expect(latin1(pdf)).toMatch(/\+Calibri/)
   })
 })

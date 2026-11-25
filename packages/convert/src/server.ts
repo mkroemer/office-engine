@@ -2,9 +2,10 @@
  * The HTTP service, as a `fetch` handler (Request in, Response out): Bun.serve takes it as it is, serve.ts runs it on
  * Node's http module, and a host can mount it in its own router.
  *
- *   POST /convert                     multipart: the files (any field name), `to`, `sheet`, `encoding`, `language`;
- *                                     or the file as the body: /convert?to=docx&name=report.doc
- *   POST /forms/libreoffice/convert   Gotenberg's route: the files to PDF (answers 501 until PDF output is in)
+ *   POST /convert                     multipart: the files (any field name), `to`, `sheet`, `encoding`, `language`,
+ *                                     `slides` (PDF: "1-3,5"), `hidden`; or the file as the body: /convert?to=docx&name=report.doc
+ *   POST /forms/libreoffice/convert   Gotenberg's route: the files to PDF, `nativePageRanges` the slides written.
+ *                                     Presentations; documents and spreadsheets answer 501 until their PDF is in
  *   GET  /health                      { status: 'up', details: … } as Gotenberg answers
  *   GET  /version                     the package version, as text
  *
@@ -12,7 +13,7 @@
  * names the result, `Gotenberg-Trace` is sent back (a new id when the request has none).
  */
 import { writeZip } from '../../../src/core/zipwrite'
-import { ConvertError, targetOf, type ConvertOptions, type Converted, type Target } from './convert'
+import { ConvertError, kindOfName, pageRanges, pdfLater, targetOf, type ConvertOptions, type Converted, type Target } from './convert'
 import { BusyError, ThreadError, TimeoutError, type Converter } from './pool'
 
 export interface ServiceOptions {
@@ -69,20 +70,35 @@ export function createHandler(converter: Converter, opts: ServiceOptions = {}): 
       const gotenberg = path === '/forms/libreoffice/convert'
       if (path !== '/convert' && !gotenberg) throw new HttpError(404, 'Not found')
       if (req.method !== 'POST') throw new HttpError(405, 'Method not allowed: POST the files')
-      // Gotenberg's LibreOffice route writes PDF whatever else it is told: answered before the body is read
-      if (gotenberg) throw new ConvertError('PDF output is not available yet: it needs the layout of p10node/office-engine#44', 'not-implemented')
 
       const { files, fields } = await readRequest(req, url, maxBytes, hold)
       if (!files.length) throw new HttpError(400, 'No file: POST the files as multipart/form-data, or one file as the body')
       if (files.length > maxFiles) throw new HttpError(400, `Too many files: at most ${maxFiles} in one request`)
-      const field = fields.get('to')
+      // Gotenberg's LibreOffice route writes PDF whatever else it is told; what it can be asked for and is not done here
+      // is refused, not left out without a word
+      if (gotenberg) {
+        if (/^true$/i.test(fields.get('merge') ?? '') && files.length > 1) throw new HttpError(400, 'merge is not supported yet: convert the files one by one')
+        for (const f of ['pdfa', 'pdfua']) if (fields.get(f) && !/^(false)?$/i.test(fields.get(f)!)) throw new HttpError(400, `${f} is not supported yet`)
+      }
+      const field = gotenberg ? 'pdf' : fields.get('to')
       const to = field ? targetOf(field) : undefined
       if (to === null) throw new HttpError(400, `Unknown format “${field}”`)
+      // a file whose name says it has no PDF output yet is answered so before the pool is asked (not 503 when it is busy)
+      if (to === 'pdf') for (const f of files) {
+        const later = pdfLater(kindOfName(f.name))
+        if (later) throw later
+      }
+      const rangeField = gotenberg ? 'nativePageRanges' : 'slides'
+      const range = fields.get(rangeField)?.trim()
+      const slides = range ? pageRanges(range) : undefined
+      if (slides === null) throw new HttpError(400, `${rangeField} “${range}” is not a list of pages such as 1-3,5`)
       const options: ConvertOptions = {
         ...(to ? { to: to as Target } : {}),
         ...(fields.get('sheet') ? { sheet: fields.get('sheet')! } : {}),
         ...(fields.get('encoding') ? { encoding: fields.get('encoding')! } : {}),
         ...(fields.get('language') ? { language: fields.get('language')! } : {}),
+        ...(slides ? { slides } : {}),
+        ...(/^(true|1)$/i.test(fields.get('hidden') ?? '') ? { hidden: true } : {}),
       }
       // one file failing (busy, too large, damaged) fails the request: the others are given up with it
       const batch = new AbortController()

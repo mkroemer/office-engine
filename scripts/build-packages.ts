@@ -103,7 +103,7 @@ async function buildServer(dir: string) {
   const tsc = spawnSync(abs('node_modules/.bin/tsc'), ['-p', cfg], { stdio: 'inherit' })
   if (tsc.status) throw new Error('convert: tsc failed')
   const types = `${tmp}/out/packages/convert/src`
-  for (const f of ['index', 'convert', 'pool', 'server', 'serve']) {
+  for (const f of ['index', 'convert', 'fonts', 'pool', 'server', 'serve']) {
     const dts = readFileSync(`${types}/${f}.d.ts`, 'utf8')
     const outside = [...dts.matchAll(/\bfrom\s+['"]([^'"]+)['"]/g)].map((m) => m[1]).filter((s) => !/^\.\/[a-z]+$/.test(s))
     if (outside.length) throw new Error(`convert: ${f}.d.ts refers to ${outside.join(', ')}`)

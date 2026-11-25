@@ -5,6 +5,7 @@
 import { availableParallelism } from 'node:os'
 import { Worker } from 'node:worker_threads'
 import { convert, ConvertError, type ConvertOptions, type Converted } from './convert'
+import { systemFonts, type FontFile } from './fonts'
 import type { Job, JobResult } from './worker'
 
 export interface ConverterOptions {
@@ -18,6 +19,11 @@ export interface ConverterOptions {
   timeout?: number
   /** megabytes of JavaScript heap a thread may use (Node only: Bun has no such limit) */
   memory?: number
+  /**
+   * the font files PDFs set their text in, for a conversion that names none (default the system's, found once); a
+   * function is called when a PDF is first asked for
+   */
+  fonts?: FontFile[] | Promise<FontFile[]> | (() => Promise<FontFile[]>)
 }
 
 /** the conversion took longer than `timeout` */
@@ -86,7 +92,12 @@ export class Converter {
     this.queueMax = opts.queue ?? 100
     this.bytesMax = opts.bytes ?? 1024 * 1024 * 1024
     this.memory = opts.memory
+    this.fontSpec = opts.fonts
   }
+
+  private fontSpec: ConverterOptions['fonts']
+  /** found once, here, not in each thread */
+  private fontList?: Promise<FontFile[]>
 
   /** conversions running and waiting */
   get load(): { running: number; queued: number } {
@@ -95,6 +106,11 @@ export class Converter {
 
   convert(data: Uint8Array, opts: ConvertOptions = {}): Promise<Converted> {
     if (this.closed) return Promise.reject(new Error('The converter is closed'))
+    if (opts.to === 'pdf' && !opts.fonts) {
+      const spec = this.fontSpec
+      this.fontList ??= Promise.resolve(typeof spec === 'function' ? spec() : (spec ?? systemFonts()))
+      return this.fontList.then((fonts) => this.convert(data, { ...opts, fonts }))
+    }
     if (!this.workers) return convert(data, opts)
     const { signal, ...rest } = opts
     if (signal?.aborted) return Promise.reject(signal.reason)

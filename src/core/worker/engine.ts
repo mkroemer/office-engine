@@ -234,7 +234,7 @@ export class Engine {
       case 'collab.xlsx.apply':
         return this.xc().apply(args[0] as XOp)
       case 'fonts.set':
-        this.fonts = new FontBook(args[0] as FontSource[], { shaper: this.shaper, onError: (e, src) => this.emit('font:error', { family: src.family, message: e.message }) })
+        this.fonts = new FontBook(args[0] as FontSource[], { shaper: this.shaper, ...(this.readFont ? { fetch: this.readFont } : {}), onError: (e, src) => this.emit('font:error', { family: src.family, message: e.message }) })
         return
       case 'fonts.measure':
         return this.measure(args[0] as TextSpec[])
@@ -286,6 +286,11 @@ export class Engine {
    * where its host does (a server, `worker: false`); in a browser's worker such text is said not to be exact.
    */
   shaper?: Shaper
+  /**
+   * Reads a font file `fonts.set` names by a string (default: `fetch`): on a server, a path read from the disk. Set
+   * before `fonts.set`, on an engine that runs where its host does.
+   */
+  readFont?: (src: string) => Promise<ArrayBuffer | Uint8Array>
   /** the font files of `fonts.set` */
   private fonts = new FontBook([])
 
