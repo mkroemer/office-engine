@@ -13,8 +13,12 @@ import { sniffImage } from './image'
 import { textLine } from './text'
 import type { DrawItem, Matrix, Paint, Rgba, Seg, Stop, StrokeStyle } from './types'
 
-/** elements read from one picture, at most: a crafted file cannot make one take the memory */
+/**
+ * Elements read from one picture, and path segments drawn, at most: counted as drawn, so `use` repeating `use`s
+ * cannot multiply a small file into more (a crafted file cannot make one take the memory)
+ */
 export const MAX_SVG_ELEMENTS = 100_000
+export const MAX_SVG_SEGMENTS = 1_000_000
 
 export interface SvgReadOptions {
   /** the size the picture is drawn at (default its own) */
@@ -133,7 +137,15 @@ export async function svgItems(svg: string, book: FontBook, opts: SvgReadOptions
   return [{ t: 'group', transform: m, clip: rectPath(hasVb ? vb[0] : 0, hasVb ? vb[1] : 0, hasVb ? vb[2] : ownW, hasVb ? vb[3] : ownH), items }]
 }
 
+const tooLarge = () => new Error(`An SVG picture of more than ${MAX_SVG_ELEMENTS} elements or ${MAX_SVG_SEGMENTS} path segments is not drawn`)
+
 class SvgReader {
+  /** elements and path segments drawn so far */
+  private drawn = 0
+  private segments = 0
+  /** the ids a `use` is drawing: one that refers back to itself is drawn once */
+  private using = new Set<string>()
+
   constructor(
     private ids: Map<string, XEl>,
     private book: FontBook,
@@ -289,6 +301,7 @@ class SvgReader {
   }
 
   private async element(el: XEl, parent: Style, depth: number): Promise<DrawItem[]> {
+    if (++this.drawn > MAX_SVG_ELEMENTS) throw tooLarge()
     const name = local(el.n)
     if (name === 'defs' || name === 'clipPath' || name === 'linearGradient' || name === 'radialGradient' || name === 'pattern' || name === 'style' || name === 'script' || name === 'title' || name === 'desc' || name === 'metadata' || name === 'mask' || name === 'filter' || name === 'symbol' || name === 'marker') return []
     if (el.a.display === 'none' || el.a.visibility === 'hidden') return []
@@ -298,9 +311,15 @@ class SvgReader {
     let items: DrawItem[] = []
     if (name === 'g' || name === 'svg' || name === 'a' || name === 'switch') items = await this.children(el, st, depth)
     else if (name === 'use') {
-      const ref = this.ids.get((el.a.href ?? el.a['xlink:href'] ?? '').replace(/^#/, ''))
-      if (ref && depth < 32) {
-        items = await this.element(ref, st, depth + 1)
+      const id = (el.a.href ?? el.a['xlink:href'] ?? '').replace(/^#/, '')
+      const ref = this.ids.get(id)
+      if (ref && depth < 32 && !this.using.has(id)) {
+        this.using.add(id)
+        try {
+          items = await this.element(ref, st, depth + 1)
+        } finally {
+          this.using.delete(id)
+        }
         const dx = num(el.a.x)
         const dy = num(el.a.y)
         if (dx || dy) items = [{ t: 'group', transform: [1, 0, 0, 1, dx, dy], items }]
@@ -309,6 +328,7 @@ class SvgReader {
     else if (name === 'image') items = this.image(el)
     else {
       const d = this.shapePath(el)
+      if (d && (this.segments += d.length) > MAX_SVG_SEGMENTS) throw tooLarge()
       if (d && d.length) {
         const box = bounds(d)
         const fill = name === 'line' ? null : this.paint(st.fill, st.fillOpacity, box, el)

@@ -70,9 +70,24 @@ export interface Pixels {
   alpha?: Uint8Array
 }
 
-async function inflate(data: Uint8Array): Promise<Uint8Array> {
-  const stream = new Blob([data as Uint8Array<ArrayBuffer>]).stream().pipeThrough(new DecompressionStream('deflate'))
-  return new Uint8Array(await new Response(stream).arrayBuffer())
+/** inflated, up to `limit` bytes: what is past them is never unpacked (a picture's data says how much it needs) */
+async function inflate(data: Uint8Array, limit: number): Promise<Uint8Array> {
+  const reader = new Blob([data as Uint8Array<ArrayBuffer>]).stream().pipeThrough(new DecompressionStream('deflate')).getReader()
+  const out = new Uint8Array(limit)
+  let size = 0
+  try {
+    while (size < limit) {
+      const { done, value } = await reader.read()
+      if (done) break
+      out.set(value.subarray(0, limit - size), size)
+      size += Math.min(value.length, limit - size)
+    }
+  } catch {
+    // (damaged data: what came before it is drawn, the rest stays blank)
+  } finally {
+    void reader.cancel().catch(() => {})
+  }
+  return out.subarray(0, size)
 }
 
 /** a PNG unpacked: every bit depth and color type, palettes and their transparency, interlaced or not */
@@ -105,10 +120,17 @@ export async function decodePng(b: Uint8Array): Promise<Pixels> {
   const all = new Uint8Array(size)
   size = 0
   for (const c of idat) all.set(c, size), (size += c.length)
-  const raw = await inflate(all)
   const bpp = Math.max(1, (samples * depth) >> 3)
   // the passes of Adam7: x0, y0, dx, dy
   const passes = interlaced ? [[0, 0, 8, 8], [4, 0, 8, 8], [0, 4, 4, 8], [2, 0, 4, 4], [0, 2, 2, 4], [1, 0, 2, 2], [0, 1, 1, 2]] : [[0, 0, 1, 1]]
+  // the bytes the pixels take, each row with its filter byte: no more is unpacked
+  let need = 0
+  for (const [x0, y0, dx, dy] of passes) {
+    const pw = Math.ceil((w - x0) / dx)
+    const ph = Math.ceil((h - y0) / dy)
+    if (pw > 0 && ph > 0) need += ph * (1 + Math.ceil((pw * samples * depth) / 8))
+  }
+  const raw = await inflate(all, need)
   const gray = type === 0 || type === 4
   const channels = gray ? 1 : 3
   const color = new Uint8Array(w * h * channels)
@@ -133,14 +155,16 @@ export async function decodePng(b: Uint8Array): Promise<Pixels> {
       for (let col = 0; col < pw; col++) {
         const x = x0 + col * dx
         const p = y * w + x
+        /** a sample as stored (16 bits for a 16-bit picture: transparency keys are compared on all of them) */
         const sample = (k: number): number => {
           const n = col * samples + k
           if (depth === 8) return line[n]
-          if (depth === 16) return line[n * 2]
+          if (depth === 16) return (line[n * 2] << 8) | line[n * 2 + 1]
           const bit = n * depth
           return (line[bit >> 3] >> (8 - depth - (bit & 7))) & maxv
         }
-        const full = (v: number) => (depth >= 8 ? v : Math.round((v * 255) / maxv))
+        /** a sample as 8 bits */
+        const full = (v: number) => (depth === 16 ? v >> 8 : depth === 8 ? v : Math.round((v * 255) / maxv))
         if (type === 3) {
           const k = sample(0)
           color[p * 3] = palette?.[k * 3] ?? 0
@@ -153,25 +177,18 @@ export async function decodePng(b: Uint8Array): Promise<Pixels> {
           if (type === 4) {
             alpha[p] = full(sample(1))
             if (alpha[p] !== 255) hasAlpha = true
-          } else if (trns && trns.length >= 2) {
-            // (a 16-bit key is compared on its high byte: what was sampled)
-            const key = depth === 16 ? trns[0] : be16(trns, 0)
-            if (v === key) (alpha[p] = 0), (hasAlpha = true)
-          }
+          } else if (trns && trns.length >= 2 && v === be16(trns, 0)) (alpha[p] = 0), (hasAlpha = true)
         } else {
           const r = sample(0)
           const g = sample(1)
           const bl = sample(2)
-          color[p * 3] = r
-          color[p * 3 + 1] = g
-          color[p * 3 + 2] = bl
+          color[p * 3] = full(r)
+          color[p * 3 + 1] = full(g)
+          color[p * 3 + 2] = full(bl)
           if (type === 6) {
-            alpha[p] = sample(3)
+            alpha[p] = full(sample(3))
             if (alpha[p] !== 255) hasAlpha = true
-          } else if (trns && trns.length >= 6) {
-            const k = depth === 16 ? [trns[0], trns[2], trns[4]] : [be16(trns, 0), be16(trns, 2), be16(trns, 4)]
-            if (r === k[0] && g === k[1] && bl === k[2]) (alpha[p] = 0), (hasAlpha = true)
-          }
+          } else if (trns && trns.length >= 6 && r === be16(trns, 0) && g === be16(trns, 2) && bl === be16(trns, 4)) (alpha[p] = 0), (hasAlpha = true)
         }
       }
     }
@@ -234,6 +251,8 @@ export function decodeGif(b: Uint8Array): Pixels {
       const fy = le16(b, i + 2)
       const fw = le16(b, i + 4)
       const fh = le16(b, i + 6)
+      // (the frame's pixels are unpacked before they are cut to the screen: as many as a picture may have)
+      if (fw * fh > MAX_PIXELS) throw new ImageError(`A GIF frame of ${fw} × ${fh} pixels is not drawn`)
       const flags = b[i + 8]
       i += 9
       let table = global

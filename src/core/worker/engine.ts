@@ -322,6 +322,7 @@ export class Engine {
     if (!pres) throw new Error('PDF output is written for presentations only so far (p10node/office-engine#44)')
     const all = pres.meta.slides
     const which = opts.slides ?? all.filter((s) => opts.hidden || !s.hidden).map((s) => s.index)
+    if (!which.length) throw new Error(opts.slides ? 'No slides were asked for' : 'Every slide is hidden: ask for them with `hidden: true`')
     const pages: Page[] = []
     for (const i of which) {
       if (!all[i]) throw new Error(`No slide #${i}`)

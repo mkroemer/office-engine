@@ -645,8 +645,9 @@ const bytes = await writePdf([page], { title: 'Deck', onWarning: console.warn })
 
 - **Pages**: a slide is a page at the slide's size; shapes, preset and custom outlines, solid and gradient fills, picture fills, outlines with their dashes and arrowheads, flips and rotation, pictures with their crop and shape, tables (rows grow to their text), charts (the viewer's chart, as shapes and text) and text boxes are placed as the viewer places them. One page of the outline per slide title.
 - **Text**: lines broken, aligned and spaced as the viewer's CSS does (`pre-wrap`, a unitless `line-height`), bullets in their hanging indent, underline, strikethrough, highlight, superscript and subscript, links, vertical text. Text no declared file serves is set in Helvetica (the PDF's own font, Windows-1252 characters only) and a warning names the font, so a server should declare its font files: Carlito, Caladea and Liberation stand in for Calibri, Cambria, Arial and Times New Roman.
-- **Pictures**: JPEG copied as it is, PNG and GIF with their transparency, SVG as shapes and text. EMF, WMF, TIFF, BMP and WebP are left out with a warning.
-- **Not yet**: shadows and other effects, pattern fills (drawn in their foreground color), tiled pictures (stretched), autofit that shrinks text (the file's own scale is used), notes pages, SmartArt and OLE objects.
+- **Fonts' licenses**: a font that may not be embedded, or only as bitmaps, has its text set in Helvetica with a warning; one that may not be subset is embedded whole. A damaged font file falls back the same way and the rest of the file is written.
+- **Pictures**: JPEG copied as it is, PNG and GIF with their transparency, SVG as shapes and text. EMF, WMF, TIFF, BMP and WebP are left out with a warning. A picture is unpacked to at most 64 million pixels, an SVG picture draws at most 100,000 elements and 1,000,000 path segments (counted as drawn, references included); one past them, or one that cannot be read, is left out with a warning.
+- **Not yet**: shadows and other effects, pattern fills (drawn in their foreground color), tiled pictures (stretched), text columns, autofit that shrinks text (the file's own scale is used) or grows the shape to its text, notes pages, SmartArt and OLE objects.
 
 ## Standalone packages
 

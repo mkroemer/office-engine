@@ -5,7 +5,7 @@
  * Streams are packed with the runtime's `CompressionStream`.
  */
 import type { Font } from '../font/font'
-import { subsetFont, toUnicodeCMap, type FontSubset } from '../font/subset'
+import { isCidKeyed, subsetFont, toUnicodeCMap, type FontSubset } from '../font/subset'
 import { decodeGif, decodePng, jpegInfo, sniffImage, type Pixels } from '../draw/image'
 import { apply, multiply, IDENTITY } from '../draw/path'
 import { isBold, stdChar, stdWidth } from '../draw/stdfont'
@@ -27,11 +27,19 @@ export interface PdfOptions {
 /** px (1/96 in) to points */
 const PT = 0.75
 
+/** a PDF number: decimal, never an exponent (past what a page can use, a coordinate is clamped) */
 const n = (v: number): string => {
   if (!Number.isFinite(v)) return '0'
-  const r = Math.round(v * 1000) / 1000
-  return Object.is(r, -0) ? '0' : String(r)
+  const r = Math.round(Math.max(-1e9, Math.min(1e9, v)) * 1000) / 1000
+  return r === 0 ? '0' : r.toFixed(3).replace(/\.?0+$/, '')
 }
+
+/** a URI action's address: ASCII only, as the format asks (other characters percent-encoded as UTF-8), escaped */
+// eslint-disable-next-line no-control-regex
+const uriString = (url: string) => '(' + url.replace(/[^\x21-\x7e]/gu, (c) => encodeURIComponent(c)).replace(/[\\()]/g, '\\$&') + ')'
+
+/** the box of a form XObject: anything a page draws */
+const FORM_BOX = '[-1000000 -1000000 1000000 1000000]'
 
 /** a PDF text string: ASCII as it is (escaped), anything else as UTF-16 with its byte order mark */
 function pdfString(s: string): string {
@@ -69,6 +77,8 @@ interface StdUse {
 
 /** Writes `pages` as a PDF file. */
 export async function writePdf(pages: Page[], opts: PdfOptions = {}): Promise<Uint8Array<ArrayBuffer>> {
+  // (a file of no page is one readers refuse)
+  if (!pages.length) throw new Error('A PDF file needs at least one page')
   const w = new PdfWriter(opts)
   return w.write(pages)
 }
@@ -120,7 +130,17 @@ class PdfWriter {
     for (const p of pages) this.collect(p.items)
     for (const [font, use] of this.fonts) {
       if (this.refused.has(font)) continue
-      use.sub = subsetFont(font, use.glyphs.keys())
+      try {
+        if (font.fsType & 0x0100) {
+          // the license allows the whole font only: its glyphs as they are
+          if (isCidKeyed(font)) throw new Error('it may not be subset, and its glyphs are not its characters')
+          use.sub = { bytes: font.sfnt(), glyphs: new Map([0, ...use.glyphs.keys()].map((g) => [g, g])), outlines: font.outlines }
+        } else use.sub = subsetFont(font, use.glyphs.keys())
+      } catch (e) {
+        // a damaged font (or one that cannot be embedded whole) takes its text to Helvetica, not the file down
+        this.refused.add(font)
+        this.warn(`The font ${font.names.family} could not be embedded (${(e as Error).message}): its text is set in Helvetica`)
+      }
     }
     const kids: number[] = []
     const outline: { title: string; page: number; h: number }[] = []
@@ -137,7 +157,7 @@ class PdfWriter {
       const annots: number[] = []
       for (const l of ctx.links) {
         const a = this.alloc()
-        this.set(a, `<</Type/Annot/Subtype/Link/Rect[${l.rect.map(n).join(' ')}]/Border[0 0 0]/A<</S/URI/URI${pdfString(l.url)}>>>>`)
+        this.set(a, `<</Type/Annot/Subtype/Link/Rect[${l.rect.map(n).join(' ')}]/Border[0 0 0]/A<</S/URI/URI${uriString(l.url)}>>>>`)
         annots.push(a)
       }
       this.set(ref, `<</Type/Page/Parent ${tree} 0 R/MediaBox[0 0 ${n(W)} ${n(H)}]/Resources ${this.resources(ctx.res)}/Contents ${content} 0 R${annots.length ? `/Annots[${annots.map((a) => `${a} 0 R`).join(' ')}]` : ''}>>`)
@@ -197,9 +217,9 @@ class PdfWriter {
       if (it.t === 'group') this.collect(it.items)
       else if (it.t === 'text' && typeof it.font !== 'string') {
         const font = it.font
-        if (!font.embeddable && !this.refused.has(font)) {
+        if (!this.refused.has(font) && (!font.embeddable || font.fsType & 0x0200)) {
           this.refused.add(font)
-          this.warn(`The font ${font.names.family} may not be embedded: its text is set in Helvetica`)
+          this.warn(`The font ${font.names.family} may not be embedded${font.embeddable ? ' but as bitmaps' : ''}: its text is set in Helvetica`)
         }
         if (this.refused.has(font)) continue
         let use = this.fonts.get(font)
@@ -207,8 +227,7 @@ class PdfWriter {
         it.glyphs.forEach((g, i) => {
           if (use.glyphs.get(g)) return
           // the first glyph of a cluster stands for its characters (several for a ligature), the others for none
-          const from = it.clusters[i] ?? 0
-          use.glyphs.set(g, it.clusters.indexOf(from) === i ? it.text.slice(from, clusterEnd(it, from)) : '')
+          use.glyphs.set(g, glyphText(it, i))
         })
       }
     }
@@ -230,6 +249,8 @@ class PdfWriter {
   }
 
   private fontRefs = new Map<string, number>()
+  private tags = new Set<string>()
+  private forms = 0
 
   private fontRef(name: string): number {
     let ref = this.fontRefs.get(name)
@@ -244,11 +265,18 @@ class PdfWriter {
       const ref = this.fontRef(use.name)
       const upm = font.unitsPerEm
       const k = 1000 / upm
-      // a tag of six capitals from the glyphs kept, as the subsets of one font in two documents differ
+      // a tag of six capitals from the font and the glyphs kept, as the subsets of one font in two documents differ;
+      // two subsets of one document never share one
       let hash = 0
+      for (const c of font.names.postScript + font.names.family) hash = (hash * 31 + c.charCodeAt(0)) >>> 0
       for (const g of [...use.glyphs.keys()].sort((a, b) => a - b)) hash = (hash * 31 + g) >>> 0
       let tag = ''
-      for (let i = 0; i < 6; i++) (tag += String.fromCharCode(65 + (hash % 26))), (hash = Math.floor(hash / 26) + i * 7)
+      for (let tries = 0; !tag || this.tags.has(tag); tries++) {
+        tag = ''
+        let h = (hash + tries * 7919) >>> 0
+        for (let i = 0; i < 6; i++) (tag += String.fromCharCode(65 + (h % 26))), (h = Math.floor(h / 26))
+      }
+      this.tags.add(tag)
       const base = `${tag}+${(font.names.postScript || font.names.family || 'Font').replace(/[^A-Za-z0-9-]/g, '')}`
       const m = font.metrics
       const flags = 4 | (font.fixedPitch ? 1 : 0) | (font.italic ? 64 : 0)
@@ -310,22 +338,44 @@ class PdfWriter {
       }
       case 'group': {
         if (!it.items.length) return
+        if (it.opacity === undefined || it.opacity >= 1) {
+          ctx.ops.push('q')
+          await this.groupBody(it, ctx)
+          ctx.ops.push('Q')
+          return
+        }
+        // a transparent group is drawn whole, then made transparent (an isolated transparency group): its parts do not
+        // show through one another, as in the viewer
+        const inner: Ctx = { ops: [], m: ctx.m, links: ctx.links, res: new Set() }
+        await this.groupBody(it, inner)
+        const { name, ref } = await this.form(inner, '/Group<</S/Transparency/I true/CS/DeviceRGB>>')
+        ctx.res.add(`X ${name} ${ref}`)
         ctx.ops.push('q')
-        const saved = ctx.m
-        if (it.transform) {
-          ctx.ops.push(`${it.transform.map(n).join(' ')} cm`)
-          ctx.m = multiply(it.transform, ctx.m)
-        }
-        if (it.clip) {
-          ctx.ops.push(pathOps(it.clip) + (it.clipRule === 'evenodd' ? ' W* n' : ' W n'))
-        }
-        if (it.opacity !== undefined && it.opacity < 1) this.alpha(ctx, it.opacity, it.opacity)
-        await this.items(it.items, ctx)
-        ctx.m = saved
-        ctx.ops.push('Q')
+        this.alpha(ctx, it.opacity, it.opacity)
+        ctx.ops.push(`/${name} Do`, 'Q')
         return
       }
     }
+  }
+
+  /** a group's transform, clip and items, into `ctx` */
+  private async groupBody(it: Extract<DrawItem, { t: 'group' }>, ctx: Ctx) {
+    const saved = ctx.m
+    if (it.transform) {
+      ctx.ops.push(`${it.transform.map(n).join(' ')} cm`)
+      ctx.m = multiply(it.transform, ctx.m)
+    }
+    if (it.clip) ctx.ops.push((pathOps(it.clip) || '0 0 m') + (it.clipRule === 'evenodd' ? ' W* n' : ' W n'))
+    await this.items(it.items, ctx)
+    ctx.m = saved
+  }
+
+  /** what was drawn into `inner` as a form XObject */
+  private async form(inner: Ctx, extra: string): Promise<{ name: string; ref: number }> {
+    const ref = this.alloc()
+    const name = `Fm${++this.forms}`
+    await this.stream(ref, `/Type/XObject/Subtype/Form/BBox${FORM_BOX}${extra}/Resources ${this.resources(inner.res)}`, latin1(inner.ops.join('\n')))
+    return { name, ref }
   }
 
   /** an ExtGState for these alphas, made current */
@@ -346,17 +396,34 @@ class PdfWriter {
 
   private alphaRefs = new Map<string, number>()
 
-  private shading(ctx: Ctx, p: Exclude<Paint, { t: 'color' }>): string {
+  /** a shading of the gradient's colors, or (`alpha`) of its stops' alphas as gray */
+  private shading(ctx: Ctx, p: Exclude<Paint, { t: 'color' }>, alpha = false): string {
     const ref = this.alloc()
     const name = `Sh${this.shadings.length + 1}`
     this.shadings.push({ name, ref })
     const coords = p.t === 'linear' ? [p.x0, p.y0, p.x1, p.y1] : [p.fx, p.fy, 0, p.cx, p.cy, p.r]
-    this.set(ref, `<</ShadingType ${p.t === 'linear' ? 2 : 3}/ColorSpace/DeviceRGB/Coords[${coords.map(n).join(' ')}]/Function ${stopsFunction(p.stops)}/Extend[true true]>>`)
+    const fn = stopsFunction(p.stops, alpha ? (c) => n(c.a) : rgb)
+    this.set(ref, `<</ShadingType ${p.t === 'linear' ? 2 : 3}/ColorSpace/${alpha ? 'DeviceGray' : 'DeviceRGB'}/Coords[${coords.map(n).join(' ')}]/Function ${fn}/Extend[true true]>>`)
     ctx.res.add(`S ${name} ${ref}`)
     return name
   }
 
-  private path(it: Extract<DrawItem, { t: 'path' }>, ctx: Ctx) {
+  /** the gradient's alphas as a soft mask, made current: a mask of the same shading in gray */
+  private async gradientMask(ctx: Ctx, p: Exclude<Paint, { t: 'color' }>, clip: string) {
+    const inner: Ctx = { ops: [], m: ctx.m, links: [], res: new Set() }
+    const sh = this.shading(inner, p, true)
+    inner.ops.push(clip, `/${sh} sh`)
+    const { ref } = await this.form(inner, '/Group<</S/Transparency/CS/DeviceGray>>')
+    const gs = this.alloc()
+    this.set(gs, `<</Type/ExtGState/SMask<</Type/Mask/S/Luminosity/G ${ref} 0 R>>>>`)
+    const name = `G${this.alphas.size + this.masks++ + 1000}`
+    ctx.res.add(`G ${name} ${gs}`)
+    ctx.ops.push(`/${name} gs`)
+  }
+
+  private masks = 0
+
+  private async path(it: Extract<DrawItem, { t: 'path' }>, ctx: Ctx) {
     if (!it.d.length) return
     const ops = pathOps(it.d)
     const evenodd = it.rule === 'evenodd'
@@ -365,9 +432,11 @@ class PdfWriter {
     if (fill && fill.t !== 'color') {
       // a gradient: the path clips, the shading paints
       const name = this.shading(ctx, fill)
-      ctx.ops.push('q', ops + (evenodd ? ' W* n' : ' W n'))
-      const a = stopsAlpha(fill.stops)
-      if (a < 1) this.alpha(ctx, a, 1)
+      const clip = ops + (evenodd ? ' W* n' : ' W n')
+      ctx.ops.push('q', clip)
+      const alphas = fill.stops.map((s) => s.color.a)
+      if (alphas.some((a) => a !== alphas[0])) await this.gradientMask(ctx, fill, clip)
+      else if (alphas[0] < 1) this.alpha(ctx, alphas[0], 1)
       ctx.ops.push(`/${name} sh`, 'Q')
     }
     const solid = fill?.t === 'color' && fill.color.a > 0 ? fill.color : undefined
@@ -395,7 +464,12 @@ class PdfWriter {
     ctx.res.add(`F ${use.name} ${ref}`)
     const font = it.font
     const k = it.size / font.unitsPerEm
+    // a glyph stands for one text in the whole file: where this text has it stand for another (a ligature of the font
+    // and the one character U+FB01), the text is given as it is
+    const actual = it.glyphs.some((g, i) => use.glyphs.get(g) !== glyphText(it, i))
+    if (actual) ctx.ops.push(`/Span<</ActualText ${pdfString(it.text)}>>BDC`)
     this.glyphText(it, ctx, use.name, (g) => (use.sub!.glyphs.get(g) ?? 0).toString(16).padStart(4, '0'), (g) => font.advanceOf(g) * k)
+    if (actual) ctx.ops.push('EMC')
   }
 
   private stdText(it: StdText, ctx: Ctx) {
@@ -505,11 +579,17 @@ interface Ctx {
   res: Set<string>
 }
 
-/** where the characters of the cluster that starts at `from` end: at the next cluster's start */
+/** where the characters of the cluster that starts at `from` end: at the next cluster's start, else the text's end */
 function clusterEnd(it: Extract<DrawItem, { t: 'text' }>, from: number): number {
   let to = it.text.length
   for (const c of it.clusters) if (c > from && c < to) to = c
   return to
+}
+
+/** the text glyph `i` stands for: its cluster's characters for the first glyph of the cluster, nothing for the others */
+function glyphText(it: Extract<DrawItem, { t: 'text' }>, i: number): string {
+  const from = it.clusters[i] ?? 0
+  return it.clusters.indexOf(from) === i ? it.text.slice(from, clusterEnd(it, from)) : ''
 }
 
 /** text of a font that may not be embedded, set in Helvetica: each cluster's characters where its glyphs were */
@@ -526,7 +606,8 @@ function asStd(it: Extract<DrawItem, { t: 'text' }>): StdText {
     // the cluster is as wide as its glyphs together; its last character takes up what its others do not
     let width = 0
     it.clusters.forEach((c, k) => c === from && (width += it.advances[k]))
-    const chars = [...it.text.slice(from, clusterEnd(it, from))]
+    // (a tab is pen movement: a space, whose width the layout's replaces)
+    const chars = [...it.text.slice(from, clusterEnd(it, from)).replace(/\t/g, ' ')]
     chars.forEach((ch, k) => {
       const code = stdCodeOf(ch)
       const w = k < chars.length - 1 ? (stdWidth(code, bold) * it.size) / 1000 : width
@@ -564,20 +645,18 @@ function strokeColor(p: Paint): Rgba | undefined {
   return p.stops[Math.floor(p.stops.length / 2)]?.color
 }
 
-const stopsAlpha = (stops: Stop[]) => (stops.length ? stops.reduce((a, s) => a + s.color.a, 0) / stops.length : 1)
-
-/** a function from 0-1 to the stops' colors: one interpolation between two, a stitching of them for more */
-function stopsFunction(stops: Stop[]): string {
-  const s = stops.length ? [...stops].sort((a, b) => a.at - b.at) : [{ at: 0, color: { r: 0, g: 0, b: 0, a: 1 } }]
+/**
+ * A function from 0-1 to the stops' colors (`color` writes one): an interpolation between two, a stitching of them for
+ * more. Two stops at one place make a hard edge: the interval between them, of no width, is left out.
+ */
+function stopsFunction(stops: Stop[], color: (c: Rgba) => string): string {
+  const s = (stops.length ? [...stops] : [{ at: 0, color: { r: 0, g: 0, b: 0, a: 1 } }]).map((x) => ({ ...x, at: Math.min(1, Math.max(0, x.at)) })).sort((a, b) => a.at - b.at)
   if (s[0].at > 0) s.unshift({ at: 0, color: s[0].color })
   if (s[s.length - 1].at < 1) s.push({ at: 1, color: s[s.length - 1].color })
-  const lerp = (a: Rgba, b: Rgba) => `<</FunctionType 2/Domain[0 1]/C0[${rgb(a)}]/C1[${rgb(b)}]/N 1>>`
-  if (s.length === 2) return lerp(s[0].color, s[1].color)
-  const fns: string[] = []
-  const bounds: string[] = []
-  for (let i = 0; i < s.length - 1; i++) {
-    fns.push(lerp(s[i].color, s[i + 1].color))
-    if (i > 0) bounds.push(n(Math.min(1, Math.max(0, s[i].at))))
-  }
-  return `<</FunctionType 3/Domain[0 1]/Functions[${fns.join('')}]/Bounds[${bounds.join(' ')}]/Encode[${fns.map(() => '0 1').join(' ')}]>>`
+  const lerp = (a: Rgba, b: Rgba) => `<</FunctionType 2/Domain[0 1]/C0[${color(a)}]/C1[${color(b)}]/N 1>>`
+  const parts: { from: number; fn: string }[] = []
+  for (let i = 0; i < s.length - 1; i++) if (s[i + 1].at > s[i].at) parts.push({ from: s[i].at, fn: lerp(s[i].color, s[i + 1].color) })
+  if (!parts.length) return lerp(s[s.length - 1].color, s[s.length - 1].color)
+  if (parts.length === 1) return parts[0].fn
+  return `<</FunctionType 3/Domain[0 1]/Functions[${parts.map((p) => p.fn).join('')}]/Bounds[${parts.slice(1).map((p) => n(p.from)).join(' ')}]/Encode[${parts.map(() => '0 1').join(' ')}]>>`
 }

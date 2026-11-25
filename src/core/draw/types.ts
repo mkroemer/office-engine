@@ -69,7 +69,10 @@ export type DrawItem =
       /** glyph offsets, px (right and up); absent when all are 0 */
       dx?: number[]
       dy?: number[]
-      /** the text the glyphs stand for, and for each glyph the index of its first character (copy and search in a PDF) */
+      /**
+       * the text the glyphs stand for (all of it, and nothing more), and for each glyph the index of its first character
+       * (copy and search in a PDF)
+       */
       text: string
       clusters: number[]
       fill: Rgba

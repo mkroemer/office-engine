@@ -66,6 +66,11 @@ interface Piece {
   dx?: number[]
   dy?: number[]
   clusters: number[]
+  /** the run's text the piece stands for: [from, to) */
+  from: number
+  to: number
+  /** clusters in order ('asc'), in reverse (right to left, 'desc'), or neither (a shaper reordered them) */
+  order: 'asc' | 'desc' | null
   synthetic?: { bold?: boolean; italic?: boolean }
   ascent: number
   descent: number
@@ -80,6 +85,8 @@ interface Measured {
   pieces: Piece[]
   /** for each UTF-16 unit of the text, how far it moves the pen (a ligature's width goes to its first character) */
   adv: Float64Array
+  /** 1 where a cluster starts: a line is never broken inside one (a character of two UTF-16 units, a letter and its marks) */
+  starts: Uint8Array
   ascent: number
   descent: number
   br?: boolean
@@ -99,6 +106,7 @@ async function measureRun(book: FontBook, run: ParaRun, opts: LayoutOptions): Pr
   const weight = st.bold ? 700 : 400
   const m = await book.measure({ text, font: st.font, size, weight, italic: !!st.italic })
   const adv = new Float64Array(text.length)
+  const starts = new Uint8Array(text.length)
   const pieces: Piece[] = []
   let ascent = m.ascent
   let descent = m.descent
@@ -108,7 +116,7 @@ async function measureRun(book: FontBook, run: ParaRun, opts: LayoutOptions): Pr
       const r = p.run
       const clusters = r.clusters.map((c) => c + p.from)
       const advances = r.advances.map((a) => a * k)
-      clusters.forEach((c, i) => (adv[c] += advances[i]))
+      clusters.forEach((c, i) => ((adv[c] += advances[i]), (starts[c] = 1)))
       const line = p.font.lineMetrics()
       const synthetic = { bold: weight >= 600 && p.font.weight < 600, italic: !!st.italic && !p.font.italic }
       pieces.push({
@@ -117,6 +125,9 @@ async function measureRun(book: FontBook, run: ParaRun, opts: LayoutOptions): Pr
         advances,
         ...(r.dx.some((v) => v) || r.dy.some((v) => v) ? { dx: r.dx.map((v) => v * k), dy: r.dy.map((v) => v * k) } : {}),
         clusters,
+        from: p.from,
+        to: p.to,
+        order: orderOf(clusters),
         ...(synthetic.bold || synthetic.italic ? { synthetic } : {}),
         ascent: line.ascent * k,
         descent: line.descent * k,
@@ -135,17 +146,50 @@ async function measureRun(book: FontBook, run: ParaRun, opts: LayoutOptions): Pr
         advances.push(w)
         clusters.push(i)
         adv[i] += w
+        starts[i] = 1
         i += cp > 0xffff ? 2 : 1
       }
       if (!/^\s*$/.test(text.slice(p.from, p.to))) opts.onMissing?.(st.font)
-      pieces.push({ font, glyphs, advances, clusters, ascent: STD_ASCENT * size, descent: STD_DESCENT * size })
+      pieces.push({ font, glyphs, advances, clusters, from: p.from, to: p.to, order: 'asc', ascent: STD_ASCENT * size, descent: STD_DESCENT * size })
     }
   }
   if (!ascent && !descent) {
     ascent = STD_ASCENT * size
     descent = STD_DESCENT * size
   }
-  return { text, style: st, size, rise, pieces, adv, ascent, descent, br: run.br }
+  return { text, style: st, size, rise, pieces, adv, starts, ascent, descent, br: run.br }
+}
+
+function orderOf(clusters: number[]): 'asc' | 'desc' | null {
+  let asc = true
+  let desc = true
+  for (let i = 1; i < clusters.length; i++) {
+    if (clusters[i] < clusters[i - 1]) asc = false
+    if (clusters[i] > clusters[i - 1]) desc = false
+  }
+  return asc ? 'asc' : desc ? 'desc' : null
+}
+
+/** the glyphs of a piece that stand for text in [a, b), in drawing order: found by halving where clusters are in order */
+function glyphIndices(p: Piece, a: number, b: number): number[] {
+  const cl = p.clusters
+  const first = (pred: (c: number) => boolean) => {
+    let lo = 0
+    let hi = cl.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (pred(cl[mid])) hi = mid
+      else lo = mid + 1
+    }
+    return lo
+  }
+  const span = (lo: number, hi: number) => Array.from({ length: Math.max(0, hi - lo) }, (_, k) => lo + k)
+  if (p.order === 'asc') return span(first((c) => c >= a), first((c) => c >= b))
+  if (p.order === 'desc') return span(first((c) => c < b), first((c) => c < a))
+  // (reordered by a shaper: every glyph looked at)
+  const out: number[] = []
+  cl.forEach((c, i) => c >= a && c < b && out.push(i))
+  return out
 }
 
 /** a place in a paragraph: run and UTF-16 index in its text */
@@ -287,6 +331,12 @@ function breakLines(runs: Measured[], avail: (first: boolean) => number, wrap: b
       const c = r.text[i]
       const cp = r.text.codePointAt(i)!
       let w = r.adv[i]
+      // inside a cluster: no break here, nor a line end
+      if (i > 0 && !r.starts[i] && c !== '\n' && c !== '\r' && c !== '\v' && c !== '\t') {
+        width += w
+        inked = width
+        continue
+      }
       if (c === '\t') {
         // to the next default tab stop
         const at = width
@@ -324,7 +374,8 @@ function breakLines(runs: Measured[], avail: (first: boolean) => number, wrap: b
       // after spaces, hyphens and ideographs, a line can end
       if (space || c === '-' || c === '‐' || c === '/' || isCjk(cp)) {
         const next = i + 1 < r.text.length ? r.text[i + 1] : k + 1 < runs.length ? runs[k + 1].text[0] : ''
-        if (!(space && next && isSpace(next))) brk = { pos: { run: k, at: i + 1 }, width: inked }
+        const whole = i + 1 >= r.text.length || r.starts[i + 1]
+        if (whole && !(space && next && isSpace(next))) brk = { pos: { run: k, at: i + 1 }, width: inked }
       }
     }
   }
@@ -340,28 +391,38 @@ function emit(items: DrawItem[], r: Measured, a: number, b: number, x: number, b
   const y = baseline - r.rise
   const startX = x
   for (const p of r.pieces) {
+    // the piece's part of the line: its own text, so a copy gives each character once
+    const from = Math.max(a, p.from)
+    const to = Math.min(b, p.to)
+    if (to <= from) continue
+    const indices = glyphIndices(p, from, to)
     const glyphs: number[] = []
     const advances: number[] = []
     const clusters: number[] = []
     const dx: number[] = []
     const dy: number[] = []
     let px = x
-    p.glyphs.forEach((g, i) => {
+    for (const i of indices) {
       const c = p.clusters[i]
-      if (c < a || c >= b) return
       const ch = r.text[c]
       let adv = ch === '\t' ? r.adv[c] : p.advances[i]
       if (just.spaces > 0 && ch === ' ') (adv += just.stretch), just.spaces--
-      glyphs.push(ch === '\t' ? p.glyphs[i] : g)
-      advances.push(adv)
-      clusters.push(c - a)
-      if (p.dx) dx.push(p.dx[i]), dy.push(p.dy![i])
       x += adv
-    })
+      if (ch === '\t') {
+        // a tab moves the pen and draws nothing (its glyph would be a box, or a question mark)
+        if (advances.length) advances[advances.length - 1] += adv
+        else px = x
+        continue
+      }
+      glyphs.push(p.glyphs[i])
+      advances.push(adv)
+      clusters.push(c - from)
+      if (p.dx) dx.push(p.dx[i]), dy.push(p.dy![i])
+    }
     if (!glyphs.length) continue
-    // spaces and tabs draw nothing: a run of them is only a move
-    const text = r.text.slice(a, b)
-    if (st.color.a > 0 && !/^[\s]*$/.test(clusters.map((c) => text[c]).join(''))) {
+    const text = r.text.slice(from, to)
+    // spaces draw nothing: a run of them is only a move
+    if (st.color.a > 0 && /\S/.test(text)) {
       items.push({
         t: 'text',
         x: px,
@@ -377,7 +438,6 @@ function emit(items: DrawItem[], r: Measured, a: number, b: number, x: number, b
         ...(p.synthetic ? { synthetic: p.synthetic } : {}),
       })
     }
-    px = x
   }
   const w = x - startX
   if (w > 0) {

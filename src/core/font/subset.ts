@@ -313,6 +313,8 @@ const FDARRAY = 1236
 const FDSELECT = 1237
 const UNIQUE_ID = 13
 const XUID = 14
+/** the strings every CFF has: a font's own strings are numbered after them */
+const STANDARD_STRINGS = 391
 
 function subsetCff(font: Font, used: Iterable<number>, chars: [number, number][]): FontSubset {
   const cff = font.tables.get('CFF ')!
@@ -376,7 +378,20 @@ function subsetCff(font: Font, used: Iterable<number>, chars: [number, number][]
   head.bytes(cff.subarray(0, v.getUint8(2)))
   head.bytes(cff.subarray(v.getUint8(2), names.end))
   const tail = new Out()
-  tail.bytes(cff.subarray(tops.end, gsubrs.end))
+  const set = new Map<number, number[]>()
+  if (cid) {
+    // a CID font's glyphs are renumbered: its CIDs are no longer those of its character collection (Adobe-Japan1…), so
+    // the subset says Adobe-Identity-0, as the PDF that embeds it does
+    const list = strings.items.map((b) => String.fromCharCode(...b))
+    const sid = (s: string) => {
+      let i = list.indexOf(s)
+      if (i < 0) i = list.push(s) - 1
+      return STANDARD_STRINGS + i
+    }
+    set.set(ROS, [sid('Adobe'), sid('Identity'), 0])
+    writeIndex(tail, list.map((s) => Array.from(s, (c) => c.charCodeAt(0))))
+    tail.bytes(cff.subarray(strings.end, gsubrs.end))
+  } else tail.bytes(cff.subarray(tops.end, gsubrs.end))
 
   const charset = new Out()
   // format 0: the name of each glyph kept; a CID font is renumbered, its CIDs are the glyphs of the subset
@@ -386,7 +401,6 @@ function subsetCff(font: Font, used: Iterable<number>, chars: [number, number][]
   const strs = new Out()
   writeIndex(strs, kept.map((g) => charStrings[g]))
 
-  const set = new Map<number, number[]>()
   const drop = new Set([ENCODING, UNIQUE_ID, XUID])
   let build: (base: number) => number[]
   if (cid) {
@@ -463,6 +477,19 @@ function subsetCff(font: Font, used: Iterable<number>, chars: [number, number][]
   view(maxp).setUint16(4, kept.length)
   tables.set('maxp', maxp)
   return { bytes: writeSfnt(tables, 'cff'), glyphs, outlines: 'cff', cff: table }
+}
+
+/** PostScript outlines keyed by CID (CJK fonts): their glyphs are not their CIDs, so the whole font cannot stand in for a subset in a PDF */
+export function isCidKeyed(font: Font): boolean {
+  const cff = font.tables.get('CFF ')
+  if (font.outlines !== 'cff' || !cff || cff.length < 4) return false
+  try {
+    const names = readIndex(cff, view(cff).getUint8(2))
+    const tops = readIndex(cff, names.end)
+    return !!tops.items[0] && readDict(tops.items[0]).some((e) => e.op === ROS)
+  } catch {
+    return false
+  }
 }
 
 /**

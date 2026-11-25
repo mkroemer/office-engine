@@ -77,11 +77,18 @@ class SlideDrawer {
   private image(target: string): Promise<ImageData | null> {
     let p = this.images.get(target)
     if (!p) {
-      p = this.opts.part(target).then((bytes) => {
-        if (!bytes) return null
-        const kind = sniffImage(bytes)
-        return { bytes, type: kind ? `image/${kind === 'svg' ? 'svg+xml' : kind}` : 'application/octet-stream', key: target }
-      })
+      p = this.opts.part(target).then(
+        (bytes) => {
+          if (!bytes) return null
+          const kind = sniffImage(bytes)
+          return { bytes, type: kind ? `image/${kind === 'svg' ? 'svg+xml' : kind}` : 'application/octet-stream', key: target }
+        },
+        // a part that cannot be read leaves its picture out, not the slide
+        (e: Error) => {
+          this.warn(`A picture could not be read: ${e.message}`)
+          return null
+        },
+      )
       this.images.set(target, p)
     }
     return p
@@ -154,6 +161,7 @@ class SlideDrawer {
         y = -t * h
       }
       let pic: DrawItem = await this.picItem(image, x, y, w, h)
+      // the cropped picture flipped in its frame, as PowerPoint flips it (about the frame's centre, not the picture's)
       if (box.flipH || box.flipV) pic = { t: 'group', transform: [box.flipH ? -1 : 1, 0, 0, box.flipV ? -1 : 1, box.flipH ? box.w : 0, box.flipV ? box.h : 0], items: [pic] }
       items.push({ t: 'group', clip, items: [pic] })
     }

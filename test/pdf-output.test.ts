@@ -431,3 +431,151 @@ describe('slides as pages', () => {
     expect(svg).toBe('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10"><path d="M0 0L5 0L5 5L0 5Z" fill="rgb(255,0,0)" fill-opacity="0.5"/></svg>')
   })
 })
+
+describe('review: hostile input, copied text, licenses', () => {
+  const style = (over: Partial<RunStyle> = {}): RunStyle => ({ font: 'Test Em', size: 10, color: BLACK, ...over })
+  const para = (runs: { text: string; style: RunStyle }[]): ParaSpec => ({ runs, align: 'left', marL: 0, indent: 0, before: 0, after: 0, emptySize: 10 })
+  const texts = (items: DrawItem[]) => items.filter((i): i is Extract<DrawItem, { t: 'text' }> => i.t === 'text')
+  const contents = (objects: Map<number, { dict: string; stream?: Uint8Array }>) => [...objects.values()].map((o) => (o.stream && !o.dict.includes('/Length1') && !o.dict.includes('/Subtype/') ? latin1(o.stream) : '')).join('\n')
+
+  test('an SVG whose uses repeat uses is refused, not multiplied; a use of itself is drawn once', async () => {
+    let svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><defs><rect id="a0" width="1" height="1"/>'
+    for (let i = 1; i <= 20; i++) svg += `<g id="a${i}"><use href="#a${i - 1}"/><use href="#a${i - 1}"/></g>`
+    svg += '</defs><use href="#a20"/></svg>'
+    expect(svgItems(svg, book())).rejects.toThrow(/is not drawn/)
+    const loop = await svgItems('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><g id="g"><rect width="1" height="1"/><use href="#g"/></g></svg>', book())
+    const flat = (items: DrawItem[]): DrawItem[] => items.flatMap((i) => (i.t === 'group' ? flat(i.items) : [i]))
+    expect(flat(loop).length).toBe(2)
+  })
+
+  test('a PNG unpacks no more than its pixels need; a GIF frame past the limit is refused', async () => {
+    const chunk = (t: string, d: number[] | Uint8Array) => [d.length >>> 24, (d.length >> 16) & 255, (d.length >> 8) & 255, d.length & 255, ...[...t].map((c) => c.charCodeAt(0)), ...d, 0, 0, 0, 0]
+    // 16 MB of zeros behind a 1 × 1 picture
+    const raw = await deflate(new Uint8Array(16 * 1024 * 1024))
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, ...chunk('IHDR', [0, 0, 0, 1, 0, 0, 0, 1, 8, 0, 0, 0, 0]), ...chunk('IDAT', raw), ...chunk('IEND', [])])
+    const px = await decodePng(png)
+    expect(px.color.length).toBe(1)
+    const gif = Uint8Array.from(atob('R0lGODlhAQABAPAAAP8AAP///yH5BAAAAAAALAAAAAABAAEAAAICRAEAOw=='), (c) => c.charCodeAt(0))
+    // the frame (its descriptor at byte 27) says 9000 × 9000
+    gif.set([0x28, 0x23, 0x28, 0x23], 32)
+    expect(() => decodeGif(gif)).toThrow(/not drawn/)
+  })
+
+  test('16-bit color keys compare all their bits', async () => {
+    const chunk = (t: string, d: number[] | Uint8Array) => [d.length >>> 24, (d.length >> 16) & 255, (d.length >> 8) & 255, d.length & 255, ...[...t].map((c) => c.charCodeAt(0)), ...d, 0, 0, 0, 0]
+    const raw = await deflate(new Uint8Array([0, 0xab, 0x01, 0xab, 0x02]))
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, ...chunk('IHDR', [0, 0, 0, 2, 0, 0, 0, 1, 16, 0, 0, 0, 0]), ...chunk('tRNS', [0xab, 0x01]), ...chunk('IDAT', raw), ...chunk('IEND', [])])
+    const px = await decodePng(png)
+    expect([...px.color]).toEqual([0xab, 0xab])
+    expect([...px.alpha!]).toEqual([0, 255])
+  })
+
+  test('a line set in two fonts: each glyph run stands for its own characters', async () => {
+    const greek = buildFont({ family: 'Test Greek', advances: [500, 600], chars: [[0x3a9, 1]] })
+    const b = new FontBook([{ family: 'Test Em', src: EM }, { family: 'Test Greek', src: greek }])
+    const out = await layoutParagraphs(b, [para([{ text: 'AΩB', style: style({ font: 'Test Em, Test Greek' }) }])], 500)
+    expect(texts(out.items).map((t) => [t.text, t.clusters])).toEqual([
+      ['A', [0]],
+      ['Ω', [0]],
+      ['B', [0]],
+    ])
+  })
+
+  test('lines are not broken inside a character of two UTF-16 units; tabs draw nothing', async () => {
+    const out = await layoutParagraphs(book(), [para([{ text: 'a\u{20000}\u{20000}\u{20000}', style: style({ font: 'Nothing' }) }])], 1)
+    for (const t of texts(out.items)) expect(t.text).not.toMatch(/^[\udc00-\udfff]|[\ud800-\udbff]$/)
+    const tab = await layoutParagraphs(book(), [para([{ text: 'A\tB', style: style({ font: 'Nothing' }) }])], 500)
+    const t = texts(tab.items)[0]
+    expect(t.glyphs).toEqual([0x41, 0x42])
+    // B at the first tab stop
+    expect(t.advances[0]).toBe(96)
+  })
+
+  test('a narrow box of long text is laid out in linear time', async () => {
+    const t0 = performance.now()
+    const out = await layoutParagraphs(book(), [para([{ text: 'a'.repeat(20000), style: style() }])], 1)
+    expect(texts(out.items).length).toBe(20000)
+    expect(performance.now() - t0).toBeLessThan(3000)
+  })
+
+  test('the license: bitmaps only is not embedded, no subsetting embeds the whole font, a damaged font falls back', async () => {
+    const font = (fsType: number, family: string) => buildFont({ family, fsType, advances: [500, 600, 700, 800], chars: [[0x41, 1], [0x42, 2], [0x43, 3]] })
+    const bitmaps = await Font.open(font(0x0200, 'Test Bitmaps'))
+    const whole = await Font.open(font(0x0100, 'Test Whole'))
+    const damaged = await Font.open(font(0, 'Test Damaged'))
+    // its first glyph made to end past its table
+    const loca = damaged.tables.get('loca')!
+    new DataView(loca.buffer, loca.byteOffset).setUint32(8, 0x7fffffff)
+    const text = (f: Font): DrawItem => ({ t: 'text', x: 0, y: 20, size: 10, font: f, glyphs: [1], advances: [6], text: 'A', clusters: [0], fill: BLACK })
+    const warnings: string[] = []
+    const pdf = await writePdf([{ w: 100, h: 100, items: [text(bitmaps), text(whole), text(damaged)] }], { onWarning: (w) => warnings.push(w) })
+    expect(warnings).toEqual([
+      'The font Test Bitmaps may not be embedded but as bitmaps: its text is set in Helvetica',
+      expect.stringMatching(/^The font Test Damaged could not be embedded \(.*\): its text is set in Helvetica$/),
+    ])
+    const { objects } = await readPdf(pdf)
+    const file = [...objects.values()].find((o) => o.dict.includes('/Length1'))!
+    expect((await Font.open(file.stream!)).numGlyphs).toBe(4)
+  })
+
+  test('a glyph that stands for different text in two places is given its text; links are ASCII', async () => {
+    const font = await Font.open(EM)
+    const g = font.glyphOf(0x66)
+    const item = (text: string): DrawItem => ({ t: 'text', x: 0, y: 20, size: 10, font, glyphs: [g], advances: [10], text, clusters: [0], fill: BLACK })
+    const pdf = await writePdf([{ w: 100, h: 100, items: [item('fi'), item('ﬁ'), { t: 'link', x: 0, y: 0, w: 10, h: 10, url: 'https://example.org/café(x)' }] }])
+    const { text, objects } = await readPdf(pdf)
+    const c = contents(objects)
+    expect(c.match(/ActualText/g)?.length).toBe(1)
+    expect(c).toContain('/Span<</ActualText <FEFFfb01>>>BDC')
+    expect(text).toContain('/URI(https://example.org/caf%C3%A9\\(x\\))')
+  })
+
+  test('transparent groups are drawn whole; a gradient that fades has a soft mask; numbers have no exponent; hard stops', async () => {
+    const red = { r: 255, g: 0, b: 0, a: 1 }
+    const pdf = await writePdf([
+      {
+        w: 100,
+        h: 100,
+        items: [
+          { t: 'group', opacity: 0.5, items: [{ t: 'path', d: rectPath(0, 0, 50, 50), fill: { t: 'color', color: red } }, { t: 'path', d: rectPath(25, 25, 50, 50), fill: { t: 'color', color: { ...red, a: 0.8 } } }] },
+          { t: 'path', d: rectPath(0, 0, 1e22, 10), fill: { t: 'linear', x0: 0, y0: 0, x1: 100, y1: 0, stops: [{ at: 0, color: { ...red, a: 0 } }, { at: 0.5, color: red }, { at: 0.5, color: BLACK }, { at: 1, color: BLACK }] } },
+        ],
+      },
+    ])
+    const { text, objects } = await readPdf(pdf)
+    expect(text).toContain('/Subtype/Form')
+    expect(text).toContain('/Group<</S/Transparency/I true/CS/DeviceRGB>>')
+    expect(text).toContain('/SMask<</Type/Mask/S/Luminosity/G')
+    expect(text).not.toMatch(/\de[+-]?\d/)
+    expect(contents(objects)).toContain('1000000000 0 l')
+    // the hard stop at 0.5: two intervals, one bound
+    expect(text).toContain('/Bounds[0.5]/Encode[0 1 0 1]')
+  })
+
+  test('PostScript subsets keyed by CID say Adobe-Identity-0, as the PDF does', async () => {
+    const cid = await Font.open(buildFont({ family: 'Test Cid', cff: 'cid', advances: [500, 600, 700], chars: [[0x41, 1], [0x42, 2]] }))
+    const sub = subsetFont(cid, [2])
+    expect(latin1(sub.cff!)).toContain('Identity')
+  })
+
+  test('a slide\'s picture that cannot be read is left out; an empty selection is refused', async () => {
+    const warnings: string[] = []
+    const page = await slidePage({ index: 0, w: 100, h: 100, els: [{ t: 'pic', box: { x: 0, y: 0, w: 10, h: 10 }, target: 'ppt/media/a.png' }] }, { fonts: book(), part: async () => Promise.reject(new Error('gone')), onWarning: (w) => warnings.push(w) })
+    expect(page.w).toBe(100)
+    expect(warnings).toEqual(['A picture could not be read: gone'])
+    const engine = new Engine(() => {})
+    await engine.open(new Uint8Array(readFileSync('playground/public/samples/sample.pptx')), { name: 'sample.pptx' })
+    expect(engine.call('pdf', [{ slides: [] }])).rejects.toThrow('No slides were asked for')
+    expect(writePdf([])).rejects.toThrow(/at least one page/)
+  })
+
+  test('a cropped, flipped picture shows its cropped part mirrored in the frame', async () => {
+    const png = Uint8Array.from(atob('R0lGODlhAQABAPAAAP8AAP///yH5BAAAAAAALAAAAAABAAEAAAICRAEAOw=='), (c) => c.charCodeAt(0))
+    const page = await slidePage({ index: 0, w: 100, h: 100, els: [{ t: 'pic', box: { x: 0, y: 0, w: 75, h: 10, flipH: true }, target: 'a.gif', crop: [0.25, 0, 0, 0] }] }, { fonts: book(), part: async () => png })
+    const frame = (page.items[0] as Extract<DrawItem, { t: 'group' }>).items[1] as Extract<DrawItem, { t: 'group' }>
+    const flip = (frame.items[0] as Extract<DrawItem, { t: 'group' }>).items[0] as Extract<DrawItem, { t: 'group' }>
+    expect(flip.transform).toEqual([-1, 0, 0, 1, 75, 0])
+    // the picture's 100 px with its first 25 cut off
+    expect(flip.items[0]).toMatchObject({ t: 'image', x: -25, w: 100 })
+  })
+})
