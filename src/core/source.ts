@@ -26,7 +26,27 @@ export class BlobSource implements ByteSource {
     return new Uint8Array(await this.blob.slice(offset, offset + length).arrayBuffer())
   }
   stream(offset: number, length: number): ReadableStream<Uint8Array> {
-    return this.blob.slice(offset, offset + length).stream() as ReadableStream<Uint8Array>
+    // Cut at `length` here, whatever the runtime sends: on Bun 1.3 the stream of a slice runs on to the end of the
+    // whole Blob, and a reader that takes a stream to its end (a stored ZIP entry) would read the rest of the file.
+    const reader = (this.blob.slice(offset, offset + length).stream() as ReadableStream<Uint8Array>).getReader()
+    let left = Math.max(0, Math.min(length, this.size - offset))
+    return new ReadableStream<Uint8Array>({
+      async pull(ctrl) {
+        // (an empty chunk is read past: a pull that gives nothing is not called again)
+        while (left > 0) {
+          const { done, value } = await reader.read()
+          if (done) break
+          if (!value.length) continue
+          ctrl.enqueue(value.length > left ? value.subarray(0, left) : value)
+          left -= value.length
+          if (left > 0) return
+        }
+        ctrl.close()
+        // what would still come is not asked for
+        void reader.cancel().catch(() => {})
+      },
+      cancel: (reason) => reader.cancel(reason),
+    })
   }
   slice(offset: number, length: number): Blob {
     return this.blob.slice(offset, offset + length)

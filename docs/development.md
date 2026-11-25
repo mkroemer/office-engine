@@ -7,7 +7,7 @@ bun run collab       # collaboration hub for the playground's "Share live" (port
 bun test             # core tests on fixtures
 bun run test:e2e     # browser tests (headless Chromium: bunx playwright install chromium; needs large-deck.pptx, see fixtures.py)
 bun run build        # dist/: ESM lib + office-engine.embed.js + .d.ts
-bun run build:packages  # packages/*/dist: the standalone SDK packages (@p10node/diagram, mermaid, plantuml, graphviz, markdown)
+bun run build:packages  # packages/*/dist: the standalone SDK packages (@p10node/diagram, mermaid, plantuml, graphviz, markdown, convert)
 python3 -m venv .venv && .venv/bin/pip install python-docx openpyxl python-pptx Pillow
 .venv/bin/python scripts/fixtures.py --large   # generate samples + heavy files (--large-deck: only the deck the browser tests need)
 bun scripts/iwork-samples.ts                   # sample.pages / .key / .numbers (built by test/iwork-builder.ts)
@@ -53,6 +53,8 @@ bun scripts/font-check.ts /usr/share/fonts/truetype/*/*.ttf "/System/Library/Fon
 
 `DocxView` measures the blocks off screen in time slices (`src/react/docx/measure.ts`: a block's height, where a paragraph's lines and a table's rows are), `paginate()` cuts them into pages (`paginate.ts`: pure, lines and rows given, keep rules; unit tests in `test/docx-paginate.test.ts`) and only the pages in view render. The browser breaks the lines; the offset each line starts at is read (`lineStarts`) only for the paragraphs a page in view or an edit cuts. A paragraph split across pages renders as one element per part, each with the paragraph's `data-pa` address and the offsets it holds (`data-from`, `data-to`): `paraEl()` / `posFromDom()` / `domFromPos()` in `src/react/edit/input.ts` map DOM places to paragraph offsets over the parts, so the caret, selections, find and comments need nothing else. Header rows repeated on the following pages of a table are copies without an address (`.de-head-copy`).
 
+A document longer than a browser lets a box scroll (12,000,000 px) is scrolled through `ScrollMap` (`src/react/docx/longscroll.ts`, unit tests in `test/docx-longscroll.test.ts`): the place shown is the scroll position plus an offset the pages are drawn by. A step of the reader or of the browser leaves the offset alone, so the browser moves the pages by itself; a jump of the scrollbar's thumb sets it; at rest the box is put where its thumb belongs, pages and scroll position in one frame.
+
 ## Browser tests
 
 `e2e/*.spec.ts` drive a fixture app (`e2e/app`, served by Vite with `vite.e2e.config.ts`) in headless Chromium through `playwright-core`, one browser and server per file (`e2e/harness.ts`).
@@ -65,6 +67,7 @@ The app reads `DocViewer` props from the query string (`?src=samples/sample.docx
 | `docx.spec.ts`             | typing, formatting, styles, lists, colors, fonts, links, tables, images, find & replace, undo                                            |
 | `docx-page.spec.ts`        | page setup: size, orientation, margins, columns; refused values; numbers typed in a locale                                               |
 | `docx-split.spec.ts`       | paragraphs and tables split across pages: layout, caret, editing, header rows                                                            |
+| `docx-longscroll.spec.ts`  | a document past the scroll cap: wheel, Page Down, the caret, the last page by steps, the box at rest, zoom                               |
 | `docx-hf.spec.ts`          | headers and footers: page numbers, text, different first page, saved and undone                                                          |
 | `docx-table.spec.ts`       | table editing: cell selection, merges, colors, borders, alignment, column widths                                                         |
 | `docx-tabs.spec.ts`        | tab stops: left / center / right / decimal, leaders, stops of a style, absolute position tabs, typing, HTML export                       |
@@ -125,27 +128,6 @@ One-time setup: **Settings → Pages → Source: GitHub Actions**. Build locally
 
 ## Release
 
-### Pending compatibility notes: themes and icons
-
-Carry these notes into the next release's versioned notes when its version is chosen; leave already released notes unchanged.
-
-- `Theme` now means `ThemeMode | ThemeOptions`. Hosts that need only the mode union (`'light' | 'dark' | 'auto'`)
-  should use `ThemeMode` instead of `Theme` for their own state, parameters and records.
-- `FileMenuItem.icon` now accepts `IconName` rather than any string. Annotate variables holding icon names as
-  `IconName` to prevent widening to `string`; keep using the existing icon rendering API.
-- `ICON_NAMES` exposes the supported icon names as stable public keys. New keys may be added; existing keys must
-  not be renamed as an internal cleanup.
-- CSS declarations using `color-mix()` have token-based fallbacks for visible selection, hover and connection states.
-  This does not imply full support for older browsers.
-
-```ts
-import type { FileMenuItem, IconName, ThemeMode } from '@p10node/office-engine'
-
-const mode: ThemeMode = 'auto'
-const icon: IconName = 'save'
-const item: FileMenuItem = { label: 'Save a copy', icon, onClick: saveCopy }
-```
-
 ### Release process
 
 CI (`.github/workflows/ci.yml`) runs typecheck, tests, the library and SDK package builds and `npm pack --dry-run` of each package, and the browser tests, on every push to `main` and every PR.
@@ -169,6 +151,7 @@ Released together, at one version (the SDK packages compile in the engine's code
 | `@p10node/plantuml`      | `packages/plantuml` |
 | `@p10node/graphviz`      | `packages/graphviz` |
 | `@p10node/markdown`      | `packages/markdown` |
+| `@p10node/convert`       | `packages/convert`  |
 
 A package whose version is already on npm is skipped; one that fails to publish does not stop the others (the job fails at the end). Re-running the failed job publishes what is missing; so does publishing the tag again by hand once its branch is gone or its run is old: **Actions → Release → Run workflow**, with the tag (`gh workflow run release.yml -f tag=v0.2.0`). Typical case: a package's trusted publisher was fixed after the release ran.
 
