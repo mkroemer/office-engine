@@ -103,25 +103,20 @@ export function targetOf(s: string | null | undefined): Target | null {
   return (TARGETS as readonly string[]).includes(v) ? (v as Target) : null
 }
 
-/** what a file opens as, told by its name alone (an extension the engine reads as one kind); undefined when unsure */
-export function kindOfName(name: string): Kind | undefined {
-  const ext = /\.([^.\\/]+)$/.exec(name.toLowerCase())?.[1] ?? ''
-  if (/^(docx|docm|dotx|dotm|doc|dot|odt|ott|fodt|rtf|pages|md|markdown|txt|html?|mht|mhtml)$/.test(ext)) return 'docx'
-  if (/^(xlsx|xlsm|xltx|xltm|xls|xlt|ods|ots|fods|numbers|csv|tsv)$/.test(ext)) return 'xlsx'
-  if (/^(pptx|pptm|potx|potm|ppsx|ppsm|ppt|pps|pot|odp|otp|fodp|key|vsdx|vsdm|vstx|vstm|vssx|vssm)$/.test(ext)) return 'pptx'
-  return undefined
-}
-
 /**
- * A presentation, told from the first and last megabyte of its bytes: a PowerPoint, OpenDocument or Visio package
- * names its parts there (the end of a ZIP holds its directory), a .ppt its stream. False when unsure (a Keynote file
- * names its parts as Pages and Numbers do)
+ * What a file is, when its first and last megabyte say so for certain (an Office or OpenDocument package names its
+ * parts there, the end of a ZIP holds its directory; an old Office file its streams; RTF its first bytes); undefined
+ * when they do not (text formats, Apple's files, a damaged one): the engine decides those
  */
-export function looksLikePresentation(b: Uint8Array): boolean {
+export function kindOfBytes(b: Uint8Array): Kind | undefined {
   const MB = 1024 * 1024
   const latin1 = (x: Uint8Array) => new TextDecoder('latin1').decode(x)
   const ends = latin1(b.subarray(0, MB)) + latin1(b.subarray(Math.max(MB, b.length - MB)))
-  return /ppt\/presentation\.xml|application\/vnd\.oasis\.opendocument\.presentation|visio\/document\.xml|P\0o\0w\0e\0r\0P\0o\0i\0n\0t\0 \0D\0o\0c\0u\0m\0e\0n\0t/.test(ends)
+  const u16 = (s: string) => [...s].join('\0')
+  if (/ppt\/presentation\.xml|application\/vnd\.oasis\.opendocument\.presentation|visio\/document\.xml/.test(ends) || ends.includes(u16('PowerPoint Document'))) return 'pptx'
+  if (/word\/document\.xml|application\/vnd\.oasis\.opendocument\.text|^\{\\rtf/.test(ends) || ends.includes(u16('WordDocument'))) return 'docx'
+  if (/xl\/workbook\.xml|application\/vnd\.oasis\.opendocument\.spreadsheet/.test(ends) || ends.includes(u16('Workbook'))) return 'xlsx'
+  return undefined
 }
 
 /** the refusal of PDF output for a kind of document that has none yet; undefined when it has */
@@ -141,7 +136,7 @@ export function pageRanges(s: string): number[] | null {
   const out = new Set<number>()
   let named = 0
   for (const part of s.split(',')) {
-    const m = /^\s*(\d{1,6})\s*(?:-\s*(\d{1,6})\s*)?$/.exec(part)
+    const m = /^\s*0*(\d{1,6})\s*(?:-\s*0*(\d{1,6})\s*)?$/.exec(part)
     if (!m) return null
     const a = Number(m[1])
     const b = m[2] === undefined ? a : Number(m[2])

@@ -14,7 +14,7 @@
  * names the result, `Gotenberg-Trace` is sent back (a new id when the request has none).
  */
 import { writeZip } from '../../../src/core/zipwrite'
-import { ConvertError, kindOfName, looksLikePresentation, pageRanges, pdfLater, targetOf, type ConvertOptions, type Converted, type Target } from './convert'
+import { ConvertError, kindOfBytes, pageRanges, pdfLater, targetOf, type ConvertOptions, type Converted, type Target } from './convert'
 import { BusyError, ThreadError, TimeoutError, type Converter } from './pool'
 
 export interface ServiceOptions {
@@ -87,12 +87,12 @@ export function createHandler(converter: Converter, opts: ServiceOptions = {}): 
       const field = gotenberg ? 'pdf' : fields.get('to')
       const to = field ? targetOf(field) : undefined
       if (to === null) throw new HttpError(400, `Unknown format “${field}”`)
-      // a file whose name says it has no PDF output yet, and whose bytes do not say it is a presentation, is answered so
-      // before the pool is asked (not 503 when it is busy); the engine decides for the others
+      // a file whose bytes say it is a document or a workbook, which have no PDF output yet, is answered so before the
+      // pool is asked (not 503 when it is busy); the engine decides for the others, whatever their names
       if (to === 'pdf')
         for (const f of files) {
-          const later = pdfLater(kindOfName(f.name))
-          if (later && !looksLikePresentation(f.data)) throw later
+          const later = pdfLater(kindOfBytes(f.data))
+          if (later) throw later
         }
       const rangeField = gotenberg ? 'nativePageRanges' : 'slides'
       const range = fields.get(rangeField)?.trim()
@@ -104,7 +104,7 @@ export function createHandler(converter: Converter, opts: ServiceOptions = {}): 
         ...(fields.get('encoding') ? { encoding: fields.get('encoding')! } : {}),
         ...(fields.get('language') ? { language: fields.get('language')! } : {}),
         ...(slides ? { slides } : {}),
-        ...(flag(fields, gotenberg ? 'exportHiddenSlides' : 'hidden') ? { hidden: true } : {}),
+        ...((gotenberg ? flag(fields, 'exportHiddenSlides') : /^(true|1|yes)$/i.test(fields.get('hidden')?.trim() ?? '')) ? { hidden: true } : {}),
       }
       // one file failing (busy, too large, damaged) fails the request: the others are given up with it
       const batch = new AbortController()
@@ -113,7 +113,7 @@ export function createHandler(converter: Converter, opts: ServiceOptions = {}): 
         files.map((f) =>
           converter.convert(f.data, { ...options, name: f.name, signal }).then(
             // Gotenberg names each PDF of a ZIP after its file, extension and all: deck.pptx.pdf
-            (r) => (gotenberg ? { ...r, name: `${f.name.replace(/^.*[\\/]/, '') || 'document'}.pdf` } : r),
+            (r) => (gotenberg && files.length > 1 ? { ...r, name: `${f.name.replace(/^.*[\\/]/, '') || 'document'}.pdf` } : r),
             (e: Error) => {
               batch.abort(e)
               throw e
@@ -152,10 +152,13 @@ async function readRequest(req: Request, url: URL, maxBytes: number, hold: (n: n
       throw new HttpError(400, 'The multipart body cannot be read')
     }
     const files: Upload[] = []
+    // (a field given twice is read as Gotenberg reads it: its first value; the form's over the query's)
+    const own = new Map<string, string>()
     for (const [k, v] of form) {
-      if (typeof v === 'string') fields.set(k, v)
-      else files.push({ name: v.name || 'document', data: new Uint8Array(await v.arrayBuffer()) })
+      if (typeof v !== 'string') files.push({ name: v.name || 'document', data: new Uint8Array(await v.arrayBuffer()) })
+      else if (!own.has(k)) own.set(k, v)
     }
+    for (const [k, v] of own) fields.set(k, v)
     return { files, fields }
   }
   if (!body.byteLength) return { files: [], fields }
@@ -230,11 +233,11 @@ async function zipResponse(results: Converted[], outName?: string): Promise<Resp
 }
 
 /**
- * A boolean field as Gotenberg reads one (Go's ParseBool: 1, t, true, TRUE, True and their opposites); a field that
- * is none of them is refused
+ * A boolean field as Gotenberg reads one (Go's ParseBool: 1, t, true, TRUE, True and their opposites, as they are);
+ * a field that is none of them is refused
  */
 function flag(fields: Map<string, string>, name: string): boolean {
-  const v = fields.get(name)?.trim()
+  const v = fields.get(name)
   if (v === undefined || v === '') return false
   if (/^(1|t|T|true|TRUE|True)$/.test(v)) return true
   if (/^(0|f|F|false|FALSE|False)$/.test(v)) return false

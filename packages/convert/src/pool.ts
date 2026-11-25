@@ -21,7 +21,7 @@ export interface ConverterOptions {
   memory?: number
   /**
    * the font files PDFs set their text in, for a conversion that names none (default the system's, found once); a
-   * function is called when a PDF is first asked for
+   * function is called when a PDF is first asked for. A list is taken as it is when the converter is made
    */
   fonts?: FontFile[] | Promise<FontFile[]> | (() => Promise<FontFile[]>)
 }
@@ -95,6 +95,8 @@ export class Converter {
     this.bytesMax = opts.bytes ?? 1024 * 1024 * 1024
     this.memory = opts.memory
     this.fontSpec = opts.fonts
+    // (a copy: the threads that have it and the ones sent it later have the same list)
+    if (Array.isArray(opts.fonts)) this.catalog = [...opts.fonts]
   }
 
   private fontSpec: ConverterOptions['fonts']
@@ -112,6 +114,7 @@ export class Converter {
 
   /** the font list, found when first asked for; one that could not be found is looked for again next time */
   private fonts(): Promise<FontFile[]> {
+    if (this.catalog) return Promise.resolve(this.catalog)
     if (!this.fontList) {
       const spec = this.fontSpec
       const p = Promise.resolve().then(() => (typeof spec === 'function' ? spec() : (spec ?? systemFonts())))
@@ -124,13 +127,30 @@ export class Converter {
   convert(data: Uint8Array, opts: ConvertOptions = {}): Promise<Converted> {
     if (this.closed) return Promise.reject(new Error('The converter is closed'))
     if (opts.to === 'pdf' && !opts.fonts) {
+      if (this.catalog) return this.convert(data, { ...opts, fonts: this.catalog })
+      // the font list is being looked for: the conversion waits for it as queued work does, its input counted
       if (opts.signal?.aborted) return Promise.reject(opts.signal.reason)
-      if (this.waiting.length + this.fontWaits.size >= this.queueMax) return Promise.reject(new BusyError())
+      const size = data.byteLength
+      const free = this.idle.length + (this.workers - this.busy.size) - this.fontWaits.size
+      if (free <= 0 && this.waiting.length + this.fontWaits.size >= this.queueMax) return Promise.reject(new BusyError())
+      if (this.tasks && this.bytes + size > this.bytesMax) return Promise.reject(new BusyError())
+      this.bytes += size
+      this.tasks++
       const signal = opts.signal
+      // (let go of when the conversion is given up: an input is not held until the font folders are read)
+      let input: Uint8Array | null = data
       return new Promise<Converted>((resolve, reject) => {
-        const fail = (e: unknown) => {
+        const settle = () => {
           this.fontWaits.delete(fail)
           signal?.removeEventListener('abort', onAbort)
+          this.bytes -= size
+          this.tasks--
+          const d = input!
+          input = null
+          return d
+        }
+        const fail = (e: unknown) => {
+          settle()
           reject(e)
         }
         const onAbort = () => fail(signal!.reason)
@@ -140,9 +160,7 @@ export class Converter {
           (fonts) => {
             // (given up while the fonts were looked for)
             if (!this.fontWaits.has(fail)) return
-            this.fontWaits.delete(fail)
-            signal?.removeEventListener('abort', onAbort)
-            this.convert(data, { ...opts, fonts }).then(resolve, reject)
+            this.convert(settle(), { ...opts, fonts }).then(resolve, reject)
           },
           (e) => this.fontWaits.has(fail) && fail(e),
         )

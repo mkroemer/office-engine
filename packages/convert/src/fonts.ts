@@ -3,6 +3,7 @@
  * names, styles and weights, and declared by their paths. Text is then set in them when a PDF is written; a file is
  * read from the disk when text first needs it.
  */
+import { constants } from 'node:fs'
 import { open, opendir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -114,7 +115,14 @@ export function withGenerics(fonts: FontFile[]): FontFile[] {
     else byFamily.set(key, [f])
   }
   // fonts of other scripts: the face of each nearest to regular
-  const coverage = [...byFamily.keys()].filter((k) => COVERAGE.test(k)).map((k) => byFamily.get(k)!.reduce((a, b) => (rank(b) < rank(a) ? b : a)))
+  // (all the files of that face: a family may come in several files, each with its own characters)
+  const coverage = [...byFamily.keys()]
+    .filter((k) => COVERAGE.test(k))
+    .flatMap((k) => {
+      const faces = byFamily.get(k)!
+      const best = Math.min(...faces.map(rank))
+      return faces.filter((f) => rank(f) === best)
+    })
   const out = [...fonts]
   for (const [generic, names] of Object.entries(GENERIC)) {
     if (byFamily.has(generic)) continue
@@ -133,15 +141,31 @@ export function withGenerics(fonts: FontFile[]): FontFile[] {
 /** how far a face is from regular: its weight from 400, italic after upright */
 const rank = (f: FontFile) => Math.abs(Number(f.weight ?? 400) - 400) + (/italic|oblique/i.test(f.style ?? '') ? 1000 : 0)
 
-/** a font file's bytes, refused past the size a font may have: a file is read whole only when it can be one */
+/**
+ * A font file's bytes, refused past the size a font may have, also when it grows while it is read. Opened without
+ * waiting (a pipe named like a font does not hold the scan up) and read only when it is a file.
+ */
 async function readFontBytes(path: string): Promise<Uint8Array> {
-  const file = await open(path, 'r')
+  const file = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0))
   try {
     const st = await file.stat()
     if (!st.isFile()) throw new Error(`${path} is not a file`)
-    if (st.size > FONT_LIMITS.file) throw new Error(`${path} is larger than a font file may be`)
-    const b = await file.readFile()
-    return new Uint8Array(b.buffer, b.byteOffset, b.byteLength)
+    const max = FONT_LIMITS.file
+    if (st.size > max) throw new Error(`${path} is larger than a font file may be`)
+    // (room for one byte more than it says: a file that grew is seen to)
+    let out = new Uint8Array(st.size + 1)
+    let size = 0
+    for (;;) {
+      if (size === out.length) {
+        if (size > max) throw new Error(`${path} is larger than a font file may be`)
+        const more = new Uint8Array(Math.min(max + 1, out.length * 2))
+        more.set(out)
+        out = more
+      }
+      const { bytesRead } = await file.read(out, size, out.length - size, null)
+      if (!bytesRead) return out.subarray(0, size)
+      size += bytesRead
+    }
   } finally {
     await file.close()
   }

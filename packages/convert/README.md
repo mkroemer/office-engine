@@ -85,7 +85,7 @@ One file gives the converted file, several a ZIP. Gotenberg's headers are read: 
 | 405    | not a POST                                                           |
 | 413    | the request is larger than `MAX_SIZE`, or the converted file would be larger than 1 GB |
 | 422    | the file cannot be read: damaged, encrypted, not a format the engine knows (`400` on Gotenberg's route, as Gotenberg answers) |
-| 501    | PDF of a document or a spreadsheet (#48, #47); answered before the file is converted when its name says so and its bytes do not say it is a presentation |
+| 501    | PDF of a document or a spreadsheet (#48, #47); answered before the file is converted when its bytes say what it is (an Office or OpenDocument file, RTF), whatever its name |
 | 503    | the file took longer than `TIMEOUT`, or every thread is busy and the queue is full (`Retry-After`) |
 
 Settings, as flags of `office-convert serve` or environment variables: `PORT` (3000), `HOST` (0.0.0.0), `WORKERS` (the number of CPUs), `TIMEOUT` (120 s), `MAX_SIZE` (100 MB per request), `MAX_FILES` (20 per request), `FONTS` (font files or folders for PDF, before the system's), `SYSTEM_FONTS=0` (not the system's). Each conversion runs on a worker thread: one past its time, or whose client hung up, ends with its thread, and when one file of a request fails the others are given up. At most 100 files, and 1 GB of them, wait for a thread, and 1 GB of request bodies are held at once (`maxPending` of `createHandler`); more is answered `503`. A gzip-compressed file unpacks to 1 GB at most. The engine's own limits for crafted files (ZIP entries, unpacked sizes, cells, chart points) apply as in the browser.

@@ -463,3 +463,78 @@ describe('PDF: review', () => {
     await failing.close()
   })
 })
+
+describe('PDF: re-check', () => {
+  const dir = mkdtempSync(`${tmpdir()}/office-convert-pdf3-`)
+  afterAll(() => rmSync(dir, { recursive: true, force: true }))
+  writeFileSync(`${dir}/calibri.ttf`, testFont({ family: 'Calibri', advance: 500 }))
+  const fonts = [{ family: 'Calibri', src: `${dir}/calibri.ttf` }]
+  const latin1 = (b: Uint8Array) => new TextDecoder('latin1').decode(b)
+  const form = (files: [string, Uint8Array][], fields: [string, string][] = []) => {
+    const fd = new FormData()
+    for (const [name, data] of files) fd.append('files', new File([data as BlobPart], name))
+    for (const [k, v] of fields) fd.append(k, v)
+    return fd
+  }
+  const handle = createHandler(new Converter({ workers: 0, fonts }))
+  const post = (body: FormData, path = '/forms/libreoffice/convert') => handle(new Request(`http://x${path}`, { method: 'POST', body }))
+  const deck = S('sample.pptx')
+
+  test("a field given twice is read by its first value; Gotenberg's booleans are read as they are", async () => {
+    expect((await post(form([['a.pptx', deck]], [['userPassword', 'secret'], ['userPassword', '']]))).status).toBe(400)
+    expect((await post(form([['a.pptx', deck]], [['exportHiddenSlides', ' true ']]))).status).toBe(400)
+    expect((await post(form([['a.pptx', deck]], [['to', 'pdf'], ['hidden', 'TrUe']]), '/convert')).status).toBe(200)
+  })
+
+  test('one file keeps its own name; what the bytes are decides, whatever the name', async () => {
+    const one = await post(form([['deck.pptx', deck]]))
+    expect(one.headers.get('content-disposition')).toContain('filename="deck.pdf"')
+    expect((await post(form([['renamed.docx', S('sample.key')]]))).status).toBe(200)
+    expect((await post(form([['broken.docx', new TextEncoder().encode('PK\x03\x04 not a zip')]]))).status).toBe(400)
+    expect((await post(form([['notes.pptx', S('sample.docx')]]))).status).toBe(501)
+    expect(pageRanges('0000001')).toEqual([0])
+  })
+
+  test('a pool of no queue converts a PDF on an idle thread; a font list is taken as it was given', async () => {
+    const list = [...fonts]
+    const pool = new Converter({ workers: 1, queue: 0, fonts: list })
+    try {
+      list.length = 0
+      const r = await pool.convert(deck, { to: 'pdf' })
+      expect(latin1(r.data)).toMatch(/\+Calibri/)
+    } finally {
+      await pool.close()
+    }
+  })
+
+  test('conversions waiting for the fonts count toward the bytes the pool takes', async () => {
+    let found!: (l: typeof fonts) => void
+    const pool = new Converter({ workers: 1, bytes: 1, fonts: () => new Promise((r) => (found = r)) })
+    const first = pool.convert(new Uint8Array(2), { to: 'pdf' }).catch((e) => e)
+    expect(pool.convert(new Uint8Array(2), { to: 'pdf' })).rejects.toBeInstanceOf(BusyError)
+    // (the font list is asked for a moment later)
+    await new Promise((r) => setTimeout(r, 0))
+    found(fonts)
+    expect(await first).toBeInstanceOf(Error)
+    await pool.close()
+  })
+
+  test('every file of a family of other scripts serves its characters; a pipe named like a font does not hold the scan up', async () => {
+    const { buildFont } = await import('./font-tables')
+    const { FontBook } = await import('../src/core/font')
+    const a = buildFont({ family: 'Noto Sans CJK SC', advances: [500, 1000], chars: [[0x6f22, 1]] })
+    const b = buildFont({ family: 'Noto Sans CJK SC', advances: [500, 1000], chars: [[0x5b57, 1]] })
+    const book = new FontBook(withGenerics([{ family: 'Noto Sans CJK SC', src: a, weight: 400, style: 'normal' }, { family: 'Noto Sans CJK SC', src: b, weight: 400, style: 'normal' }]))
+    const m = await book.measure({ text: '漢字', font: 'sans-serif', size: 10 })
+    expect(m.pieces.every((p) => p.font)).toBe(true)
+    const pipes = mkdtempSync(`${tmpdir()}/office-convert-fifo-`)
+    try {
+      Bun.spawnSync(['mkfifo', `${pipes}/pipe.ttf`])
+      writeFileSync(`${pipes}/calibri.ttf`, testFont({ family: 'Calibri' }))
+      const found = await Promise.race([findFonts([pipes]), new Promise((r) => setTimeout(() => r('stuck'), 3000))])
+      expect(Array.isArray(found) && found.some((f) => f.family === 'Calibri')).toBe(true)
+    } finally {
+      rmSync(pipes, { recursive: true, force: true })
+    }
+  })
+})
