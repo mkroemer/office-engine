@@ -145,10 +145,11 @@ export async function convert(input: Uint8Array | ArrayBuffer | Blob, opts: Conv
       if (to === 'xlsx') out = (await call('save')) as Blob
       else {
         const sheet = sheetIndex(info, opts.sheet)
-        const { rows, cols } = await loaded(engine, listeners, sheet, opts.signal)
-        // a separator or a line break at least per cell: a sparse sheet (one cell at XFD1048576) is refused before it is written
-        if (rows * cols > maxOutput) throw tooLarge(maxOutput)
-        out = (await call('xlsx.text', sheet, to === 'tsv' ? '\t' : ',')) as Blob
+        await loaded(engine, listeners, sheet, opts.signal)
+        // (refused while it is written, or before when the cells in use cannot fit: one at XFD1048576)
+        out = (await call('xlsx.text', sheet, to === 'tsv' ? '\t' : ',', maxOutput).catch((e: Error) => {
+          throw e instanceof RangeError ? tooLarge(maxOutput) : e
+        })) as Blob
       }
     } else {
       if (to === 'pptx') out = (await call('save')) as Blob
@@ -185,16 +186,16 @@ function sheetIndex(info: OpenResult, sheet: number | string | undefined): numbe
   return n
 }
 
-/** loads a sheet and resolves once it is read whole, with its size (or rejects with what stopped it) */
-function loaded(engine: Engine, listeners: Set<(event: keyof Events, data: unknown) => void>, sheet: number, signal?: AbortSignal): Promise<SheetProgress> {
-  return new Promise<SheetProgress>((resolve, reject) => {
+/** loads a sheet and resolves once it is read whole (or rejects with what stopped it) */
+function loaded(engine: Engine, listeners: Set<(event: keyof Events, data: unknown) => void>, sheet: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
     const done = (event: keyof Events, data: unknown) => {
       const p = data as SheetProgress & { error?: string }
       if (event !== 'xlsx:progress' || p.sheet !== sheet || !p.done) return
       listeners.delete(done)
       signal?.removeEventListener('abort', stop)
       if (p.error) reject(new Error(p.error))
-      else resolve(p)
+      else resolve()
     }
     const stop = () => {
       listeners.delete(done)

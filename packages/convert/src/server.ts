@@ -20,6 +20,8 @@ export interface ServiceOptions {
   maxBytes?: number
   /** files in one request (default 20) */
   maxFiles?: number
+  /** bytes of request bodies held at once, being read or converted (default 1 GB): past it requests are answered 503 */
+  maxPending?: number
   /** the version `/version` answers */
   version?: string
 }
@@ -39,6 +41,8 @@ class HttpError extends Error {
 export function createHandler(converter: Converter, opts: ServiceOptions = {}): (req: Request) => Promise<Response> {
   const maxBytes = opts.maxBytes ?? 100 * MB
   const maxFiles = opts.maxFiles ?? 20
+  const maxPending = opts.maxPending ?? 1024 * 1024 * 1024
+  let pending = 0
   const version = opts.version ?? '0.0.0'
 
   return async (req) => {
@@ -47,6 +51,13 @@ export function createHandler(converter: Converter, opts: ServiceOptions = {}): 
     const answer = (res: Response) => {
       res.headers.set('Gotenberg-Trace', trace)
       return res
+    }
+    // the bytes of this request's body counted in `pending`, given back once it is answered
+    let held = 0
+    const hold = (n: number) => {
+      held += n
+      pending += n
+      if (pending > maxPending) throw new HttpError(503, 'The converter is busy: try again later')
     }
     try {
       const path = url.pathname.replace(/\/+$/, '') || '/'
@@ -61,7 +72,7 @@ export function createHandler(converter: Converter, opts: ServiceOptions = {}): 
       // Gotenberg's LibreOffice route writes PDF whatever else it is told: answered before the body is read
       if (gotenberg) throw new ConvertError('PDF output is not available yet: it needs the layout of p10node/office-engine#44', 'not-implemented')
 
-      const { files, fields } = await readRequest(req, url, maxBytes)
+      const { files, fields } = await readRequest(req, url, maxBytes, hold)
       if (!files.length) throw new HttpError(400, 'No file: POST the files as multipart/form-data, or one file as the body')
       if (files.length > maxFiles) throw new HttpError(400, `Too many files: at most ${maxFiles} in one request`)
       const field = fields.get('to')
@@ -88,6 +99,8 @@ export function createHandler(converter: Converter, opts: ServiceOptions = {}): 
       return answer(results.length === 1 ? fileResponse(results[0], outName) : await zipResponse(results, outName))
     } catch (e) {
       return answer(errorResponse(e))
+    } finally {
+      pending -= held
     }
   }
 }
@@ -98,10 +111,10 @@ interface Upload {
 }
 
 /** the files and fields of a request: multipart, or the body as one file (`name` from the query or Content-Disposition) */
-async function readRequest(req: Request, url: URL, maxBytes: number): Promise<{ files: Upload[]; fields: Map<string, string> }> {
+async function readRequest(req: Request, url: URL, maxBytes: number, hold: (n: number) => void): Promise<{ files: Upload[]; fields: Map<string, string> }> {
   const length = Number(req.headers.get('content-length') ?? NaN)
   if (length > maxBytes) throw new HttpError(413, `The request is larger than ${maxBytes / MB} MB`)
-  const body = await readBody(req, maxBytes)
+  const body = await readBody(req, maxBytes, hold)
   const fields = new Map<string, string>()
   for (const [k, v] of url.searchParams) fields.set(k, v)
   const type = req.headers.get('content-type') ?? ''
@@ -134,7 +147,7 @@ const safeDecode = (s: string) => {
 }
 
 /** the whole body, refused past `maxBytes` (also when no Content-Length announced it) */
-async function readBody(req: Request, maxBytes: number): Promise<Uint8Array> {
+async function readBody(req: Request, maxBytes: number, hold: (n: number) => void): Promise<Uint8Array> {
   if (!req.body) return new Uint8Array(0)
   const chunks: Uint8Array[] = []
   let size = 0
@@ -143,6 +156,12 @@ async function readBody(req: Request, maxBytes: number): Promise<Uint8Array> {
     const { done, value } = await reader.read()
     if (done) break
     size += value.byteLength
+    try {
+      hold(value.byteLength)
+    } catch (e) {
+      void reader.cancel()
+      throw e
+    }
     if (size > maxBytes) {
       void reader.cancel()
       throw new HttpError(413, `The request is larger than ${maxBytes / MB} MB`)
@@ -195,6 +214,6 @@ function errorResponse(e: unknown): Response {
     // the file could not be read (damaged, encrypted, not a format the engine knows)
     : 422
   const res = new Response(`${err?.message ?? String(e)}\n`, { status, headers: { 'Content-Type': 'text/plain; charset=utf-8' } })
-  if (e instanceof BusyError) res.headers.set('Retry-After', '5')
+  if (status === 503 && !(e instanceof TimeoutError)) res.headers.set('Retry-After', '5')
   return res
 }

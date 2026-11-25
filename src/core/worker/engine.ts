@@ -240,7 +240,7 @@ export class Engine {
       case 'xlsx.find':
         return this.need(this.xlsx).find(args[0] as number, args[1] as string, args[2] as FindOptions)
       case 'xlsx.text':
-        return this.need(this.xlsx).text(args[0] as number, args[1] as string)
+        return this.need(this.xlsx).text(args[0] as number, args[1] as string, args[2] as number | undefined)
       case 'pptx.setText':
         return this.need(this.pptx).setText(args[0] as number, args[1] as number, args[2] as PParaSpec[], args[3] as [number, number] | undefined, !!args[4])
       case 'pptx.shapes':

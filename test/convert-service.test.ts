@@ -3,6 +3,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSy
 import { tmpdir } from 'node:os'
 import { gzipSync } from 'node:zlib'
 import { BusyError, convert, ConvertError, Converter, createHandler, TimeoutError } from '../packages/convert/src/index'
+import { rowsToXlsx } from '../src/core/convert'
+import { Engine } from '../src/core/worker/engine'
 import { ZipArchive } from '../src/core/zip'
 import { BlobSource } from '../src/core/source'
 
@@ -69,6 +71,12 @@ describe('convert', () => {
 
   test('what is written, and what a gzip-compressed file unpacks to, is limited', async () => {
     expect(await convert(S('sample.xlsx'), { to: 'csv', maxOutput: 100 }).catch((e) => e.code)).toBe('too-large')
+    // a blank cell formatted far away is no text: the CSV is as small as the cells in use
+    const engine = new Engine(() => {})
+    await engine.open(await rowsToXlsx([['x']], 'S'), {})
+    await engine.call('xlsx.format', [0, { r0: 1048575, c0: 16383, r1: 1048575, c1: 16383 }, { b: true }])
+    const sparse = new Uint8Array(await ((await engine.call('save', [])) as Blob).arrayBuffer())
+    expect(text((await convert(sparse, { to: 'csv' })).data)).toBe('x\r\n')
     expect(await convert(S('sample.docx'), { to: 'html', maxOutput: 1000 }).catch((e) => e.code)).toBe('too-large')
     const gz = new Uint8Array(gzipSync(new Uint8Array(4 * 1024 * 1024).fill(0x41)))
     expect((await convert(gz, { name: 'a.csv.gz', maxUnpacked: 1024 * 1024 }).catch((e) => e)).message).toContain('too large')
@@ -236,6 +244,10 @@ describe('office-convert', () => {
     expect(again.err).toContain('--out out.docx')
     expect(run('in.doc', '-o', 'out.docx').err).toContain('exists (--force overwrites it)')
     expect(run('in.doc', '-o', 'out.docx', '--force').code).toBe(0)
+    // two files that exist are two inputs
+    writeFileSync(`${dir}/second.md`, S('sample.md'))
+    expect(run('in.doc', 'second.md', '-t', 'txt').code).toBe(0)
+    expect(existsSync(`${dir}/in.txt`) && existsSync(`${dir}/second.txt`)).toBe(true)
   })
 
   test('an input is never overwritten, under any name', () => {
@@ -244,6 +256,11 @@ describe('office-convert', () => {
     const r = run('src.doc', '-t', 'txt', '-o', 'alias.txt', '--force')
     expect(r.code).toBe(1)
     expect(r.err).toContain('is one of the inputs')
+    expect(Buffer.compare(readFileSync(`${dir}/src.doc`), S('sample.doc'))).toBe(0)
+    // stdin read from the file being written
+    const p = Bun.spawnSync(['bun', CLI, '-', '--name', 'src.doc', '-t', 'txt', '-o', 'src.doc', '--force'], { cwd: dir, stdin: Bun.file(`${dir}/src.doc`) })
+    expect(p.exitCode).toBe(1)
+    expect(p.stderr.toString()).toContain('is one of the inputs')
     expect(Buffer.compare(readFileSync(`${dir}/src.doc`), S('sample.doc'))).toBe(0)
   })
 

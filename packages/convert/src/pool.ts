@@ -116,7 +116,13 @@ export class Converter {
         resolve: (r) => (done(), resolve(r)),
         reject: (e) => (done(), reject(e)),
       }
-      const thread = this.idle.pop() ?? (this.busy.size < this.workers ? this.spawn() : undefined)
+      let thread: Thread | undefined
+      try {
+        thread = this.idle.pop() ?? (this.busy.size < this.workers ? this.spawn() : undefined)
+      } catch (e) {
+        // (a thread that cannot start: the conversion fails, its bytes are given back)
+        return task.reject(e as Error)
+      }
       if (thread) return this.run(thread, task)
       this.waiting.push(task)
       if (signal) {
@@ -221,7 +227,12 @@ export class Converter {
     this.end(thread, err)
     if (!known || this.closed) return
     const task = this.dequeue()
-    if (task) this.run(this.spawn(), task)
+    if (!task) return
+    try {
+      this.run(this.spawn(), task)
+    } catch (e) {
+      task.reject(e as Error)
+    }
   }
 
   private end(thread: Thread, err: Error) {
