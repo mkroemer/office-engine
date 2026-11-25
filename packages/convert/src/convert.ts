@@ -60,9 +60,9 @@ export interface ConvertOptions {
    * serves is set in Helvetica, with a warning.
    */
   fonts?: FontFile[]
-  /** PDF output of a presentation: the slides written, by index from 0 (default all but the hidden ones) */
+  /** PDF output of a presentation: the slides written, by index from 0 (default all); hidden ones only with `hidden` */
   slides?: number[]
-  /** PDF output of a presentation: hidden slides too, when `slides` does not say (default false) */
+  /** PDF output of a presentation: hidden slides are written too (default false: not even when `slides` names them) */
   hidden?: boolean
   /** gives up the conversion: the promise rejects with an `AbortError` */
   signal?: AbortSignal
@@ -112,28 +112,41 @@ export function kindOfName(name: string): Kind | undefined {
   return undefined
 }
 
+/**
+ * A presentation, told from the first and last megabyte of its bytes: a PowerPoint, OpenDocument or Visio package
+ * names its parts there (the end of a ZIP holds its directory), a .ppt its stream. False when unsure (a Keynote file
+ * names its parts as Pages and Numbers do)
+ */
+export function looksLikePresentation(b: Uint8Array): boolean {
+  const MB = 1024 * 1024
+  const latin1 = (x: Uint8Array) => new TextDecoder('latin1').decode(x)
+  const ends = latin1(b.subarray(0, MB)) + latin1(b.subarray(Math.max(MB, b.length - MB)))
+  return /ppt\/presentation\.xml|application\/vnd\.oasis\.opendocument\.presentation|visio\/document\.xml|P\0o\0w\0e\0r\0P\0o\0i\0n\0t\0 \0D\0o\0c\0u\0m\0e\0n\0t/.test(ends)
+}
+
 /** the refusal of PDF output for a kind of document that has none yet; undefined when it has */
 export function pdfLater(kind: Kind | undefined): ConvertError | undefined {
   const issue = kind && PDF_LATER[kind]
   return issue ? new ConvertError(`PDF output of a ${KIND_NAME[kind]} is not available yet: it comes with ${issue}`, 'not-implemented') : undefined
 }
 
-/** at most this many slides named by one range: "1-1000000000" is not a list to build */
+/** pages a list may name, and the highest page number read: no presentation has more */
 const MAX_PAGES = 100_000
 
 /**
  * Pages as people and Gotenberg's `nativePageRanges` write them: "1-3, 5" (from 1), as indexes from 0, in order,
- * each once; null for text that is not that
+ * each once; null for text that is not that, or names more pages than a presentation has
  */
 export function pageRanges(s: string): number[] | null {
   const out = new Set<number>()
+  let named = 0
   for (const part of s.split(',')) {
-    const m = /^\s*(\d+)\s*(?:-\s*(\d+)\s*)?$/.exec(part)
+    const m = /^\s*(\d{1,6})\s*(?:-\s*(\d{1,6})\s*)?$/.exec(part)
     if (!m) return null
     const a = Number(m[1])
     const b = m[2] === undefined ? a : Number(m[2])
-    if (a < 1 || b < a || b - a >= MAX_PAGES) return null
-    for (let p = a; p <= b && out.size < MAX_PAGES; p++) out.add(p - 1)
+    if (a < 1 || b < a || b > MAX_PAGES || (named += b - a + 1) > MAX_PAGES) return null
+    for (let p = a; p <= b; p++) out.add(p - 1)
   }
   return out.size ? [...out].sort((x, y) => x - y) : null
 }

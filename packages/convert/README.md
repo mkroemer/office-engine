@@ -34,8 +34,8 @@ office-convert serve -p 3000                    # the HTTP service
 | `-j, --jobs`      | files at once: the number of CPUs                          |
 | `--timeout`       | 120 s per file (0: no limit)                               |
 | `--max-size`      | 100 MB per file                                            |
-| `--slides`        | PDF: all but the hidden slides; `1-3,5` for those          |
-| `--hidden`        | PDF: hidden slides are left out                            |
+| `--slides`        | PDF: every slide; `1-3,5` for those                        |
+| `--hidden`        | PDF: hidden slides are left out, also when `--slides` names them |
 | `--fonts`         | PDF: a font file or folder to set text in, before the system's (again for more) |
 | `--no-system-fonts` | PDF: the system's fonts are used                         |
 
@@ -73,7 +73,7 @@ curl -F files=@deck.pptx -F nativePageRanges=1-3 http://localhost:3000/forms/lib
 | Route                              |                                                                                  |
 |------------------------------------|----------------------------------------------------------------------------------|
 | `POST /convert`                    | multipart: the files (any field name), `to`, `sheet`, `encoding`, `language`, `slides` (PDF: `1-3,5`), `hidden`; or one file as the body, `to` / `name` in the query |
-| `POST /forms/libreoffice/convert`  | Gotenberg's route: the files to PDF, `nativePageRanges` the slides. Presentations; `501` for documents and spreadsheets. `merge` of several files and `pdfa` / `pdfua` are answered `400`, not ignored |
+| `POST /forms/libreoffice/convert`  | Gotenberg's route: the files to PDF, `nativePageRanges` the slides, `exportHiddenSlides`. Presentations; `501` for documents and spreadsheets. What it is asked for and does not do yet is answered `400`, not ignored: `merge` of several files, `pdfa`, `pdfua`, `userPassword`, `ownerPassword`, `splitMode`, `password`. Booleans as Gotenberg reads them (`1`, `t`, `true`…); several files give a ZIP of `deck.pptx.pdf`… |
 | `GET /health`                      | `{ "status": "up", "details": … }`, as Gotenberg answers                         |
 | `GET /version`                     | the version, as text                                                             |
 
@@ -84,8 +84,8 @@ One file gives the converted file, several a ZIP. Gotenberg's headers are read: 
 | 400    | no file, too many files, a format the file cannot be written as, slides that are not there, what Gotenberg's route is asked for and does not do yet |
 | 405    | not a POST                                                           |
 | 413    | the request is larger than `MAX_SIZE`, or the converted file would be larger than 1 GB |
-| 422    | the file cannot be read: damaged, encrypted, not a format the engine knows |
-| 501    | PDF of a document or a spreadsheet (#48, #47); answered before the file is converted |
+| 422    | the file cannot be read: damaged, encrypted, not a format the engine knows (`400` on Gotenberg's route, as Gotenberg answers) |
+| 501    | PDF of a document or a spreadsheet (#48, #47); answered before the file is converted when its name says so and its bytes do not say it is a presentation |
 | 503    | the file took longer than `TIMEOUT`, or every thread is busy and the queue is full (`Retry-After`) |
 
 Settings, as flags of `office-convert serve` or environment variables: `PORT` (3000), `HOST` (0.0.0.0), `WORKERS` (the number of CPUs), `TIMEOUT` (120 s), `MAX_SIZE` (100 MB per request), `MAX_FILES` (20 per request), `FONTS` (font files or folders for PDF, before the system's), `SYSTEM_FONTS=0` (not the system's). Each conversion runs on a worker thread: one past its time, or whose client hung up, ends with its thread, and when one file of a request fails the others are given up. At most 100 files, and 1 GB of them, wait for a thread, and 1 GB of request bodies are held at once (`maxPending` of `createHandler`); more is answered `503`. A gzip-compressed file unpacks to 1 GB at most. The engine's own limits for crafted files (ZIP entries, unpacked sizes, cells, chart points) apply as in the browser.
@@ -114,4 +114,4 @@ const handler = createHandler(converter, { maxBytes: 50 * 1024 * 1024 })
 await listen(handler, { port: 3000 })   // Bun.serve under Bun, node:http under Node
 ```
 
-`convert` resolves with `{ data: Uint8Array, name, type, ext, kind, from?, warnings }` and rejects with a `ConvertError` (`code`: `unsupported`, `not-implemented`, `too-large`) for a request it cannot do, an `Error` for a file it cannot read. Its limits: `maxOutput` (the file written, 1 GB) and `maxUnpacked` (a gzip-compressed input, 1 GB). For PDF: `fonts` (default `systemFonts()`), `slides` (indexes from 0), `hidden`. `Converter` takes `workers`, `timeout`, `queue` (100), `bytes` (1 GB of input running and waiting), `memory` (MB of heap per thread, Node only) and `fonts` (found once in the calling thread and handed to the threads; a function is called when a PDF is first asked for), copies the bytes it is given, and adds `TimeoutError`, `BusyError` and `ThreadError` (the thread ran out of memory or crashed).
+`convert` resolves with `{ data: Uint8Array, name, type, ext, kind, from?, warnings }` and rejects with a `ConvertError` (`code`: `unsupported`, `not-implemented`, `too-large`) for a request it cannot do, an `Error` for a file it cannot read. Its limits: `maxOutput` (the file written, 1 GB) and `maxUnpacked` (a gzip-compressed input, 1 GB). For PDF: `fonts` (default `systemFonts()`), `slides` (indexes from 0), `hidden` (hidden slides are written only with it, also when `slides` names them). `Converter` takes `workers`, `timeout`, `queue` (100), `bytes` (1 GB of input running and waiting), `memory` (MB of heap per thread, Node only) and `fonts` (found once in the calling thread and handed to the threads; a function is called when a PDF is first asked for), copies the bytes it is given, and adds `TimeoutError`, `BusyError` and `ThreadError` (the thread ran out of memory or crashed).

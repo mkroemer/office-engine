@@ -5,16 +5,30 @@ import { convert, ConvertError, type ConvertOptions } from './convert'
 export interface Job {
   id: number
   data: Uint8Array
-  opts: Omit<ConvertOptions, 'signal'>
+  /** `sharedFonts`: the fonts of the last `FontsMessage` */
+  opts: Omit<ConvertOptions, 'signal'> & { sharedFonts?: boolean }
+}
+
+/** the pool's font list, sent to a thread once */
+export interface FontsMessage {
+  fonts: NonNullable<ConvertOptions['fonts']>
 }
 
 export type JobResult =
   | { id: number; ok: true; result: Awaited<ReturnType<typeof convert>> }
   | { id: number; ok: false; error: string; code?: ConvertError['code'] }
 
-parentPort!.on('message', async ({ id, data, opts }: Job) => {
+let shared: ConvertOptions['fonts']
+
+parentPort!.on('message', async (msg: Job | FontsMessage) => {
+  if (!('id' in msg)) {
+    shared = msg.fonts
+    return
+  }
+  const { id, data } = msg
+  const { sharedFonts, ...opts } = msg.opts
   try {
-    const result = await convert(data, opts)
+    const result = await convert(data, sharedFonts ? { ...opts, fonts: shared } : opts)
     parentPort!.postMessage({ id, ok: true, result } satisfies JobResult, [result.data.buffer as ArrayBuffer])
   } catch (e) {
     const err = e as Error

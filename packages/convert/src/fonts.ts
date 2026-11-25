@@ -3,10 +3,10 @@
  * names, styles and weights, and declared by their paths. Text is then set in them when a PDF is written; a file is
  * read from the disk when text first needs it.
  */
-import { readdir, readFile, stat } from 'node:fs/promises'
+import { open, opendir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { Font } from '../../../src/core/font'
+import { Font, FONT_LIMITS } from '../../../src/core/font'
 
 /** a font file PDFs set text in: the engine's `FontSource`, the list `DocViewer`'s `fonts` takes */
 export interface FontFile {
@@ -62,21 +62,27 @@ const COVERAGE = /^(Noto Sans (CJK|JP|SC|TC|KR|Arabic|Hebrew|Devanagari|Thai|Sym
 export async function findFonts(dirs: string[]): Promise<FontFile[]> {
   const files: string[] = []
   const seen = new Set<string>()
+  // (entries read one by one, not a folder's whole list at once; links to folders are not followed: no loops)
   const walk = async (dir: string, depth: number) => {
     if (depth > MAX_DEPTH || files.length >= MAX_FILES) return
     let entries
     try {
-      entries = await readdir(dir, { withFileTypes: true })
+      entries = await opendir(dir)
     } catch {
       return
     }
-    for (const e of entries) {
-      const path = join(dir, e.name)
-      if (e.isDirectory()) await walk(path, depth + 1)
-      else if (FILE.test(e.name) && !seen.has(path) && files.length < MAX_FILES) {
-        seen.add(path)
-        files.push(path)
+    try {
+      for await (const e of entries) {
+        if (files.length >= MAX_FILES) break
+        const path = join(dir, e.name)
+        if (e.isDirectory()) await walk(path, depth + 1)
+        else if ((e.isFile() || e.isSymbolicLink()) && FILE.test(e.name) && !seen.has(path)) {
+          seen.add(path)
+          files.push(path)
+        }
       }
+    } catch {
+      // (a folder that went away while it was read)
     }
   }
   for (const d of dirs) {
@@ -88,7 +94,7 @@ export async function findFonts(dirs: string[]): Promise<FontFile[]> {
   const out: FontFile[] = []
   for (const path of files) {
     try {
-      const font = await Font.open(await readFile(path))
+      const font = await Font.open(await readFontBytes(path))
       const face = { src: path, weight: font.weight, style: font.italic ? 'italic' : 'normal' }
       for (const family of new Set([font.names.family, font.names.typoFamily].filter(Boolean) as string[])) out.push({ family, ...face })
     } catch {
@@ -107,14 +113,38 @@ export function withGenerics(fonts: FontFile[]): FontFile[] {
     if (list) list.push(f)
     else byFamily.set(key, [f])
   }
-  const coverage = [...byFamily.keys()].filter((k) => COVERAGE.test(k))
+  // fonts of other scripts: the face of each nearest to regular
+  const coverage = [...byFamily.keys()].filter((k) => COVERAGE.test(k)).map((k) => byFamily.get(k)!.reduce((a, b) => (rank(b) < rank(a) ? b : a)))
   const out = [...fonts]
   for (const [generic, names] of Object.entries(GENERIC)) {
     if (byFamily.has(generic)) continue
     const first = names.find((n) => byFamily.has(n.toLowerCase()))
-    for (const key of [...(first ? [first.toLowerCase()] : []), ...coverage]) for (const f of byFamily.get(key)!) out.push({ ...f, family: generic })
+    const main = first ? byFamily.get(first.toLowerCase())! : []
+    for (const f of main) out.push({ ...f, family: generic })
+    // declared at each weight and style the family before them has: text of any weight and style is set in the face
+    // of the family it is nearest to and, where that has no glyph, in these (declared at others, the nearest would
+    // be chosen among them and the family's own face left out)
+    const looks = main.length ? [...new Map(main.map((f) => [`${f.weight}|${f.style}`, { weight: f.weight, style: f.style }])).values()] : [{ weight: 400, style: 'normal' }]
+    for (const f of coverage) for (const look of looks) out.push({ ...f, ...look, family: generic })
   }
   return out
+}
+
+/** how far a face is from regular: its weight from 400, italic after upright */
+const rank = (f: FontFile) => Math.abs(Number(f.weight ?? 400) - 400) + (/italic|oblique/i.test(f.style ?? '') ? 1000 : 0)
+
+/** a font file's bytes, refused past the size a font may have: a file is read whole only when it can be one */
+async function readFontBytes(path: string): Promise<Uint8Array> {
+  const file = await open(path, 'r')
+  try {
+    const st = await file.stat()
+    if (!st.isFile()) throw new Error(`${path} is not a file`)
+    if (st.size > FONT_LIMITS.file) throw new Error(`${path} is larger than a font file may be`)
+    const b = await file.readFile()
+    return new Uint8Array(b.buffer, b.byteOffset, b.byteLength)
+  } finally {
+    await file.close()
+  }
 }
 
 let system: Promise<FontFile[]> | undefined
@@ -126,32 +156,42 @@ export function systemFonts(): Promise<FontFile[]> {
 
 /** bytes of font files read lately, by path, up to this many bytes: a server reads the same few for every file */
 const CACHE_BYTES = 256 * 1024 * 1024
-const cache = new Map<string, Promise<Uint8Array>>()
-const sizes = new Map<string, number>()
+/** files read and kept, the most recently used last */
+const cache = new Map<string, Uint8Array>()
 let cached = 0
+/** files being read: one read for every conversion that asks at the same time */
+const reading = new Map<string, Promise<Uint8Array>>()
 
 /** a font file by its path, from a cache of the ones read lately */
 export function readFontFile(path: string): Promise<Uint8Array> {
   const hit = cache.get(path)
   if (hit) {
-    // (the most recently used last)
     cache.delete(path)
     cache.set(path, hit)
-    return hit
+    return Promise.resolve(hit)
   }
-  const p = readFile(path).then((b) => {
-    const bytes = new Uint8Array(b.buffer, b.byteOffset, b.byteLength)
-    sizes.set(path, bytes.byteLength)
-    cached += bytes.byteLength
-    for (const [k] of cache) {
-      if (cached <= CACHE_BYTES || k === path) break
-      cache.delete(k)
-      cached -= sizes.get(k) ?? 0
-      sizes.delete(k)
-    }
-    return bytes
-  })
-  p.catch(() => cache.delete(path))
-  cache.set(path, p)
+  let p = reading.get(path)
+  if (p) return p
+  p = readFontBytes(path).then(
+    (bytes) => {
+      reading.delete(path)
+      // (a file larger than the whole cache is not kept)
+      if (bytes.byteLength <= CACHE_BYTES) {
+        cache.set(path, bytes)
+        cached += bytes.byteLength
+        for (const [k, v] of cache) {
+          if (cached <= CACHE_BYTES) break
+          cache.delete(k)
+          cached -= v.byteLength
+        }
+      }
+      return bytes
+    },
+    (e) => {
+      reading.delete(path)
+      throw e
+    },
+  )
+  reading.set(path, p)
   return p
 }

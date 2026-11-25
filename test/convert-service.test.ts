@@ -365,3 +365,101 @@ describe('PDF', () => {
     expect(latin1(pdf)).toMatch(/\+Calibri/)
   })
 })
+
+describe('PDF: review', () => {
+  const dir = mkdtempSync(`${tmpdir()}/office-convert-pdf2-`)
+  afterAll(() => rmSync(dir, { recursive: true, force: true }))
+  writeFileSync(`${dir}/calibri.ttf`, testFont({ family: 'Calibri', advance: 500 }))
+  const fonts = [{ family: 'Calibri', src: `${dir}/calibri.ttf` }]
+  const latin1 = (b: Uint8Array) => new TextDecoder('latin1').decode(b)
+  const count = (pdf: Uint8Array) => Number(/\/Count (\d+)/.exec(latin1(pdf))?.[1])
+  const form = (files: [string, Uint8Array][], fields: Record<string, string> = {}) => {
+    const fd = new FormData()
+    for (const [name, data] of files) fd.append('files', new File([data as BlobPart], name))
+    for (const [k, v] of Object.entries(fields)) fd.append(k, v)
+    return fd
+  }
+  const handle = createHandler(new Converter({ workers: 0, fonts }))
+  const post = (body: FormData, path = '/forms/libreoffice/convert') => handle(new Request(`http://x${path}`, { method: 'POST', body }))
+
+  test('page ranges past what a presentation has are refused whole, never cut short', () => {
+    expect(pageRanges('100001-200000,1')).toBeNull()
+    expect(pageRanges('1-100000,1-100000')).toBeNull()
+    expect(pageRanges('9'.repeat(30))).toBeNull()
+    expect(pageRanges('1-100000')?.length).toBe(100000)
+  })
+
+  test("what Gotenberg's route is asked for and does not do is refused; its booleans are Go's", async () => {
+    const deck = S('sample.pptx')
+    expect((await post(form([['a.pptx', deck]], { userPassword: 'secret' }))).status).toBe(400)
+    expect((await post(form([['a.pptx', deck]], { ownerPassword: 'secret' }))).status).toBe(400)
+    expect((await post(form([['a.pptx', deck], ['b.pptx', deck]], { merge: '1' }))).status).toBe(400)
+    expect((await post(form([['a.pptx', deck]], { merge: 'maybe' }))).status).toBe(400)
+    const two = await post(form([['deck.pptx', deck], ['test.odp', S('sample.odp')]], { merge: 'false' }))
+    expect(two.status).toBe(200)
+    const zip = await ZipArchive.open(new BlobSource(new Blob([await two.arrayBuffer()])))
+    expect(zip.list().map((e) => e.name).sort()).toEqual(['deck.pptx.pdf', 'test.odp.pdf'])
+  })
+
+  test('hidden slides only with exportHiddenSlides, also when nativePageRanges names them', async () => {
+    const engine = new Engine(() => {})
+    await engine.open(S('sample.pptx'), { name: 'sample.pptx' })
+    await engine.call('pptx.slides', [{ op: 'hide', index: 0, hidden: true }])
+    const hidden = new Uint8Array(await ((await engine.call('save', [])) as Blob).arrayBuffer())
+    const pages = async (fields: Record<string, string>) => {
+      const res = await post(form([['deck.pptx', hidden]], fields))
+      return res.status === 200 ? count(new Uint8Array(await res.arrayBuffer())) : res.status
+    }
+    expect(await pages({})).toBe(4)
+    expect(await pages({ nativePageRanges: '1' })).toBe(400)
+    expect(await pages({ nativePageRanges: '1-2' })).toBe(1)
+    expect(await pages({ nativePageRanges: '1', exportHiddenSlides: 'true' })).toBe(1)
+    expect(await pages({ exportHiddenSlides: 'true' })).toBe(5)
+  })
+
+  test("a presentation's bytes are a presentation whatever its name; an unreadable file is 400 for Gotenberg, 422 for /convert", async () => {
+    const res = await post(form([['deck.docx', S('sample.pptx')]]))
+    expect(res.status).toBe(200)
+    expect(count(new Uint8Array(await res.arrayBuffer()))).toBe(5)
+    expect((await post(form([['a.docx', S('sample.docx')]]))).status).toBe(501)
+    const broken = new TextEncoder().encode('PK\x03\x04 not a zip')
+    expect((await post(form([['a.pptx', broken]]))).status).toBe(400)
+    expect((await post(form([['a.pptx', broken]], { to: 'pdf' }), '/convert')).status).toBe(422)
+  })
+
+  test('bold and italic text falls back to the fonts of other scripts too', async () => {
+    const { buildFont } = await import('./font-tables')
+    const { FontBook } = await import('../src/core/font')
+    const latin = (italic: boolean) => buildFont({ family: 'Liberation Sans', italic, advances: [500, 600], chars: [[0x58, 1]] })
+    const cjk = buildFont({ family: 'Noto Sans CJK SC', advances: [500, 1000], chars: [[0x6f22, 1]] })
+    const list = withGenerics([
+      { family: 'Liberation Sans', src: latin(false), weight: 400, style: 'normal' },
+      { family: 'Liberation Sans', src: latin(true), weight: 400, style: 'italic' },
+      { family: 'Noto Sans CJK SC', src: cjk, weight: 400, style: 'normal' },
+    ])
+    const book = new FontBook(list)
+    for (const italic of [false, true])
+      for (const weight of [400, 700]) {
+        const m = await book.measure({ text: 'X漢', font: '"Missing", sans-serif', size: 10, italic, weight })
+        expect(m.pieces.map((p) => p.family)).toEqual(['sans-serif', 'sans-serif'])
+        expect(m.pieces.every((p) => p.font)).toBe(true)
+      }
+  })
+
+  test('conversions waiting for the fonts are queued work: counted, given up, closed; a failing font list is a rejection', async () => {
+    let found!: (list: typeof fonts) => void
+    const pool = new Converter({ workers: 1, fonts: () => new Promise((r) => (found = r)) })
+    const ac = new AbortController()
+    const waiting = pool.convert(S('sample.pptx'), { to: 'pdf', signal: ac.signal })
+    const other = pool.convert(S('sample.pptx'), { to: 'pdf' })
+    expect(pool.load.queued).toBe(2)
+    ac.abort(new Error('gone'))
+    expect(waiting).rejects.toThrow('gone')
+    await pool.close()
+    expect(other).rejects.toThrow('closed')
+    found(fonts)
+    const failing = new Converter({ workers: 1, fonts: () => { throw new Error('no folders') } })
+    expect(failing.convert(S('sample.pptx'), { to: 'pdf' })).rejects.toThrow('no folders')
+    await failing.close()
+  })
+})

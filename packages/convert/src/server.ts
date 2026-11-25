@@ -4,8 +4,9 @@
  *
  *   POST /convert                     multipart: the files (any field name), `to`, `sheet`, `encoding`, `language`,
  *                                     `slides` (PDF: "1-3,5"), `hidden`; or the file as the body: /convert?to=docx&name=report.doc
- *   POST /forms/libreoffice/convert   Gotenberg's route: the files to PDF, `nativePageRanges` the slides written.
- *                                     Presentations; documents and spreadsheets answer 501 until their PDF is in
+ *   POST /forms/libreoffice/convert   Gotenberg's route: the files to PDF, `nativePageRanges` the slides written,
+ *                                     `exportHiddenSlides`. Presentations; documents and spreadsheets answer 501
+ *                                     until their PDF is in; what it can be asked for and is not done here, 400
  *   GET  /health                      { status: 'up', details: … } as Gotenberg answers
  *   GET  /version                     the package version, as text
  *
@@ -13,7 +14,7 @@
  * names the result, `Gotenberg-Trace` is sent back (a new id when the request has none).
  */
 import { writeZip } from '../../../src/core/zipwrite'
-import { ConvertError, kindOfName, pageRanges, pdfLater, targetOf, type ConvertOptions, type Converted, type Target } from './convert'
+import { ConvertError, kindOfName, looksLikePresentation, pageRanges, pdfLater, targetOf, type ConvertOptions, type Converted, type Target } from './convert'
 import { BusyError, ThreadError, TimeoutError, type Converter } from './pool'
 
 export interface ServiceOptions {
@@ -60,6 +61,7 @@ export function createHandler(converter: Converter, opts: ServiceOptions = {}): 
       pending += n
       if (pending > maxPending) throw new HttpError(503, 'The converter is busy: try again later')
     }
+    let gotenberg = false
     try {
       const path = url.pathname.replace(/\/+$/, '') || '/'
       if (path === '/health' && (req.method === 'GET' || req.method === 'HEAD')) {
@@ -67,7 +69,7 @@ export function createHandler(converter: Converter, opts: ServiceOptions = {}): 
         return answer(Response.json({ status: 'up', details: { convert: { status: 'up', timestamp: new Date().toISOString(), running, queued } } }))
       }
       if (path === '/version' && req.method === 'GET') return answer(new Response(version, { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }))
-      const gotenberg = path === '/forms/libreoffice/convert'
+      gotenberg = path === '/forms/libreoffice/convert'
       if (path !== '/convert' && !gotenberg) throw new HttpError(404, 'Not found')
       if (req.method !== 'POST') throw new HttpError(405, 'Method not allowed: POST the files')
 
@@ -75,19 +77,23 @@ export function createHandler(converter: Converter, opts: ServiceOptions = {}): 
       if (!files.length) throw new HttpError(400, 'No file: POST the files as multipart/form-data, or one file as the body')
       if (files.length > maxFiles) throw new HttpError(400, `Too many files: at most ${maxFiles} in one request`)
       // Gotenberg's LibreOffice route writes PDF whatever else it is told; what it can be asked for and is not done here
-      // is refused, not left out without a word
+      // is refused, not left out without a word (a file asked for with a password is not given without one)
       if (gotenberg) {
-        if (/^true$/i.test(fields.get('merge') ?? '') && files.length > 1) throw new HttpError(400, 'merge is not supported yet: convert the files one by one')
-        for (const f of ['pdfa', 'pdfua']) if (fields.get(f) && !/^(false)?$/i.test(fields.get(f)!)) throw new HttpError(400, `${f} is not supported yet`)
+        if (flag(fields, 'merge') && files.length > 1) throw new HttpError(400, 'merge is not supported yet: convert the files one by one')
+        if (fields.get('pdfa')) throw new HttpError(400, 'pdfa is not supported yet')
+        if (flag(fields, 'pdfua')) throw new HttpError(400, 'pdfua is not supported yet')
+        for (const f of ['userPassword', 'ownerPassword', 'splitMode', 'password']) if (fields.get(f)) throw new HttpError(400, `${f} is not supported yet`)
       }
       const field = gotenberg ? 'pdf' : fields.get('to')
       const to = field ? targetOf(field) : undefined
       if (to === null) throw new HttpError(400, `Unknown format “${field}”`)
-      // a file whose name says it has no PDF output yet is answered so before the pool is asked (not 503 when it is busy)
-      if (to === 'pdf') for (const f of files) {
-        const later = pdfLater(kindOfName(f.name))
-        if (later) throw later
-      }
+      // a file whose name says it has no PDF output yet, and whose bytes do not say it is a presentation, is answered so
+      // before the pool is asked (not 503 when it is busy); the engine decides for the others
+      if (to === 'pdf')
+        for (const f of files) {
+          const later = pdfLater(kindOfName(f.name))
+          if (later && !looksLikePresentation(f.data)) throw later
+        }
       const rangeField = gotenberg ? 'nativePageRanges' : 'slides'
       const range = fields.get(rangeField)?.trim()
       const slides = range ? pageRanges(range) : undefined
@@ -98,23 +104,27 @@ export function createHandler(converter: Converter, opts: ServiceOptions = {}): 
         ...(fields.get('encoding') ? { encoding: fields.get('encoding')! } : {}),
         ...(fields.get('language') ? { language: fields.get('language')! } : {}),
         ...(slides ? { slides } : {}),
-        ...(/^(true|1)$/i.test(fields.get('hidden') ?? '') ? { hidden: true } : {}),
+        ...(flag(fields, gotenberg ? 'exportHiddenSlides' : 'hidden') ? { hidden: true } : {}),
       }
       // one file failing (busy, too large, damaged) fails the request: the others are given up with it
       const batch = new AbortController()
       const signal = AbortSignal.any([req.signal, batch.signal])
       const results = await Promise.all(
         files.map((f) =>
-          converter.convert(f.data, { ...options, name: f.name, signal }).catch((e: Error) => {
-            batch.abort(e)
-            throw e
-          }),
+          converter.convert(f.data, { ...options, name: f.name, signal }).then(
+            // Gotenberg names each PDF of a ZIP after its file, extension and all: deck.pptx.pdf
+            (r) => (gotenberg ? { ...r, name: `${f.name.replace(/^.*[\\/]/, '') || 'document'}.pdf` } : r),
+            (e: Error) => {
+              batch.abort(e)
+              throw e
+            },
+          ),
         ),
       )
       const outName = req.headers.get('gotenberg-output-filename')?.trim()
       return answer(results.length === 1 ? fileResponse(results[0], outName) : await zipResponse(results, outName))
     } catch (e) {
-      return answer(errorResponse(e))
+      return answer(errorResponse(e, gotenberg))
     } finally {
       pending -= held
     }
@@ -219,7 +229,19 @@ async function zipResponse(results: Converted[], outName?: string): Promise<Resp
   return res
 }
 
-function errorResponse(e: unknown): Response {
+/**
+ * A boolean field as Gotenberg reads one (Go's ParseBool: 1, t, true, TRUE, True and their opposites); a field that
+ * is none of them is refused
+ */
+function flag(fields: Map<string, string>, name: string): boolean {
+  const v = fields.get(name)?.trim()
+  if (v === undefined || v === '') return false
+  if (/^(1|t|T|true|TRUE|True)$/.test(v)) return true
+  if (/^(0|f|F|false|FALSE|False)$/.test(v)) return false
+  throw new HttpError(400, `${name} “${v}” is not true or false`)
+}
+
+function errorResponse(e: unknown, gotenberg = false): Response {
   const err = e as Error
   const status =
     e instanceof HttpError ? e.status
@@ -227,7 +249,8 @@ function errorResponse(e: unknown): Response {
     : e instanceof BusyError || e instanceof TimeoutError ? 503
     : e instanceof ThreadError ? 500
     : err?.name === 'AbortError' ? 499
-    // the file could not be read (damaged, encrypted, not a format the engine knows)
+    // the file could not be read (damaged, encrypted, not a format the engine knows): Gotenberg says 400
+    : gotenberg ? 400
     : 422
   const res = new Response(`${err?.message ?? String(e)}\n`, { status, headers: { 'Content-Type': 'text/plain; charset=utf-8' } })
   if (status === 503 && !(e instanceof TimeoutError)) res.headers.set('Retry-After', '5')

@@ -6,7 +6,7 @@ import { availableParallelism } from 'node:os'
 import { Worker } from 'node:worker_threads'
 import { convert, ConvertError, type ConvertOptions, type Converted } from './convert'
 import { systemFonts, type FontFile } from './fonts'
-import type { Job, JobResult } from './worker'
+import type { FontsMessage, Job, JobResult } from './worker'
 
 export interface ConverterOptions {
   /** threads converting at once (default: the number of CPUs); 0 converts on this thread, without time limits */
@@ -62,6 +62,8 @@ interface Task {
 
 interface Thread {
   worker: Worker
+  /** the thread has the pool's font list (sent once, not with each conversion) */
+  fonts?: boolean
   task?: Task
   timer?: ReturnType<typeof setTimeout>
   abort?: () => void
@@ -98,18 +100,53 @@ export class Converter {
   private fontSpec: ConverterOptions['fonts']
   /** found once, here, not in each thread */
   private fontList?: Promise<FontFile[]>
+  /** the list once found: a thread is sent it once */
+  private catalog?: FontFile[]
+  /** PDF conversions waiting for the font list: queued work, given up with their caller or the converter */
+  private fontWaits = new Set<(e: unknown) => void>()
 
   /** conversions running and waiting */
   get load(): { running: number; queued: number } {
-    return { running: this.busy.size, queued: this.waiting.length }
+    return { running: this.busy.size, queued: this.waiting.length + this.fontWaits.size }
+  }
+
+  /** the font list, found when first asked for; one that could not be found is looked for again next time */
+  private fonts(): Promise<FontFile[]> {
+    if (!this.fontList) {
+      const spec = this.fontSpec
+      const p = Promise.resolve().then(() => (typeof spec === 'function' ? spec() : (spec ?? systemFonts())))
+      this.fontList = p.then((list) => (this.catalog = list))
+      this.fontList.catch(() => (this.fontList = undefined))
+    }
+    return this.fontList
   }
 
   convert(data: Uint8Array, opts: ConvertOptions = {}): Promise<Converted> {
     if (this.closed) return Promise.reject(new Error('The converter is closed'))
     if (opts.to === 'pdf' && !opts.fonts) {
-      const spec = this.fontSpec
-      this.fontList ??= Promise.resolve(typeof spec === 'function' ? spec() : (spec ?? systemFonts()))
-      return this.fontList.then((fonts) => this.convert(data, { ...opts, fonts }))
+      if (opts.signal?.aborted) return Promise.reject(opts.signal.reason)
+      if (this.waiting.length + this.fontWaits.size >= this.queueMax) return Promise.reject(new BusyError())
+      const signal = opts.signal
+      return new Promise<Converted>((resolve, reject) => {
+        const fail = (e: unknown) => {
+          this.fontWaits.delete(fail)
+          signal?.removeEventListener('abort', onAbort)
+          reject(e)
+        }
+        const onAbort = () => fail(signal!.reason)
+        this.fontWaits.add(fail)
+        signal?.addEventListener('abort', onAbort, { once: true })
+        this.fonts().then(
+          (fonts) => {
+            // (given up while the fonts were looked for)
+            if (!this.fontWaits.has(fail)) return
+            this.fontWaits.delete(fail)
+            signal?.removeEventListener('abort', onAbort)
+            this.convert(data, { ...opts, fonts }).then(resolve, reject)
+          },
+          (e) => this.fontWaits.has(fail) && fail(e),
+        )
+      })
     }
     if (!this.workers) return convert(data, opts)
     const { signal, ...rest } = opts
@@ -163,6 +200,7 @@ export class Converter {
   /** ends every thread; conversions under way and waiting are rejected */
   async close(): Promise<void> {
     this.closed = true
+    for (const fail of [...this.fontWaits]) fail(new Error('The converter is closed'))
     for (let t = this.dequeue(); t; t = this.dequeue()) t.reject(new Error('The converter is closed'))
     const all = [...this.idle.splice(0), ...this.busy]
     this.busy.clear()
@@ -203,9 +241,18 @@ export class Converter {
     }
     const id = ++this.seq
     try {
+      // the pool's font list goes to a thread once; a conversion then says it uses it
+      let opts = task.opts
+      if (opts.fonts && opts.fonts === this.catalog) {
+        if (!thread.fonts) {
+          thread.worker.postMessage({ fonts: opts.fonts } satisfies FontsMessage)
+          thread.fonts = true
+        }
+        opts = { ...opts, fonts: undefined, sharedFonts: true } as typeof opts
+      }
       // a copy of its own moves to the thread: the caller's bytes stay as they are (a Node Buffer may share its memory with others)
       const data = new Uint8Array(task.data)
-      thread.worker.postMessage({ id, data, opts: task.opts } satisfies Job, [data.buffer as ArrayBuffer])
+      thread.worker.postMessage({ id, data, opts } satisfies Job, [data.buffer as ArrayBuffer])
     } catch (e) {
       // (options that cannot be sent: the thread takes the next conversion)
       this.release(thread)

@@ -633,7 +633,7 @@ A presentation is written as a PDF file by the library itself: no browser, no pr
 ```ts
 await doc.call('fonts.set', fonts)                     // the files text is set in (see "Reading font files")
 const pdf = await doc.call('pdf')                      // a Blob, application/pdf: every slide but the hidden ones
-await doc.call('pdf', { slides: [0, 2], title: 'Q3' }) // these slides; `hidden: true` takes the hidden ones too
+await doc.call('pdf', { slides: [0, 2], title: 'Q3' }) // these slides; hidden ones only with `hidden: true`, even when named
 doc.on('warning', ({ text }) => {})                    // what could not be drawn as it is, once each
 const svg = await doc.call('pptx.svg', 0)              // a slide as an SVG picture, drawn as the PDF draws it
 

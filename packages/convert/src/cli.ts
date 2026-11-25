@@ -108,12 +108,12 @@ const fontDirs = () => [...(o.fonts ?? env.FONTS?.split(delimiter).filter(Boolea
 if (positionals[0] === 'serve') {
   if (positionals.length > 1) fail(`serve takes no files\n\n${USAGE}`)
   const maxBytes = num(o['max-size'], env.MAX_SIZE, 100, '--max-size') * 1024 * 1024
-  // (found now, before the first request: a request does not wait for the font folders to be read)
-  const fonts = findFonts(fontDirs())
+  // (found before the service listens: no request waits for the font folders to be read)
+  const fonts = await findFonts(fontDirs())
   const converter = new Converter({ workers: num(o.jobs, env.WORKERS, NaN, '--jobs') || undefined, timeout: num(o.timeout, env.TIMEOUT, 120, '--timeout') * 1000, fonts })
   const handler = createHandler(converter, { maxBytes, maxFiles: num(o['max-files'], env.MAX_FILES, 20, '--max-files'), version: pkg.version })
   const server = await listen(handler, { port: num(o.port, env.PORT, 3000, '--port'), host: o.host ?? env.HOST ?? '0.0.0.0', maxBytes })
-  const families = new Set((await fonts).map((f) => f.family)).size
+  const families = new Set(fonts.map((f) => f.family)).size
   process.stderr.write(`office-convert ${pkg.version} listening on ${server.url} (${converter.workers} threads, ${families} font families for PDF)\n`)
   const stop = () => {
     void server.close().then(() => converter.close()).then(() => process.exit(0))
