@@ -334,8 +334,8 @@ export class Font {
    * Throws a `FontError` that says what is wrong with a file that cannot be read.
    */
   static async open(data: ArrayBuffer | ArrayBufferView | Blob, index = 0): Promise<Font> {
-    const bytes =
-      data instanceof Uint8Array ? data : ArrayBuffer.isView(data) ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength) : new Uint8Array(data instanceof Blob ? await data.arrayBuffer() : data)
+    // (a Node Buffer as a plain Uint8Array: its `slice` shares the memory, where a subset copies a table to change it)
+    const bytes = ArrayBuffer.isView(data) ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength) : new Uint8Array(data instanceof Blob ? await data.arrayBuffer() : data)
     const sfnt = await readSfnt(bytes, index)
     try {
       return new Font(sfnt.tables, sfnt)

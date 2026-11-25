@@ -97,7 +97,7 @@ function writeCmap(chars: [number, number][]): Uint8Array {
 function commonTables(font: Font, kept: number[], chars: [number, number][], glyphs: Map<number, number>): Map<string, Uint8Array> {
   const t = font.tables
   const tables = new Map<string, Uint8Array>()
-  for (const tag of ['OS/2', 'name', 'head', 'hhea']) if (t.has(tag)) tables.set(tag, t.get(tag)!.slice())
+  for (const tag of ['OS/2', 'name', 'head', 'hhea']) if (t.has(tag)) tables.set(tag, new Uint8Array(t.get(tag)!))
   const n = kept.length
   // every glyph with its own width: the short form (one width for the last glyphs) saves nothing in a subset
   view(tables.get('hhea')!).setUint16(34, n)
@@ -183,7 +183,7 @@ function subsetGlyf(font: Font, used: Iterable<number>, chars: [number, number][
   tables.set('glyf', newGlyf)
   tables.set('loca', newLoca)
   view(tables.get('head')!).setUint16(50, 1)
-  const maxp = t.get('maxp')!.slice()
+  const maxp = new Uint8Array(t.get('maxp')!)
   view(maxp).setUint16(4, kept.length)
   tables.set('maxp', maxp)
   // what the glyphs' instructions use

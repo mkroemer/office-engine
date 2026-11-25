@@ -6,7 +6,7 @@ import type { DocumentClient } from '../../core/worker/client'
 import { chartUrl } from '../common/chart'
 import { useMediaUrl } from '../common/hooks'
 import { useStrings } from '../strings'
-import { geomPath, LINE_GEOMS } from './geometry'
+import { geomPath, LINE_GEOMS } from '../../core/pptx/geometry'
 
 function boxStyle(b: Box): CSSProperties {
   const t: string[] = []
