@@ -35,6 +35,20 @@ const n = (v: number): string => {
   return r === 0 ? '0' : r.toFixed(3).replace(/\.?0+$/, '')
 }
 
+/**
+ * A number to six significant digits, never an exponent: the entries of transforms and the places of stops, which
+ * three decimals would flatten (a scale of 0.00149 written as 0.001)
+ */
+const nm = (v: number): string => {
+  if (!Number.isFinite(v) || Math.abs(v) < 1e-12) return '0'
+  const c = Math.max(-1e9, Math.min(1e9, v))
+  const s = c.toFixed(Math.max(0, Math.min(15, 5 - Math.floor(Math.log10(Math.abs(c))))))
+  return s.includes('.') ? s.replace(/\.?0+$/, '') : s
+}
+
+/** a matrix as it is written: what is drawn, and the boxes and patterns worked out from it, use the same numbers */
+const written = (m: Matrix): Matrix => m.map((v) => Number(nm(v))) as Matrix
+
 /** a URI action's address: ASCII only, as the format asks (other characters percent-encoded as UTF-8), escaped */
 // eslint-disable-next-line no-control-regex
 const uriString = (url: string) =>
@@ -232,10 +246,10 @@ class PdfWriter {
         if (this.refused.has(font)) continue
         let use = this.fonts.get(font)
         if (!use) this.fonts.set(font, (use = { name: `F${this.fonts.size + this.std.size + 1}`, glyphs: new Map() }))
+        // the first glyph of a cluster stands for its characters (several for a ligature), the others for none
+        const texts = glyphTexts(it)
         it.glyphs.forEach((g, i) => {
-          if (use.glyphs.get(g)) return
-          // the first glyph of a cluster stands for its characters (several for a ligature), the others for none
-          use.glyphs.set(g, glyphTexts(it)[i])
+          if (!use.glyphs.get(g)) use.glyphs.set(g, texts[i])
         })
       }
     }
@@ -260,6 +274,7 @@ class PdfWriter {
 
   private fontRefs = new Map<string, number>()
   private tags = new Set<string>()
+  private baseNames = new Set<string>()
   private forms = 0
 
   private fontRef(name: string): number {
@@ -287,8 +302,12 @@ class PdfWriter {
         for (let i = 0; i < 6; i++) (tag += String.fromCharCode(65 + (h % 26))), (h = Math.floor(h / 26))
       }
       this.tags.add(tag)
-      const ps = (font.names.postScript || font.names.family || 'Font').replace(/[^A-Za-z0-9-]/g, '')
-      const base = use.whole ? ps : `${tag}+${ps}`
+      // (the name as it is, escaped: two fonts whose names differ only in punctuation keep apart)
+      const ps = (font.names.postScript || font.names.family || 'Font').replace(/[^\x21-\x7e]/g, '')
+      let base = use.whole ? ps : `${tag}+${ps}`
+      // (two fonts of one name, two files of a family that say the same: kept apart, as a reader may share fonts by name)
+      for (let k = 2; this.baseNames.has(base); k++) base = `${use.whole ? ps : `${tag}+${ps}`}-${k}`
+      this.baseNames.add(base)
       const m = font.metrics
       const flags = 4 | (font.fixedPitch ? 1 : 0) | (font.italic ? 64 : 0)
       const file = this.alloc()
@@ -375,8 +394,9 @@ class PdfWriter {
   private async groupBody(it: Extract<DrawItem, { t: 'group' }>, ctx: Ctx) {
     const saved = ctx.m
     if (it.transform) {
-      ctx.ops.push(`${it.transform.map(n).join(' ')} cm`)
-      ctx.m = multiply(it.transform, ctx.m)
+      const t = written(it.transform)
+      ctx.ops.push(`${t.map(nm).join(' ')} cm`)
+      ctx.m = multiply(t, ctx.m)
     }
     if (it.clip) ctx.ops.push((pathOps(it.clip) || '0 0 m') + (it.clipRule === 'evenodd' ? ' W* n' : ' W n'))
     await this.items(it.items, ctx)
@@ -442,7 +462,7 @@ class PdfWriter {
     const back = invert(ctx.base)
     if (!back) return null
     const ref = this.alloc()
-    this.set(ref, `<</PatternType 2/Shading ${this.shadingObject(p, false)} 0 R/Matrix[${multiply(ctx.m, back).map(n).join(' ')}]>>`)
+    this.set(ref, `<</PatternType 2/Shading ${this.shadingObject(p, false)} 0 R/Matrix[${multiply(ctx.m, back).map(nm).join(' ')}]>>`)
     const name = `P${++this.patterns}`
     ctx.res.add(`P ${name} ${ref}`)
     return name
@@ -472,8 +492,8 @@ class PdfWriter {
     if (!it.d.length) return
     const ops = pathOps(it.d)
     const evenodd = it.rule === 'evenodd'
-    const fill = it.fill
-    const stroke = it.stroke && it.stroke.width > 0 ? it.stroke : undefined
+    const fill = it.fill && settled(it.fill)
+    const stroke = it.stroke && it.stroke.width > 0 ? { ...it.stroke, paint: settled(it.stroke.paint) } : undefined
     if (fill && fill.t !== 'color') {
       // a gradient: the path clips, the shading paints
       const name = this.shading(ctx, fill)
@@ -485,16 +505,19 @@ class PdfWriter {
       ctx.ops.push(`/${name} sh`, 'Q')
     }
     const solid = fill?.t === 'color' && fill.color.a > 0 ? fill.color : undefined
-    if (solid) {
+    const sp = stroke && !(stroke.paint.t === 'color' && stroke.paint.color.a <= 0) ? stroke.paint : undefined
+    // a color fill and a color outline are painted together (B): where they overlap, the outline is not over the fill
+    const together = solid && sp?.t === 'color'
+    if (solid && !together) {
       ctx.ops.push('q')
       if (solid.a < 1) this.alpha(ctx, solid.a, 1)
       ctx.ops.push(`${rgb(solid)} rg`, ops + (evenodd ? ' f*' : ' f'), 'Q')
     }
-    if (!stroke || (stroke.paint.t === 'color' && stroke.paint.color.a <= 0)) return
+    if (!stroke || !sp) return
     ctx.ops.push('q')
-    const sp = stroke.paint
     if (sp.t === 'color') {
-      if (sp.color.a < 1) this.alpha(ctx, 1, sp.color.a)
+      if (sp.color.a < 1 || (together && solid.a < 1)) this.alpha(ctx, together ? solid.a : 1, sp.color.a)
+      if (together) ctx.ops.push(`${rgb(solid)} rg`)
       ctx.ops.push(`${rgb(sp.color)} RG`)
     } else {
       // a gradient along the line: a shading pattern, its alphas a soft mask where they change
@@ -507,7 +530,7 @@ class PdfWriter {
     }
     ctx.ops.push(`${n(stroke.width)} w`)
     if (stroke.dash?.length) ctx.ops.push(`[${stroke.dash.map(n).join(' ')}] 0 d`)
-    ctx.ops.push(`${{ butt: 0, round: 1, square: 2 }[stroke.cap ?? 'butt']} J`, `${{ miter: 0, round: 1, bevel: 2 }[stroke.join ?? 'miter']} j`, ops + ' S', 'Q')
+    ctx.ops.push(`${{ butt: 0, round: 1, square: 2 }[stroke.cap ?? 'butt']} J`, `${{ miter: 0, round: 1, bevel: 2 }[stroke.join ?? 'miter']} j`, ops + (together ? (evenodd ? ' B*' : ' B') : ' S'), 'Q')
   }
 
   private text(it: Extract<DrawItem, { t: 'text' }>, ctx: Ctx) {
@@ -579,7 +602,7 @@ class PdfWriter {
     ctx.res.add(`X ${xo.name} ${xo.ref}`)
     ctx.ops.push('q')
     if (it.opacity !== undefined && it.opacity < 1) this.alpha(ctx, it.opacity, it.opacity)
-    ctx.ops.push(`${n(it.w)} 0 0 ${n(-it.h)} ${n(it.x)} ${n(it.y + it.h)} cm`, `/${xo.name} Do`, 'Q')
+    ctx.ops.push(`${nm(it.w)} 0 0 ${nm(-it.h)} ${nm(it.x)} ${nm(it.y + it.h)} cm`, `/${xo.name} Do`, 'Q')
   }
 
   private async xobject(img: ImageData): Promise<{ name: string; ref: number } | null> {
@@ -688,13 +711,21 @@ function pathOps(d: Seg[]): string {
 
 const rgb = (c: Rgba) => `${n(c.r / 255)} ${n(c.g / 255)} ${n(c.b / 255)}`
 
+/** a gradient of no length (its two points at one place, a circle of no radius) paints its last stop's color, as SVG says */
+function settled(p: Paint): Paint {
+  if (p.t === 'color') return p
+  const flat = p.t === 'linear' ? p.x0 === p.x1 && p.y0 === p.y1 : !(p.r > 0)
+  const last = [...p.stops].sort((a, b) => a.at - b.at).pop()
+  return flat || !last ? { t: 'color', color: last?.color ?? { r: 0, g: 0, b: 0, a: 0 } } : p
+}
+
 /**
  * A function from 0-1 to the stops' colors (`color` writes one): an interpolation between two, a stitching of them for
  * more. Two stops at one place make a hard edge: the interval between them, of no width, is left out.
  */
 function stopsFunction(stops: Stop[], color: (c: Rgba) => string): string {
   // (places as they are written: stops that round to one place make one hard edge, not an interval of no width)
-  const s = (stops.length ? [...stops] : [{ at: 0, color: { r: 0, g: 0, b: 0, a: 1 } }]).map((x) => ({ ...x, at: Math.round(Math.min(1, Math.max(0, x.at)) * 1000) / 1000 })).sort((a, b) => a.at - b.at)
+  const s = (stops.length ? [...stops] : [{ at: 0, color: { r: 0, g: 0, b: 0, a: 1 } }]).map((x) => ({ ...x, at: Number(nm(Math.min(1, Math.max(0, x.at)))) })).sort((a, b) => a.at - b.at)
   if (s[0].at > 0) s.unshift({ at: 0, color: s[0].color })
   if (s[s.length - 1].at < 1) s.push({ at: 1, color: s[s.length - 1].color })
   const lerp = (a: Rgba, b: Rgba) => `<</FunctionType 2/Domain[0 1]/C0[${color(a)}]/C1[${color(b)}]/N 1>>`
@@ -702,5 +733,5 @@ function stopsFunction(stops: Stop[], color: (c: Rgba) => string): string {
   for (let i = 0; i < s.length - 1; i++) if (s[i + 1].at > s[i].at) parts.push({ from: s[i].at, fn: lerp(s[i].color, s[i + 1].color) })
   if (!parts.length) return lerp(s[s.length - 1].color, s[s.length - 1].color)
   if (parts.length === 1) return parts[0].fn
-  return `<</FunctionType 3/Domain[0 1]/Functions[${parts.map((p) => p.fn).join('')}]/Bounds[${parts.slice(1).map((p) => n(p.from)).join(' ')}]/Encode[${parts.map(() => '0 1').join(' ')}]>>`
+  return `<</FunctionType 3/Domain[0 1]/Functions[${parts.map((p) => p.fn).join('')}]/Bounds[${parts.slice(1).map((p) => nm(p.from)).join(' ')}]/Encode[${parts.map(() => '0 1').join(' ')}]>>`
 }

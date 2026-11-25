@@ -448,13 +448,12 @@ describe('review: hostile input, copied text, licenses', () => {
     expect(flat(loop).length).toBe(2)
   })
 
-  test('a PNG unpacks no more than its pixels need; a GIF frame past the limit is refused', async () => {
+  test('a PNG is unpacked no further than a little past its pixels; a GIF frame past the limit is refused', async () => {
     const chunk = (t: string, d: number[] | Uint8Array) => [d.length >>> 24, (d.length >> 16) & 255, (d.length >> 8) & 255, d.length & 255, ...[...t].map((c) => c.charCodeAt(0)), ...d, 0, 0, 0, 0]
     // 16 MB of zeros behind a 1 × 1 picture
     const raw = await deflate(new Uint8Array(16 * 1024 * 1024))
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, ...chunk('IHDR', [0, 0, 0, 1, 0, 0, 0, 1, 8, 0, 0, 0, 0]), ...chunk('IDAT', raw), ...chunk('IEND', [])])
-    const px = await decodePng(png)
-    expect(px.color.length).toBe(1)
+    expect(decodePng(png)).rejects.toThrow(/much longer than its pixels/)
     const gif = Uint8Array.from(atob('R0lGODlhAQABAPAAAP8AAP///yH5BAAAAAAALAAAAAABAAEAAAICRAEAOw=='), (c) => c.charCodeAt(0))
     // the frame (its descriptor at byte 27) says 9000 × 9000
     gif.set([0x28, 0x23, 0x28, 0x23], 32)
@@ -665,5 +664,75 @@ describe('re-check: budgets, names, boxes', () => {
     expect(t.map((i) => i.text)).toEqual(['x', '\u{20000}', 'yz'])
     expect(t[1].y).toBe(t[0].y)
     expect(t[2].y).toBeGreaterThan(t[0].y)
+  })
+})
+
+describe('final check: precision, reuse, edges', () => {
+  const red = { r: 255, g: 0, b: 0, a: 1 }
+  const blue = { r: 0, g: 0, b: 255, a: 1 }
+
+  test('small scales are written as they are, so boxes and patterns agree with what is drawn', async () => {
+    const pdf = await writePdf([
+      {
+        w: 100,
+        h: 100,
+        items: [
+          { t: 'group', transform: [0.00149, 0, 0, 1, 0, 0], items: [{ t: 'group', opacity: 0.5, items: [{ t: 'path', d: rectPath(60000, 0, 50000, 50), fill: { t: 'color', color: red } }] }] },
+          { t: 'group', opacity: 0.5, items: [{ t: 'group', transform: [0.02, 0, 0, 1, 0, 0], items: [{ t: 'group', transform: [0.02, 0, 0, 1, 0, 0], items: [{ t: 'path', d: [{ k: 'M', x: 0, y: 10 }, { k: 'L', x: 200000, y: 10 }], stroke: { paint: { t: 'linear', x0: 0, y0: 0, x1: 200000, y1: 0, stops: [{ at: 0, color: red }, { at: 1, color: blue }] }, width: 2 } }] }] }] },
+        ],
+      },
+    ])
+    const { text, objects } = await readPdf(pdf)
+    const all = [...objects.values()].map((o) => (o.stream ? latin1(o.stream) : '')).join('\n')
+    expect(all).toContain('0.00149 0 0 1 0 0 cm')
+    // the form's box, in its space: the page's 75 points are 75 / (0.75 × 0.00149) wide there
+    const box = /\/BBox\[([^\]]*)\]/.exec(text)![1].split(' ').map(Number)
+    expect(box[2]).toBeCloseTo(100 / 0.00149 + 1, -1)
+    // the pattern keeps the product of the two scales, in the space of the form it is drawn in
+    expect(text).toMatch(/\/PatternType 2\/Shading \d+ 0 R\/Matrix\[0\.0004 0 0 1 0 0\]/)
+  })
+
+  test('a text command changed after one export is exported as it is now', async () => {
+    const font = await Font.open(EM)
+    const item: Extract<DrawItem, { t: 'text' }> = { t: 'text', x: 0, y: 20, size: 10, font, glyphs: [font.glyphOf(0x41)], advances: [10], text: 'A', clusters: [0], fill: BLACK }
+    expect(pageToSvg({ w: 10, h: 10, items: [item] })).toContain('>A</text>')
+    item.text = 'B'
+    item.glyphs = [font.glyphOf(0x42)]
+    expect(pageToSvg({ w: 10, h: 10, items: [item] })).toContain('>B</text>')
+  })
+
+  test('a gradient of no length paints its last color; a color fill and outline are painted together', async () => {
+    const { objects } = await readPdf(
+      await writePdf([
+        {
+          w: 100,
+          h: 100,
+          items: [
+            { t: 'path', d: [{ k: 'M', x: 0, y: 5 }, { k: 'L', x: 50, y: 5 }], stroke: { paint: { t: 'linear', x0: 20, y0: 5, x1: 20, y1: 5, stops: [{ at: 0, color: red }, { at: 1, color: blue }] }, width: 2 } },
+            { t: 'path', d: rectPath(10, 10, 50, 50), fill: { t: 'color', color: { ...red, a: 0.5 } }, stroke: { paint: { t: 'color', color: { ...blue, a: 0.5 } }, width: 6 } },
+          ],
+        },
+      ]),
+    )
+    const c = [...objects.values()].map((o) => (o.stream ? latin1(o.stream) : '')).join('\n')
+    expect(c).toContain('0 0 1 RG')
+    expect(c).not.toContain('/Pattern CS')
+    expect(c).toMatch(/1 0 0 rg\n0 0 1 RG\n6 w\n0 J\n0 j\n10 10 m .* B\n/)
+  })
+
+  test('two fonts of one name keep apart', async () => {
+    const whole = (name: string) => buildFont({ family: name, fsType: 0x0100, advances: [500, 600], chars: [[0x41, 1]] })
+    const a = await Font.open(whole('Test.A_B'))
+    const b = await Font.open(whole('TestAB'))
+    const t = (f: Font): DrawItem => ({ t: 'text', x: 0, y: 20, size: 10, font: f, glyphs: [1], advances: [6], text: 'A', clusters: [0], fill: BLACK })
+    const text = latin1(await writePdf([{ w: 10, h: 10, items: [t(a), t(b)] }]))
+    const names = [...text.matchAll(/\/FontName(\/[^/]+)\//g)].map((m) => m[1])
+    expect(new Set(names).size).toBe(2)
+  })
+
+  test('a rejection that cannot be made a string is still reported', async () => {
+    const warnings: string[] = []
+    await slidePage({ index: 0, w: 10, h: 10, els: [{ t: 'pic', box: { x: 0, y: 0, w: 5, h: 5 }, target: 'a.png' }] }, { fonts: book(), part: () => Promise.reject(Object.create(null)), onWarning: (w) => warnings.push(w) })
+    expect(warnings).toEqual(['A picture could not be read: an error'])
   })
 })

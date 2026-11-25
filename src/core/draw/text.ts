@@ -210,7 +210,7 @@ interface Line {
 
 const isSpace = (c: string) => c === ' ' || c === '\t' || c === '　'
 /** characters a line breaks after or around: CJK ideographs, kana, Hangul (each a word of its own) */
-const isCjk = (cp: number) => (cp >= 0x2e80 && cp <= 0x9fff) || (cp >= 0xac00 && cp <= 0xd7af) || (cp >= 0xf900 && cp <= 0xfaff) || (cp >= 0xff00 && cp <= 0xffef) || (cp >= 0x20000 && cp <= 0x3134f)
+const isCjk = (cp: number) => (cp >= 0x2e80 && cp <= 0x9fff) || (cp >= 0xac00 && cp <= 0xd7af) || (cp >= 0xf900 && cp <= 0xfaff) || (cp >= 0xff00 && cp <= 0xffef) || (cp >= 0x20000 && cp <= 0x323af)
 
 export interface LaidOut {
   /** drawing commands with (0, 0) at the box's top left */

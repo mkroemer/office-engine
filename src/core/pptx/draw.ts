@@ -87,7 +87,7 @@ class SlideDrawer {
         },
         // a part that cannot be read leaves its picture out, not the slide
         (e: unknown) => {
-          this.warn(`A picture could not be read: ${e instanceof Error ? e.message : String(e)}`)
+          this.warn(`A picture could not be read: ${reason(e)}`)
           return null
         },
       )
@@ -276,6 +276,16 @@ class SlideDrawer {
     let m: Matrix = translate(l, top + dy)
     if (vertical) m = multiply(m, t.vert === 'vert270' ? [0, -1, 1, 0, 0, h] : [0, 1, -1, 0, w, 0])
     return [{ t: 'group', transform: m, items: out.items }]
+  }
+}
+
+/** what went wrong, in words, whatever was thrown (an object with no way to be a string included) */
+function reason(e: unknown): string {
+  if (e instanceof Error) return e.message
+  try {
+    return String(e)
+  } catch {
+    return 'an error'
   }
 }
 
