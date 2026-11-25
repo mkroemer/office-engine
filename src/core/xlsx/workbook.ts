@@ -939,6 +939,8 @@ export class XlsxWorkbook {
   async text(sheet: number, sep: string): Promise<Blob> {
     const d = this.sheetsData.get(sheet)
     if (!d?.done) throw new Error('Sheet is still loading')
+    // the values the file gives no result for are being computed: the text has them
+    await this.settled()
     let lastR = d.maxRow
     let lastC = d.maxCol
     if (!d.pages) {
